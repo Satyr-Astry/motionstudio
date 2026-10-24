@@ -12,5 +12,23 @@
   },
   "devDependencies": {
     "electron": "^40.10.2"
-  }
+  },
+  "author": "Satyr_Astry",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Satyr-Astry/motionstudio.git"
+  },
+  "homepage": "https://github.com/Satyr-Astry/motionstudio#readme",
+  "bugs": {
+    "url": "https://github.com/Satyr-Astry/motionstudio/issues"
+  },
+  "keywords": [
+    "animation",
+    "2d",
+    "timeline",
+    "keyframe",
+    "electron",
+    "texture",
+    "psd"
+  ]
 }
