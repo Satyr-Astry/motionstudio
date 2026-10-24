@@ -1,6 +1,6 @@
 {
   "name": "motionstudio",
-  "version": "0.0.1-alpha",
+  "version": "0.0.1-alpha.2",
   "private": true,
   "description": "MotionStudio —— 时间驱动的 2D 动画编辑器（Alpha 预览版）",
   "main": "main.js",
