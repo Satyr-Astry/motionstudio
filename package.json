@@ -1,17 +1,20 @@
 {
   "name": "motionstudio",
-  "version": "1.0.0-beta.1",
+  "version": "0.0.1-alpha",
   "private": true,
-  "description": "MotionStudio —— 时间驱动的 2D 动画编辑器：没有帧，只有秒与关键帧（Electron + 原生 ESM，无构建步骤）",
+  "description": "MotionStudio —— 时间驱动的 2D 动画编辑器（Alpha 预览版）",
   "main": "main.js",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
     "test": "node --test tests/*.test.mjs",
-    "check": "node _check-static.mjs"
+    "check": "node _check-static.mjs",
+    "dist": "electron-builder --win nsis --publish never",
+    "dist:dir": "electron-builder --win dir --publish never"
   },
   "devDependencies": {
-    "electron": "^40.10.2"
+    "electron": "^40.10.2",
+    "electron-builder": "^26.18.0"
   },
   "author": "Satyr_Astry",
   "repository": {
@@ -30,5 +33,45 @@
     "electron",
     "texture",
     "psd"
-  ]
+  ],
+  "build": {
+    "appId": "com.satyr.motionstudio",
+    "productName": "MotionStudio",
+    "copyright": "Copyright © 2026 Satyr_Astry",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json",
+      "app/**/*",
+      "!app/promo/img/**",
+      "!**/*.map"
+    ],
+    "extraMetadata": {
+      "main": "main.js"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "MotionStudio-${version}-setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MotionStudio",
+      "deleteAppDataOnUninstall": false
+    }
+  }
 }

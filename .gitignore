@@ -10,3 +10,6 @@ patch-*.mjs
 # 导入测试样本
 app/__test.psd
 *.tmp
+
+dist/
+
