@@ -1,8 +1,10 @@
 // 静态一致性检查：v6 时间模型重构后不能残留帧概念，且 import 的符号必须真的被 export。
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = 'E:/dev/motionstudio';
+// 仓库根 = 本脚本所在目录（换机器 / 换盘符都不用改）
+const ROOT = fileURLToPath(new URL('.', import.meta.url)).replace(/[\\/]+$/, '');
 const files = [];
 
 function walk(dir) {

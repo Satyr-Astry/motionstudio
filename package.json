@@ -2,9 +2,15 @@
   "name": "motionstudio",
   "version": "1.0.0",
   "private": true,
-  "description": "MotionStudio —— 2D 逐帧动画编辑器（帧 × 图层 = cel，图层变换走贝塞尔关键帧）",
+  "description": "MotionStudio —— 时间驱动的 2D 动画编辑器：没有帧，只有秒与关键帧（Electron + 原生 ESM，无构建步骤）",
   "main": "main.js",
+  "license": "MIT",
   "scripts": {
-    "test": "node --test tests/*.test.mjs"
+    "start": "electron .",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node _check-static.mjs"
+  },
+  "devDependencies": {
+    "electron": "^40.10.2"
   }
 }
