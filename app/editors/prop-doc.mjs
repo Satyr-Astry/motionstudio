@@ -4,7 +4,7 @@
 // 但它不是被删掉：把任意区域切成「文档」编辑器（区域标题的下拉框）就能看到完整的「帧率分段」组。
 // 属性面板通过 opts.timebase === false 关掉它，独立挂载时（opts 为空）照旧出现。
 import { docDuration } from '../core/cel.mjs';
-import { makeGroup, makeValue, makeNum, makeSeg, nowTime } from './prop-kit.mjs';
+import { makeGroup, makeValue, makeNum, makeNumPair, makeSeg, nowTime } from './prop-kit.mjs';
 
 const LOOP_VALUE = [['cycle', '循环'], ['pingpong', '往返'], ['none', '单次']];
 
@@ -12,6 +12,44 @@ export function mount(el, ctx, opts) {
     const o = opts || {};
     // 缺省 = 显示（独立挂载的「文档」编辑器走这条），只有属性面板显式传 false
     const wantTimebase = o.timebase !== false;
+
+    // ── 画布（场景尺寸）
+    // 之前这里只有总时长/帧率/循环，画布宽高根本没有入口，「场景画布尺寸无法调整」就是这个坑。
+    const canvasBody = makeGroup(el, '画布', 'canvas');
+    const sizePair = makeNumPair(canvasBody, '尺寸', { min: 16, max: 8192, step: 1, key: 'canvas-size' });
+    const widthInput = sizePair.w;
+    const heightInput = sizePair.h;
+    const presetWrap = document.createElement('div');
+    presetWrap.className = 'prop-inline prop-canvas-presets';
+    for (const [label, w, h] of [['16:9', 1920, 1080], ['9:16', 1080, 1920], ['1:1', 1080, 1080], ['4:3', 1440, 1080]]) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'prop-seg prop-canvas-preset';
+        b.textContent = label;
+        b.title = w + ' × ' + h;
+        b.addEventListener('click', () => {
+            if (typeof ctx.setDocSize === 'function') ctx.setDocSize(w, h);
+            refresh();
+        });
+        presetWrap.appendChild(b);
+    }
+    canvasBody.appendChild(presetWrap);
+    const commitCanvas = () => {
+        const doc = ctx.doc();
+        if (!doc) return;
+        const w = Number(widthInput.value);
+        const h = Number(heightInput.value);
+        if (!Number.isFinite(w) || !Number.isFinite(h)) return;
+        if (typeof ctx.setDocSize === 'function') ctx.setDocSize(w, h);
+        refresh();
+    };
+    widthInput.addEventListener('change', commitCanvas);
+    heightInput.addEventListener('change', commitCanvas);
+    for (const elx of [widthInput, heightInput]) {
+        elx.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commitCanvas(); }
+        });
+    }
 
     // ── 时间与时长
     const timeBody = makeGroup(el, '时间与时长', 'time');
@@ -153,6 +191,11 @@ export function mount(el, ctx, opts) {
         tbCount.textContent = String(segs.length);
         if (document.activeElement !== tbFpsInput) tbFpsInput.value = String(Math.round(cur.fps));
         if (document.activeElement !== tbAtInput) tbAtInput.value = cur.at.toFixed(2);
+        const docNow = ctx.doc();
+        if (docNow) {
+            if (document.activeElement !== widthInput) widthInput.value = String(Math.round(docNow.width));
+            if (document.activeElement !== heightInput) heightInput.value = String(Math.round(docNow.height));
+        }
         tbDelBtn.disabled = segs.length <= 1;
         tbAtInput.disabled = idx <= 0;
     }
@@ -160,7 +203,7 @@ export function mount(el, ctx, opts) {
     return {
         refresh,
         destroy() {
-            for (const body of [timeBody, tbBody]) {
+            for (const body of [canvasBody, timeBody, tbBody]) {
                 const group = body ? body.parentNode : null;
                 if (group && typeof group.remove === 'function') group.remove();
             }

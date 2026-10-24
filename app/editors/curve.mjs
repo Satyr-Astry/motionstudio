@@ -855,7 +855,7 @@ export function mount(el, ctx) {
             paint();
             return;
         }
-        if ((ev.key === 'Delete' || ev.key === 'Backspace') && selKeys.length) {
+        if (ev.key === 'Delete' && selKeys.length) {
             ev.preventDefault();
             const { layer } = keysNow();
             if (!layer) return;

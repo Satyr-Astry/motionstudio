@@ -524,6 +524,22 @@ function buildCtx() {
     },
 
     /**
+     * 改**场景画布**尺寸（文档宽高）：只换舞台大小，对象自己的位图不动。
+     * 对象越界不做裁剪（渲染本来就允许出界），用户可以自己再拖回来。
+     */
+    setDocSize(w, h) {
+        const doc = state.doc;
+        if (!doc) return false;
+        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.round(Number(v) || 0)));
+        const nextW = clamp(w, 16, 8192);
+        const nextH = clamp(h, 16, 8192);
+        if (nextW === Math.round(doc.width) && nextH === Math.round(doc.height)) return false;
+        setDoc((d) => Object.assign({}, d, { width: nextW, height: nextH }), { label: '改画布尺寸' });
+        if (engine && typeof engine.fitView === 'function') engine.fitView();
+        flash('画布改为 ' + nextW + ' × ' + nextH);
+        return true;
+    },
+    /**
      * 改对象自己的画布尺寸（位图整张拉伸，视觉不变、只改分辨率）。
      * 一次 setDoc = 一步撤销；尺寸没变时不动文档。
      */
@@ -954,8 +970,9 @@ function onKeyDown(e) {
     }
     if (palette && palette.isOpen()) return;
     if (shortcuts && shortcuts.isOpen()) return;
-    // Del / Backspace：两段式删除，先提示再执行 —— 单键直接删对象太危险
-    if (e.key === 'Delete' || e.key === 'Backspace') {
+    // 只有 Del（Delete）能删东西，并且两段式确认。Backspace 不接：
+    // 它在很多键盘上就挨着编辑键（有的还印着「删除」），误触代价太大。
+    if (e.key === 'Delete') {
         if (onDeleteKey(e)) return;
     }
     // ? 打开快捷键一览（Shift+/ 在多数布局上就是 ?）

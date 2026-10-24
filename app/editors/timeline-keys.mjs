@@ -767,7 +767,8 @@ export function createKeys(deps) {
         const tag = target && target.tagName ? target.tagName : '';
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return;
         if (target && target.isContentEditable) return;
-        if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+        // 只认 Del：Backspace 交给浏览器/输入框，避免误删关键帧
+    if (e.key !== 'Delete') return;
         if (typeof e.preventDefault === 'function') e.preventDefault();
         deleteSelection();
     }
