@@ -1,0 +1,10 @@
+{
+  "name": "motionstudio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MotionStudio —— 2D 逐帧动画编辑器（帧 × 图层 = cel，图层变换走贝塞尔关键帧）",
+  "main": "main.js",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}

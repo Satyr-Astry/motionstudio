@@ -1,0 +1,12 @@
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+# 本地一次性调试脚本（不进仓库）
+probe-*.mjs
+dbg*.mjs
+patch-*.mjs
+# 导入测试样本
+app/__test.psd
+*.tmp

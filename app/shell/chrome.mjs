@@ -1,0 +1,176 @@
+/**
+ * MotionStudio —— 顶栏与状态栏（外壳自己拥有的两块 DOM）
+ *
+ * 结构与类名：
+ *   #topbar   .top-brand / .top-file > .top-file-btn / .top-project
+ *             / .top-back / .top-ws > .top-ws-tab / .top-hint
+ *   #statusbar .stb-left / .stb-right
+ *
+ * v8 的分工（为什么顶栏变短了）：
+ * - **播放控制搬进时间轴**。VS Code 的顶栏只放窗口级的东西，After Effects /
+ *   Aseprite 的时间码与 transport 也都在时间轴面板里 —— 播放头属于时间轴。
+ *   顶栏塞一个 transport 的后果是同一件事有两个入口、两处状态、两套禁用逻辑：
+ *   按顶栏的 › 时间轴上的画格不动，就是这个原因。
+ * - 顶栏因此只剩：品牌 / 文件动作 / 项目名 / 返回 / 工作区切换 / 临时提示。
+ * - `.top-hint` 平时是空的（只在 flash() 有消息时出现），不再常驻教程文案：
+ *   常驻提示放在状态栏，那里才是「一直在但不抢眼」的位置。
+ *
+ * 这里不碰文档、不碰引擎：只通过 api 读状态、发命令，方便单独测试。
+ */
+
+/** 三个工作区：id 与外壳共用（app.mjs 直接 import 这份清单做校验）。 */
+export const WS_TABS = Object.freeze([
+    { id: 'animate', title: '编排' },
+    { id: 'draw', title: '画板' },
+    { id: 'free', title: '设置' },
+]);
+
+export const WS_IDS = WS_TABS.map((t) => t.id);
+
+/**
+ * 文件按钮：act / 字形 / 中文标题（标题里带快捷键，鼠标悬停即可看到）。
+ * 放在品牌与工作区 tab 之间：左边「文件」是项目级操作，右边才是视图级切换。
+ */
+const FILE_ACTIONS = [
+    ['new', '＋', '新建项目'],
+    ['save', '保存', '保存项目（Ctrl+S）'],
+    ['open', '打开', '打开项目库（Ctrl+O）'],
+    ['import', '导入', '导入 PSD / PNG / JPG / WebP 到当前项目'],
+    ['export', '导出', '导出 PNG 序列（Ctrl+Shift+E）'],
+    // 撤销/重做原本在「工具」区里，编排模式不显示工具条后它们会消失，所以上移到这里。
+    ['undo', '↶', '撤销（Ctrl+Z）'],
+    ['redo', '↷', '重做（Ctrl+Shift+Z）'],
+];
+
+function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+}
+
+function call(fn, fallback) {
+    try {
+        return typeof fn === 'function' ? fn() : fallback;
+    } catch (err) {
+        return fallback;
+    }
+}
+
+function fmt(n, d) {
+    const v = Number(n);
+    return (Number.isFinite(v) ? v : 0).toFixed(d);
+}
+
+/**
+ * 构建顶栏。host 通常是 #topbar（可能已有其它内容，这里整体接管）。
+ * @param {Element} host
+ * @param {{workspace?:Function,setWorkspace?:Function,hint?:Function,file?:Function,
+ *          projectName?:Function,dirty?:Function}} api
+ * @returns {{update:Function, el:Element}}
+ */
+export function buildTopbar(host, api) {
+    const a = api || {};
+    if (!host) return { update() {}, el: null };
+    host.textContent = '';
+
+    const brand = el('div', 'top-brand', 'MotionStudio');
+
+    // 文件组：新建 / 保存 / 打开 / 导出。act 由外壳的 onFileAct 分发。
+    const file = el('div', 'top-file');
+    for (const [act, glyph, title] of FILE_ACTIONS) {
+        const b = el('button', 'top-file-btn', glyph);
+        b.type = 'button';
+        b.dataset.act = act;
+        b.title = title;
+        b.setAttribute('aria-label', title);
+        b.addEventListener('click', () => {
+            if (typeof a.file === 'function') a.file(act);
+        });
+        file.appendChild(b);
+    }
+
+    // 当前项目名：没保存过就是「未命名项目」，保存后带文件名。
+    const project = el('div', 'top-project', '未命名项目');
+
+    // 返回编排：画板 / 设置是从编排「进去」的子视图，必须有一条显眼的回路。
+    const back = el('button', 'top-back', '← 编排');
+    back.type = 'button';
+    back.title = '回到编排工作区（Esc 也可以）';
+    back.addEventListener('click', () => {
+        if (typeof a.setWorkspace === 'function') a.setWorkspace('animate');
+    });
+
+    const ws = el('div', 'top-ws');
+    const tabs = new Map();
+    for (const t of WS_TABS) {
+        const b = el('button', 'top-ws-tab', t.title);
+        b.type = 'button';
+        b.dataset.ws = t.id;
+        b.title = t.title + '工作区';
+        b.addEventListener('click', () => {
+            if (typeof a.setWorkspace === 'function') a.setWorkspace(t.id);
+        });
+        tabs.set(t.id, b);
+        ws.appendChild(b);
+    }
+
+    const hint = el('div', 'top-hint', '');
+    hint.classList.add('is-empty');
+
+    host.appendChild(brand);
+    host.appendChild(file);
+    host.appendChild(project);
+    host.appendChild(back);
+    host.appendChild(ws);
+    host.appendChild(hint);
+
+    function update() {
+        const cur = call(a.workspace, WS_IDS[0]);
+        for (const [id, b] of tabs) b.classList.toggle('is-on', id === cur);
+
+        // 画板 / 设置里才需要「返回编排」；编排里它没有意义，直接隐藏。
+        back.style.display = cur === 'animate' ? 'none' : '';
+
+        const pname = call(a.projectName, '');
+        const dirty = !!call(a.dirty, false);
+        project.textContent = (pname || '未命名项目') + (dirty ? ' •' : '');
+        project.title = pname ? '当前项目：' + pname + (dirty ? '（有未保存修改）' : '') : '尚未保存（Ctrl+S）';
+        project.classList.toggle('is-dirty', dirty);
+
+        // 提示位只显示临时消息：没有消息时腾出空间，不再常驻一行教程。
+        const h = call(a.hint, '');
+        const text = h == null ? '' : String(h);
+        if (hint.textContent !== text) hint.textContent = text;
+        hint.classList.toggle('is-empty', !text);
+    }
+
+    update();
+    return { update, el: host };
+}
+
+/**
+ * 构建状态栏。
+ * @param {Element} host 通常是 #statusbar
+ * @param {object} [api] 预留：将来可以挂点击跳转
+ * @returns {{setLeft:Function,setRight:Function,el:Element}}
+ */
+export function buildStatusbar(host, api) {
+    void api;
+    if (!host) return { setLeft() {}, setRight() {}, el: null };
+    host.textContent = '';
+    const left = el('span', 'stb-left', '');
+    const right = el('span', 'stb-right', '');
+    host.appendChild(left);
+    host.appendChild(right);
+
+    return {
+        setLeft(t) {
+            left.textContent = t == null ? '' : String(t);
+        },
+        setRight(t) {
+            right.textContent = t == null ? '' : String(t);
+        },
+        el: host,
+    };
+}

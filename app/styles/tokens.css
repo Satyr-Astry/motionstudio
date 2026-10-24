@@ -1,0 +1,378 @@
+/* tokens.css —— 设计令牌与全局基座
+ *
+ * 职责（唯一声明变量的文件，契约 §7）：
+ *   1. 全部设计令牌：表面色、描边色、文字色、语义色、度量值。shell.css 与 panels.css 只许 var() 引用。
+ *   2. 全局重置：box-sizing、html/body 铺满无滚动、字体栈、文档底色。
+ *   3. 控件基座：button / input / select 的统一高度、边框、圆角、字体、80ms 过渡。
+ *   4. 跨文件共用的图标按钮基类（顶栏与各面板的标题条/工具条共用同一套盒子）。
+ *   5. range 的统一外观、数字输入的对齐、细滚动条、:focus-visible 描边、kbd、禁用态。
+ *
+ * 基调：深色专业软件（Blender 式的克制），不用渐变块、不堆阴影、不做网页感圆角。
+ *
+ * ── 圆角阶梯（契约 §2）──────────────────────────────────────────────
+ *   --r-0    0     面板 / 区域 / 列表行 / 时间轴块 / 画布区 —— 该直角的地方一律直角
+ *   --r-1    2px   按钮 / 输入框 / select / 小徽章 —— 常驻控件只有一个值
+ *   --r-2    4px   分段按钮组的两个端头（中间段仍为 --r-0）
+ *   --r-pop  6px   浮层 / 菜单 / 提示条 / 对话框
+ *   --r-pill 9999px 只留给开关轨道与圆形指示点（真圆，不参与视觉节奏）
+ * 阶梯之外不许出现任何像素值：4px 的按钮、5px 的输入框、8px 的卡片都是一次性数字，
+ * 它们加起来就是「到处圆角、视觉发飘」的根源。
+ *
+ * ── 尺寸节奏（契约 §2）──────────────────────────────────────────────
+ *   顶栏 34 / 区域标题条 24 / 工具条 26 / 按钮与 select 22 / 输入框 20 / 列表行 28
+ * 同类控件必须同值：区域标题条、面板工具条、属性组标题都走 --h-head 或 --h-bar。
+ */
+
+:root {
+    /* —— 表面（由深到浅）—— */
+    --bg: #141518;
+    --bg-2: #191a1d;
+    --panel: #212328;
+    --panel-2: #26282d;
+    --surface: #2b2e34;
+
+    /* —— 描边 —— */
+    --line: #33363d;
+    --line-2: #3d4048;
+
+    /* —— 文字 —— */
+    --ink: #e6e8ec;
+    --ink-dim: #9aa1ac;
+    --ink-faint: #6b7280;
+
+    /* —— 语义色 —— */
+    --accent: #4a7dff;
+    --accent-2: #2f5fd0;
+    --danger: #e05a5a;
+    --ok: #3fa46a;
+
+    /* —— 度量：尺寸节奏 —— */
+    --h-top: 34px;
+    /* 顶栏 */
+    --h-head: 24px;
+    /* 区域标题条 / 状态栏 / 次级条 */
+    --h-bar: 26px;
+    /* 面板工具条 / 属性组标题 */
+    --h-btn: 22px;
+    /* 按钮 / select / 图标按钮 */
+    --h-field: 20px;
+    /* 文本与数字输入 */
+    --h-row: 28px;
+    /* 列表行 */
+
+    /* —— 度量：圆角阶梯 —— */
+    --r-0: 0px;
+    --r-1: 2px;
+    --r-2: 4px;
+    --r-pop: 6px;
+    --r-pill: 9999px;
+
+    /* —— 浮层投影：所有浮层共用，别处不再手写 rgba 阴影 —— */
+    --shadow-pop: 0 10px 24px rgba(0, 0, 0, 0.5);
+
+    /* 让原生控件（select 下拉、滚动条、光标）走深色，避免白底箭头 */
+    color-scheme: dark;
+}
+
+/* ═══════════════ 全局重置 ═══════════════ */
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 12px;
+    line-height: 1.35;
+    -webkit-font-smoothing: antialiased;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+}
+
+/* 可编辑控件要能选字，其余一律按桌面软件的不可选处理 */
+input,
+textarea,
+[contenteditable="true"] {
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+img,
+canvas,
+svg {
+    -webkit-user-drag: none;
+    border: 0;
+}
+
+canvas {
+    display: block;
+}
+
+::selection {
+    background-color: var(--accent-2);
+    color: var(--ink);
+}
+
+/* ═══════════════ 细滚动条（8px，滑块 2px 圆角） ═══════════════ */
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background-color: var(--line-2);
+    border-radius: var(--r-1);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background-color: var(--ink-faint);
+}
+
+::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+/* ═══════════════ 焦点态 ═══════════════ */
+
+:focus {
+    outline: none;
+}
+
+/* 1px 实心描边（offset 取负值，贴盒内，不会被 overflow:hidden 裁掉） */
+:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+}
+
+/* ═══════════════ 控件基座 ═══════════════ */
+
+button,
+input,
+select,
+textarea {
+    font: inherit;
+    color: var(--ink);
+    background-color: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r-1);
+    outline: none;
+    transition: background-color 80ms linear, border-color 80ms linear, color 80ms linear;
+}
+
+/* select 保留原生的下拉箭头（color-scheme 已保证深色），只统一盒子 */
+button,
+input {
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    height: var(--h-btn);
+    min-width: var(--h-btn);
+    padding: 0 8px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+button:hover {
+    background-color: var(--surface);
+    border-color: var(--line-2);
+}
+
+button:active {
+    background-color: var(--line);
+}
+
+select {
+    height: var(--h-btn);
+    min-width: 0;
+    padding: 0 4px;
+    cursor: pointer;
+}
+
+select:hover {
+    border-color: var(--line-2);
+}
+
+input {
+    height: var(--h-btn);
+    min-width: 0;
+    padding: 0 6px;
+}
+
+input:hover,
+select:hover {
+    border-color: var(--line-2);
+}
+
+input:focus,
+select:focus {
+    border-color: var(--accent);
+}
+
+/* 文本 / 数字输入：比按钮矮 2px，数字贴右，等宽数字保证滚动时不抖 */
+input[type="text"],
+input[type="number"] {
+    height: var(--h-field);
+    padding: 0 5px;
+    background-color: var(--bg);
+    border-color: var(--line);
+    border-radius: var(--r-1);
+}
+
+input[type="number"] {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* 隐藏原生 spinner，避免挤掉右对齐的数字 */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+input::placeholder {
+    color: var(--ink-faint);
+}
+
+/* ═══════════════ 共用基类：图标按钮（跨 shell.css / panels.css） ═══════════════
+ * 区域标题条、顶栏、面板工具条、画布浮条上的图标按钮结构完全同构：
+ * 透明底 + 1px 透明边 + hover 才浮出表面色。盒子（高度/圆角/边框）在这里定死，
+ * 各文件只补宽度、字号、以及 is-on / 危险色这类差异。
+ * 放在 tokens.css 是因为类名分属两侧文件，而令牌文件总是最先加载，差异规则天然覆盖它。
+ */
+
+.area-btn,
+.top-tr-btn,
+.top-file-btn,
+.tbar-btn,
+.lyr-btn,
+.tline-btn,
+.cv-ob-btn {
+    height: var(--h-btn);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    background: transparent;
+    line-height: 1;
+}
+
+.area-btn:hover,
+.top-tr-btn:hover,
+.tbar-btn:hover,
+.lyr-btn:hover,
+.tline-btn:hover,
+.cv-ob-btn:hover {
+    background: var(--surface);
+    border-color: var(--line);
+    color: var(--ink);
+}
+
+/* ═══════════════ range 统一外观 ═══════════════ */
+
+input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 16px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: var(--r-1);
+    background-color: var(--line);
+    transition: background-color 80ms linear;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 11px;
+    height: 11px;
+    /* (4px 轨道 - 11px 拇指) / 2 */
+    margin-top: -3.5px;
+    border: 0;
+    border-radius: 50%;
+    background-color: var(--ink-dim);
+    transition: background-color 80ms linear;
+}
+
+input[type="range"]:hover::-webkit-slider-runnable-track {
+    background-color: var(--line-2);
+}
+
+input[type="range"]:hover::-webkit-slider-thumb {
+    background-color: var(--accent);
+}
+
+input[type="range"]:focus-visible::-webkit-slider-thumb {
+    background-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--accent);
+}
+
+/* ═══════════════ 键帽 / 数值输出 ═══════════════ */
+
+kbd {
+    display: inline-block;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    border: 1px solid var(--line-2);
+    border-bottom-width: 2px;
+    border-radius: var(--r-1);
+    background-color: var(--bg-2);
+    color: var(--ink-dim);
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 10.5px;
+    line-height: 15px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+/* output 在工具条里当数值显示用，统一等宽数字 */
+output {
+    font-variant-numeric: tabular-nums;
+}
+
+/* ═══════════════ 禁用态 ═══════════════ */
+
+:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+/* ═══════════════ 区域内容槽的盒子约束（契约 §7） ═══════════════
+ * 只声明最小约束；flex 与 position:relative 由 shell.css 声明。
+ * 这里刻意不写 position:absolute —— .area-body 是 flex item，脱离流会盖住 .area-head。
+ */
+.area-body {
+    min-height: 0;
+    overflow: hidden;
+}

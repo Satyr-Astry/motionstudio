@@ -1,0 +1,2188 @@
+/* panels.css —— 六个编辑器面板的内部样式
+ *
+ * 职责（契约 §6 T2/T3 段）：
+ *   工具栏 .tbar*、画布 .cv-*、调色板 .pal*、图层 .lyr*、
+ *   时间轴 .tline*、属性 .prop* + 变换 .xf*、帮助 .hlp*。
+ *
+ * 结构约定：每个面板的根节点都直接挂在 .area-body 里，而 .area-body 不是 flex 容器，
+ * 所以根节点用 height:100% 撑满，内部再用 flex 分配——不用 absolute:inset(0)，
+ * 那是历史 bug 的来源（会盖住区域标题栏的点击区）。唯一例外是 .cv-host，它只铺引擎画布。
+ *
+ * 本文件不声明 CSS 变量，只消费 tokens.css。硬编码色值仅限语义固定者：
+ * 棋盘格、色相条渐变、洋葱皮红绿、选中态白字。
+ */
+
+/* ═══════════════ 通用编辑器根 ═══════════════ */
+
+/* el 的 className 由外壳统一写成 "area-body ed ed-<id>"。
+   这里显式声明 block：.area-body 已经提供了定位上下文与裁剪，
+   绝不能再给 .ed 加 position:absolute; inset:0。 */
+.ed { display: block; }
+
+/* ═══════════════ 共用基类 ═══════════════
+ * 同类控件只在这里定盒子（高度 / 圆角 / 描边 / 字体），各面板的选择器只补差异。
+ * 全部用「既有类名并置」实现：不新增类名、不动 DOM。
+ * 图标按钮的基类在 tokens.css（顶栏与区域标题条也要用），这里只放面板内部的三类。
+ * 顺序要求：本段必须排在各面板规则之前，差异规则才能天然覆盖它。
+ */
+
+/* —— 实心小按钮：1px 描边 + 22px 高 + 2px 圆角 —— */
+.bd-btn,
+.bd-tool,
+.tbar-tool,
+.tbar-brush,
+.cv-hud-btn,
+.fx-add > button,
+.prop-subtree-btn,
+.lyr-tp-reset,
+.xf-div-btn,
+.lyr-tp-mode,
+.lyr-tp-hold {
+    height: var(--h-btn);
+    border: 1px solid var(--line);
+    border-radius: var(--r-1);
+    background: var(--panel-2);
+    color: var(--ink-dim);
+    font-size: 11px;
+    line-height: 1;
+}
+
+.bd-btn:hover,
+.bd-tool:hover,
+.tbar-tool:hover,
+.tbar-brush:hover,
+.cv-hud-btn:hover,
+.fx-add > button:hover,
+.prop-subtree-btn:hover:not(:disabled),
+.xf-div-btn:hover,
+.lyr-tp-reset:hover,
+.lyr-tp-mode:hover,
+.lyr-tp-hold:hover {
+    background: var(--surface);
+    border-color: var(--line-2);
+    color: var(--ink);
+}
+
+/* —— 输入框：20px 高 + 2px 圆角 + 等宽数字 —— */
+input.prop-num,
+input.xf-num,
+input.tline-now,
+input.tline-total,
+.lyr-tp-num,
+input.lyr-rename,
+.xf-warp-custom .xf-div-num,
+.pal-top input.pal-hex {
+    height: var(--h-field);
+    padding: 0 5px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-1);
+    background: var(--bg);
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+}
+
+/* —— 浮层：6px 圆角 + 统一描边与投影 —— */
+.curve-pop,
+.curve-menu,
+.curve-tip,
+.cv-ob-menu,
+.cv-objectbar,
+.lyr-tp,
+.tline-menu,
+.tline-legend-card,
+.bd-ask-box {
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-pop);
+    background: var(--panel);
+    box-shadow: var(--shadow-pop);
+}
+
+/* —— 菜单项 / 弹层行：22px 高、2px 圆角、悬停才浮出底色 —— */
+.curve-menu > button,
+.cv-ob-mi,
+.tline-menu-item,
+.curve-ch-row {
+    height: var(--h-btn);
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--r-1);
+    background: transparent;
+    color: var(--ink-dim);
+    font-size: 11px;
+    text-align: left;
+}
+
+.curve-menu > button:hover,
+.cv-ob-mi:hover,
+.tline-menu-item:hover,
+.curve-ch-row:hover {
+    background: var(--surface);
+    color: var(--ink);
+}
+
+/* —— 面板工具条：图层面板与时间轴面板的顶条完全同构 —— */
+.lyr-bar,
+.tline-bar {
+    flex: 0 0 var(--h-bar);
+    height: var(--h-bar);
+    display: flex; align-items: center; gap: 2px;
+    padding: 0 5px; background: var(--panel-2); border-bottom: 1px solid var(--line);
+    font-size: 11px;
+}
+
+/* ═══════════════ 工具栏 toolbar ═══════════════ */
+
+/* 工具轨：内容会换行，高度由区域决定。区域矮的时候宁可滚动，也不要静默切掉半行字
+   （原来 overflow:hidden，142px 的内容塞进 46px 会切出半截「软笔」「像素笔」） */
+.tbar {
+    display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; gap: 3px;
+    height: 100%; padding: 4px 6px;
+    overflow-x: hidden; overflow-y: auto;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+}
+
+.tbar-tools, .tbar-brushes, .tbar-history {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 2px;
+}
+
+/* 工具磁贴：方形，跟工具条同高（26），与 22px 的文字按钮区分开 */
+.tbar-tool {
+    flex: 0 0 auto; width: var(--h-bar); min-width: var(--h-bar); height: var(--h-bar);
+    padding: 0;
+    font-size: 13px;
+}
+
+.tbar-tool.is-on {
+    background: var(--accent); border-color: var(--accent-2);
+    color: #fff;
+}
+
+.tbar-brush {
+    flex: 0 0 auto; min-width: var(--h-bar);
+    padding: 0 6px;
+}
+
+.tbar-brush.is-on {
+    background: var(--accent); border-color: var(--accent-2);
+    color: #fff;
+}
+
+/* label + range + output 同一行 */
+.tbar-field {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 4px; height: var(--h-bar);
+}
+
+.tbar-lbl {
+    flex: 0 0 44px; width: 44px;
+    font-size: 11px; color: var(--ink-dim);
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tbar-field input[type="range"] {
+    flex: 0 0 76px; width: 76px;
+}
+
+.tbar-field output {
+    flex: 0 0 34px; width: 34px;
+    text-align: right; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 11px; color: var(--ink-dim);
+    white-space: nowrap;
+}
+
+.tbar-sep {
+    flex: 0 0 1px; width: 1px; height: var(--h-field);
+    margin: 0 3px; padding: 0; border: 0;
+    background: var(--line);
+}
+
+.tbar-btn {
+    flex: 0 0 auto; width: var(--h-btn); min-width: var(--h-btn);
+    padding: 0; color: var(--ink-dim);
+    font-size: 12px;
+}
+
+.tbar-btn:disabled:hover {
+    background: transparent; border-color: transparent;
+    color: var(--ink-dim);
+}
+
+/* ═══════════════ 画布 canvas ═══════════════ */
+
+/* 唯一的 absolute 铺满者：它只覆盖 .area-body 的内容槽，不会碰到标题栏 */
+.cv-host {
+    position: absolute; inset: 0; overflow: hidden;
+    background: var(--bg); display: flex; align-items: center; justify-content: center;
+}
+
+/* 引擎自建的显示画布（createElement('canvas') 后挂的类），没有 inline 兜底，必须由 CSS 铺满宿主 */
+canvas.kl-view {
+    position: absolute; inset: 0; display: block; width: 100%; height: 100%;
+    cursor: crosshair; touch-action: none;
+    image-rendering: pixelated;
+}
+
+.cv-hud {
+    position: absolute; right: 8px; bottom: 8px; z-index: 2; display: flex; gap: 4px;
+}
+
+.cv-hud-btn {
+    min-width: 28px;
+    padding: 0 7px; border-color: var(--line-2);
+    background: var(--bg-2);
+    font-variant-numeric: tabular-nums;
+}
+
+.cv-hud-btn:hover {
+    border-color: var(--ink-faint);
+}
+
+/* ═══════════════ 调色板 palette ═══════════════ */
+
+.pal {
+    display: flex; flex-direction: column; gap: 6px; height: 100%;
+    padding: 8px; overflow-x: hidden; overflow-y: auto;
+}
+
+.pal-top, .pal-recent {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+}
+
+.pal-chip {
+    flex: 0 0 22px; width: 22px; height: 22px;
+    padding: 0; border: 1px solid var(--line-2); border-radius: var(--r-1);
+    background: var(--panel-2);
+}
+
+.pal-top input.pal-hex {
+    flex: 1 1 auto; width: auto;
+    padding: 0 6px;
+    color: var(--ink); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 11.5px; letter-spacing: 0.3px;
+    text-transform: uppercase;
+}
+
+/* SV 正方形：canvas 由引擎按固定尺寸绘制，容器负责裁剪与圆角；取色交互全靠命中测试 */
+.pal-sv {
+    position: relative; flex: 0 0 120px; height: 120px; overflow: hidden;
+    border: 1px solid var(--line); border-radius: var(--r-1);
+    cursor: crosshair; touch-action: none;
+}
+
+canvas.pal-sv-canvas {
+    display: block; width: 100%; height: 120px;
+    border-radius: var(--r-1); touch-action: none;
+}
+
+/* 12px 圆环：白环 + 1px 黑外描边，任何底色上都读得出来 */
+.pal-cursor {
+    position: absolute; left: 0; top: 0; width: 12px; height: 12px;
+    border: 2px solid #fff; border-radius: 50%; box-shadow: 0 0 0 1px #000;
+    transform: translate(-50%, -50%); pointer-events: none;
+}
+
+/* 色相条：轨道直接画 0→360 的渐变（语义固定的彩虹，不算主题色）。
+   JS 不再设 background，块状轨道与白色竖条手柄全在这里。 */
+input.pal-hue {
+    -webkit-appearance: none; appearance: none; flex: 0 0 14px; width: 100%; height: 14px;
+    padding: 0; border: 1px solid var(--line-2); border-radius: var(--r-1);
+    background: linear-gradient(
+        to right,
+        #f00 0%,
+        #ff0 16.666%,
+        #0f0 33.333%,
+        #0ff 50%,
+        #00f 66.666%,
+        #f0f 83.333%,
+        #f00 100%
+    );
+}
+
+/* 通用 range 的 :hover 轨道规则特异性更高，这里逐条对齐，否则一碰就退回灰轨道 */
+input.pal-hue::-webkit-slider-runnable-track,
+input.pal-hue:hover::-webkit-slider-runnable-track,
+input.pal-hue:focus-visible::-webkit-slider-runnable-track {
+    height: 12px; border-radius: var(--r-1);
+    background: transparent; box-shadow: none;
+}
+
+input.pal-hue::-webkit-slider-thumb,
+input.pal-hue:hover::-webkit-slider-thumb,
+input.pal-hue:focus-visible::-webkit-slider-thumb {
+    width: 10px; height: 16px;
+    margin-top: -2px; border: 1px solid #000; border-radius: var(--r-1);
+    background: #fff; box-shadow: none;
+}
+
+/* v8：16 色预设格（.pal-grid/.pal-swatch）已删除 —— 与「最近色」重复，
+   调色面板现在只有 当前色 + HSV 方块 + 明度条 + 最近色 6 个。 */
+
+.pal-label {
+    flex: 0 0 auto; font-size: 11px; color: var(--ink-faint);
+    white-space: nowrap;
+}
+
+.pal-recents {
+    flex: 1 1 auto; display: flex; flex-wrap: wrap; gap: 4px; min-width: 0;
+}
+
+.pal-dot {
+    width: 14px; min-width: 14px; height: 14px;
+    padding: 0; border: 1px solid var(--line-2); border-radius: 50%;
+    background: var(--panel-2); cursor: pointer;
+}
+
+/* ═══════════════ 图层 layers ═══════════════ */
+
+.lyr {
+    display: flex; flex-direction: column; height: 100%; overflow: hidden;
+}
+
+/* .lyr-bar / .tline-bar 的盒子在文件顶部的共用基类里 */
+
+.lyr-btn {
+    flex: 0 0 auto; width: var(--h-btn); min-width: var(--h-btn);
+    padding: 0; color: var(--ink-dim);
+    font-size: 11px;
+}
+
+.lyr-btn[data-act="del"]:hover { color: var(--danger); }
+
+.lyr-alpha {
+    flex: 0 0 var(--h-head); height: var(--h-head); display: flex; align-items: center; gap: 6px;
+    padding: 0 6px; border-bottom: 1px solid var(--line);
+}
+
+.lyr-alpha input[type="range"] {
+    flex: 1 1 auto; width: auto; min-width: 0;
+}
+
+.lyr-alpha-val {
+    flex: 0 0 40px; width: 40px;
+    text-align: right; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ink-dim);
+    white-space: nowrap;
+}
+
+.lyr-list {
+    flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto;
+}
+
+.lyr-row {
+    display: flex; align-items: center; gap: 6px; height: var(--h-row);
+    padding: 0 6px; border-bottom: 1px solid var(--line);
+    cursor: pointer; -webkit-user-select: none; user-select: none;
+}
+
+.lyr-row:hover { background: var(--panel-2); }
+
+.lyr-row.is-active {
+    background: var(--surface); box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* 可见性圆点：实心=可见，空心=隐藏 */
+.lyr-vis {
+    flex: 0 0 10px; width: 10px; min-width: 10px; height: 10px;
+    padding: 0; border: 1px solid var(--ink-dim); border-radius: 50%;
+    background-color: var(--ink-dim); cursor: pointer;
+}
+
+.lyr-vis:not(.is-off):hover {
+    background-color: var(--ink); border-color: var(--ink);
+}
+
+.lyr-vis.is-off {
+    background-color: transparent; border-color: var(--ink-faint);
+}
+
+.lyr-vis.is-off:hover { border-color: var(--ink-dim); }
+
+/* 缩略图：棋盘格底 + 像素化放大。canvas 位图仍是 40×30，这里按 4:3 微缩到行高里
+   （34×26 ≈ 1.308，误差 1.8%，肉眼不可分辨），否则 30px 的图塞不进 28px 的行 */
+.lyr-thumb {
+    flex: 0 0 34px; width: 34px; height: 26px;
+    border: 1px solid var(--line-2); border-radius: var(--r-1);
+    background-color: var(--bg);
+    background-image: repeating-conic-gradient(var(--panel-2) 0% 25%, var(--bg) 0% 50%);
+    background-size: 8px 8px; image-rendering: pixelated;
+}
+
+.lyr-meta {
+    flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px;
+}
+
+.lyr-name {
+    font-size: 11.5px; line-height: 1.15; color: var(--ink);
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.lyr-sub {
+    font-size: 10px; line-height: 1.2; color: var(--ink-faint);
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.lyr-foot {
+    flex: 0 0 var(--h-head); height: var(--h-head); display: flex; align-items: center; gap: 8px;
+    padding: 0 8px; background: var(--panel-2); border-top: 1px solid var(--line);
+    color: var(--ink-dim); font-size: 11px; white-space: nowrap; overflow: hidden;
+}
+
+/* ═══════════════ 时间轴 timeline ═══════════════ */
+
+.tline {
+    display: flex; flex-direction: column; height: 100%; overflow: hidden;
+}
+
+/* .tline-bar 的盒子在共用基类里；条内的文字按钮同样走 tokens 的图标按钮基类 */
+
+.tline-btn {
+    flex: 0 0 auto; min-width: var(--h-btn);
+    padding: 0 5px; color: var(--ink-dim);
+    font-size: 11px;
+}
+
+.tline-btn.is-on {
+    background: var(--accent); border-color: var(--accent-2);
+    color: #fff;
+}
+
+.tline-time {
+    flex: 0 0 auto; margin-left: auto; padding-left: 8px;
+    text-align: right; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ink-dim);
+    white-space: nowrap;
+}
+
+/* v6：行区既是横向也是纵向滚动容器；对象名列 sticky left 由 .tline-label 负责 */
+
+.tline-rows {
+    display: flex; flex-direction: column; min-width: 100%;
+}
+
+.tline-row {
+    display: flex; width: max-content; min-width: 100%;
+}
+
+.tline-label {
+    position: sticky; left: 0; z-index: 2; flex: 0 0 96px; display: flex; align-items: center;
+    padding: 0 8px; background: var(--panel-2); border-right: 1px solid var(--line);
+    border-bottom: 1px solid var(--line); color: var(--ink-dim);
+    font-size: 11px; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ═══════════════ 属性 properties ═══════════════ */
+
+.prop {
+    display: flex; flex-direction: column; height: 100%;
+    padding: 0 0 8px; overflow-x: hidden; overflow-y: auto;
+}
+
+.prop-group {
+    flex: 0 0 auto; border-bottom: 1px solid var(--line);
+}
+
+.prop-title {
+    height: var(--h-bar); display: flex; align-items: center;
+    padding-left: 8px; background: var(--panel-2); border-bottom: 1px solid var(--line);
+    color: var(--ink-dim); font-size: 11px; font-weight: 500; letter-spacing: 0.3px;
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.prop-body {
+    display: flex; flex-direction: column; gap: 5px;
+    padding: 6px 8px;
+}
+
+/* 变换组由 .xf 自带 6px/8px 内边距，这里清零避免双层留白 */
+.prop-body[data-k="xform"] { padding: 0; }
+
+.prop-row {
+    display: flex; align-items: center; gap: 6px; min-height: var(--h-btn);
+}
+
+.prop-label {
+    flex: 0 0 68px; width: 68px;
+    color: var(--ink-dim); font-size: 11px; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.prop-field {
+    flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 4px;
+}
+
+input.prop-num {
+    flex: 0 0 auto; width: 68px;
+    font-size: 11px; text-align: right;
+}
+
+input.prop-num:hover { border-color: var(--line-2); }
+
+input.prop-num:focus { border-color: var(--accent); }
+
+button.prop-seg {
+    flex: 0 0 auto; min-width: 26px;
+    padding: 0 6px; border: 1px solid var(--line); border-radius: var(--r-1);
+    background: var(--panel-2); color: var(--ink-dim);
+    font-size: 11px; line-height: 1;
+}
+
+button.prop-seg:hover {
+    background: var(--surface); border-color: var(--line-2);
+    color: var(--ink);
+}
+
+button.prop-seg.is-on {
+    background: var(--accent); border-color: var(--accent-2);
+    color: #fff;
+}
+
+/* 小开关：34×16 轨道 + 12px 滑块，靠 ::after 半像素对齐。胶囊形只属于开关与圆点 */
+button.prop-toggle {
+    position: relative; flex: 0 0 auto; width: 34px; min-width: 34px; height: 16px;
+    padding: 0; border: 1px solid var(--line-2); border-radius: var(--r-pill);
+    background: var(--line); cursor: pointer;
+}
+
+button.prop-toggle::after {
+    content: ""; position: absolute; left: 1px; top: 1px; width: 12px; height: 12px;
+    border-radius: 50%; background: var(--ink-faint);
+    transition: transform 80ms linear, background-color 80ms linear;
+}
+
+button.prop-toggle:hover::after { background: var(--ink-dim); }
+
+button.prop-toggle.is-on {
+    background: var(--ok); border-color: var(--ok);
+}
+
+button.prop-toggle.is-on::after {
+    background: var(--ink); transform: translateX(18px);
+}
+
+/* ═══════════════ 变换 xform（内嵌在 properties 的 .prop-body[data-k=xform]） ═══════════════ */
+
+.xf {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 6px 8px;
+}
+
+.xf-head {
+    display: flex; align-items: center; gap: 6px;
+}
+
+select.xf-layer {
+    flex: 1 1 auto; width: auto; min-width: 0;
+    padding: 0 3px; border: 1px solid var(--line); border-radius: var(--r-1);
+    background: var(--bg); color: var(--ink);
+    font-size: 11.5px;
+}
+
+.xf-keys {
+    flex: 0 0 auto; color: var(--ink-faint);
+    font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
+.xf-grid, .xf-corners {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px;
+}
+
+.xf-row, .xf-corner {
+    display: flex; align-items: center; gap: 4px; min-width: 0;
+}
+
+.xf-label {
+    flex: 0 0 44px; width: 44px;
+    color: var(--ink-dim); font-size: 11px; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+input.xf-num {
+    flex: 1 1 auto; width: 100%; min-width: 0;
+    font-size: 11.5px; text-align: right;
+}
+
+input.xf-num:hover { border-color: var(--line-2); }
+
+input.xf-num:focus { border-color: var(--accent); }
+
+.xf-warp-btn, .xf-btn {
+    width: 100%; height: var(--h-btn);
+    padding: 0; border: 1px solid var(--line); border-radius: var(--r-1);
+    background: var(--panel-2); color: var(--ink-dim);
+    font-size: 11px; line-height: 1;
+}
+
+.xf-warp-btn:hover {
+    background: var(--surface); border-color: var(--line-2);
+    color: var(--ink);
+}
+
+.xf-warp-btn.is-on {
+    background: var(--accent); border-color: var(--accent-2);
+    color: #fff;
+}
+
+/* display:grid 会盖掉 [hidden] 的 UA 规则，这里必须显式还原 */
+.xf-corners[hidden], .xf-warp-div[hidden] { display: none; }
+
+/* 网格密度：1×1 ... 4×4 + 重置 */
+.xf-warp-div {
+    display: flex; align-items: center; gap: 3px; flex-wrap: wrap;
+}
+
+.xf-warp-div .xf-label {
+    flex: 0 0 auto; margin-right: 2px;
+}
+
+/* 自定义行列行：数字框 + × + 应用 */
+.xf-warp-custom {
+    display: flex; align-items: center; gap: 3px; flex: 1 1 100%;
+    margin-top: 3px;
+}
+
+.xf-warp-custom .xf-div-num {
+    flex: 0 0 38px;
+    padding: 0 3px; background: var(--surface);
+    font-size: 10px; text-align: center;
+}
+
+.xf-warp-custom .xf-div-btn.is-apply {
+    flex: 0 0 auto; padding: 0 8px;
+}
+
+.xf-div-btn {
+    flex: 1 1 auto; min-width: 0;
+    padding: 0 4px;
+    font-size: 10px; white-space: nowrap;
+}
+
+.xf-div-btn:hover {
+    background: var(--surface); border-color: var(--line-2);
+    color: var(--ink);
+}
+
+.xf-div-btn.is-on {
+    background: var(--accent); border-color: var(--accent-2);
+    color: #fff;
+}
+
+.xf-div-btn.is-reset {
+    flex: 0 0 auto; color: var(--ink-faint);
+}
+
+.xf-div-btn.is-reset:hover {
+    color: var(--danger); border-color: var(--danger);
+}
+
+/* 三段按钮组：共用边框，靠 -1px 负边距叠合。只有两个端头带 --r-2，中间段直角 */
+.xf-seg {
+    display: flex; width: 100%;
+}
+
+.xf-segbtn {
+    flex: 1 1 0; min-width: 0; height: var(--h-btn);
+    padding: 0 4px; border: 1px solid var(--line); border-radius: var(--r-0);
+    background: var(--panel-2); color: var(--ink-dim);
+    font-size: 11px; line-height: 1;
+}
+
+.xf-segbtn + .xf-segbtn { margin-left: -1px; }
+
+.xf-segbtn:first-child { border-radius: var(--r-2) 0 0 var(--r-2); }
+
+.xf-segbtn:last-child { border-radius: 0 var(--r-2) var(--r-2) 0; }
+
+.xf-segbtn:hover {
+    position: relative; z-index: 1;
+    background: var(--surface); border-color: var(--line-2);
+    color: var(--ink);
+}
+
+.xf-segbtn.is-on {
+    position: relative; z-index: 2;
+    background: var(--accent); border-color: var(--accent-2);
+    color: #fff;
+}
+
+.xf-actions {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px;
+}
+
+.xf-btn:hover {
+    background: var(--surface); border-color: var(--line-2);
+    color: var(--ink);
+}
+
+.xf-btn[data-act="del"]:hover { color: var(--danger); }
+
+/* ═══════════════ 帮助 help ═══════════════ */
+
+.hlp {
+    display: flex; flex-direction: column; gap: 8px; height: 100%;
+    padding: 12px; overflow-x: hidden; overflow-y: auto;
+}
+
+.hlp-title {
+    flex: 0 0 auto; margin: 0;
+    color: var(--ink-dim); font-size: 11px; font-weight: 600; letter-spacing: 0.4px;
+    text-transform: uppercase;
+}
+
+.hlp-list {
+    flex: 0 0 auto; display: flex; flex-direction: column; gap: 5px;
+}
+
+.hlp-item {
+    display: flex; align-items: baseline; gap: 8px;
+}
+
+kbd.hlp-key { flex: 0 0 auto; }
+
+.hlp-desc {
+    flex: 1 1 auto; min-width: 0;
+    color: var(--ink-dim); font-size: 11.5px;
+}
+
+/* 图层行内改名输入（Electron 渲染进程没有 window.prompt，layers.mjs 退化用它） */
+input.lyr-rename {
+    flex: 1 1 auto; min-width: 0;
+    padding: 0 4px; background: var(--surface); border-color: var(--accent);
+    color: var(--ink); font-size: 11.5px;
+}
+
+/* ═══════════════ v2：元素语义 / 变换关键帧轨道 ═══════════════ */
+
+/* ── 图层面板：元素选中态与类型徽章 ── */
+
+.lyr-row.is-sel {
+    background: rgba(74, 125, 255, 0.16); box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.lyr-row.is-sel .lyr-name, .tline-row.is-active .tline-label { color: var(--ink); }
+
+/* 关键帧菱形：尺寸/落点/旋转全部由 timeline.mjs 内联写（KF_SIZE 7、KF_TOP 17），这里只管外观。
+   普通帧 2px 圆角、hold 帧直角 —— 这 2px 差异是唯一能一眼区分两类缓动的线索，别抹平。 */
+.tline-kf {
+    position: absolute; padding: 0; border: 1px solid #0d0f12;
+    background: var(--accent); cursor: ew-resize; border-radius: var(--r-1);
+}
+
+.tline-kf:hover { background: #7fa0ff; }
+
+.tline-kf.is-sel {
+    border-color: #fff; background: #fff; box-shadow: 0 0 0 2px rgba(74, 125, 255, 0.55);
+}
+
+/* 缓动为 hold 的关键帧画成方块，便于一眼分辨 */
+.tline-kf.is-hold {
+    background: var(--ink-dim); border-radius: var(--r-0);
+}
+
+.tline-kf.is-bezier { background: #e0a15a; }
+
+/* ── 属性面板：连续时间与关键帧计数 ── */
+
+.prop-time {
+    font-variant-numeric: tabular-nums; color: var(--ink-dim);
+}
+
+.prop-kf-count {
+    margin-left: 6px; color: var(--accent);
+    font-size: 10.5px;
+}
+
+/* ── 画布叠加层（canvas.mjs 已内联关键几何，这里仅兜底） ── */
+
+.cv-gizmo {
+    position: absolute; inset: 0;
+    pointer-events: none; z-index: 3;
+}
+
+/* ── 跨帧保留（hold）与 linked cel 的状态标识 ───────────────────────── */
+
+.lyr-row.is-hold .lyr-sub {
+    color: var(--ink-faint); font-style: italic;
+}
+
+.lyr-row.is-hold .lyr-thumb { opacity: 0.55; }
+
+.lyr-row.is-linked .lyr-sub { color: var(--accent); }
+
+.lyr-row.is-linked .lyr-name::after {
+    content: '⛓'; margin-left: 4px;
+    font-size: 9px; color: var(--accent);
+    vertical-align: 1px;
+}
+
+/* ── 元素效果器面板 ─────────────────────────────────────────────── */
+
+.fx-list {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 4px 0;
+}
+
+/* 效果器卡片：面板内的列表项，直角；圆角只属于浮层与控件 */
+.fx-item {
+    border: 1px solid var(--line); border-radius: var(--r-0);
+    background: var(--panel-2); padding: 5px 6px;
+}
+
+.fx-head {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 4px;
+}
+
+.fx-name {
+    flex: 1 1 auto; font-size: 11px; color: var(--ink); min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+}
+
+.fx-del {
+    flex: 0 0 auto; width: var(--h-btn); height: var(--h-btn);
+    padding: 0; line-height: 1; border: 1px solid var(--line-2); border-radius: var(--r-1);
+    background: var(--surface); color: var(--ink-dim);
+    font-size: 12px; cursor: pointer;
+}
+
+.fx-del:hover {
+    color: var(--danger); border-color: var(--danger);
+}
+
+.fx-param {
+    display: flex; align-items: center; gap: 6px; height: var(--h-btn);
+}
+
+.fx-param > label {
+    flex: 0 0 52px; font-size: 10px; color: var(--ink-dim);
+    text-align: right; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+}
+
+.fx-param > input[type='range'] {
+    flex: 1 1 auto; min-width: 0; height: 14px;
+}
+
+.fx-param > input[type='color'] {
+    flex: 0 0 34px; width: 34px; height: 16px;
+    padding: 0; border: 1px solid var(--line-2); border-radius: var(--r-1);
+    background: var(--surface);
+}
+
+.fx-num {
+    flex: 0 0 42px; font-size: 10px; color: var(--ink-faint);
+    text-align: right; font-variant-numeric: tabular-nums;
+}
+
+.fx-add {
+    display: flex; gap: 4px; flex-wrap: wrap;
+    padding-top: 2px;
+}
+
+.fx-add > button {
+    padding: 0 8px; border-color: var(--line-2);
+    background: var(--surface); color: var(--ink);
+    cursor: pointer;
+}
+
+.fx-add > button:hover {
+    border-color: var(--accent); color: var(--accent);
+}
+
+.fx-empty {
+    font-size: 11px; color: var(--ink-faint); padding: 2px 0 4px;
+}
+
+/* ─────────────────────────── 连续时间轴（v3） ───────────────────────────
+ * 几何（left/width/height/top）全部由 timeline.mjs 内联写入，这里只补视觉。
+ * 绝不声明的属性：left、top、width、height、margin、transform —— 会和帧块几何打架。
+ */
+
+.tline-ruler {
+    position: relative; flex: 0 0 auto; overflow: hidden;
+    background: var(--bg-2); border-bottom: 1px solid var(--line);
+    user-select: none;
+}
+
+.tline-tick {
+    position: absolute; bottom: 0; width: 1px;
+    background: var(--line-2); pointer-events: none;
+}
+
+.tline-tick.is-major { background: var(--ink-faint); }
+
+.tline-tick-label {
+    position: absolute; font-size: 9px; line-height: 1; color: var(--ink-faint);
+    font-variant-numeric: tabular-nums; pointer-events: none;
+}
+
+.tline-playhead {
+    background: var(--accent); pointer-events: none; z-index: 4;
+    box-shadow: 0 0 4px rgba(74, 125, 255, 0.55);
+}
+
+.tline-playhead.is-ruler::after {
+    content: ''; position: absolute; left: -3px; bottom: 0; width: 0; height: 0;
+    border-left: 3.5px solid transparent; border-right: 3.5px solid transparent;
+    border-top: 5px solid var(--accent);
+}
+
+/* ── 轨道区 (.tline-lane) ────────────────────────────────────────
+ * 一条横向细线把画格点与关键帧串在同一条时间轴上。
+ */
+
+.tline-lane { cursor: crosshair; }
+
+.tline-lane::before {
+    content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 1px;
+    background: var(--line); pointer-events: none;
+}
+
+/* ── 段帧率条 (.tline-fpsseg) ────────────────────────────────────
+ * 每段一个，宽度按秒比例由 JS 内联写入；双击内联 input 改 fps。
+ */
+
+.tline-fpsseg {
+    box-sizing: border-box; overflow: hidden;
+    white-space: nowrap; text-overflow: ellipsis; border-right: 1px solid var(--line);
+    background: var(--panel-2); color: var(--ink-faint);
+    cursor: pointer; user-select: none; font-variant-numeric: tabular-nums;
+}
+
+.tline-fpsseg:hover {
+    background: var(--surface); color: var(--ink-dim);
+}
+
+.tline-fpsseg.is-cur {
+    background: rgba(74, 125, 255, 0.2); color: var(--ink);
+}
+
+/* ── 新挂件 ───────────────────────────────────────────────────── */
+
+.tline-kf.is-cur { box-shadow: 0 0 0 1px var(--accent); }
+
+.tline-tools { gap: 2px; }
+
+.tline-zoom {
+    font-size: 11px; color: var(--ink-dim);
+    font-variant-numeric: tabular-nums; padding: 0 3px;
+}
+
+.tline-total {
+    color: var(--ink-faint); font-variant-numeric: tabular-nums;
+}
+
+/* ── 图例 (.tline-legend)：画格 / 关键帧是两种东西 ─────────────────
+ * 按钮刻意不带 .tline-btn：工具条的 act 列表被测试逐项钉死。
+ * 卡片挂在 body 上（不进 .tline 骨架），并且 pointer-events:none ——
+ * 它只是说明文字，绝不能挡住时间轴上的操作。
+ */
+
+.tline-legend {
+    padding: 0 6px;
+    font-size: 11px;
+    line-height: 1;
+    color: var(--ink-dim);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: var(--r-1);
+    cursor: pointer;
+}
+
+.tline-legend:hover {
+    color: var(--ink); background: var(--surface); border-color: var(--line-2);
+}
+
+.tline-legend.is-on {
+    color: var(--ink); background: rgba(74, 125, 255, 0.16); border-color: var(--accent);
+}
+
+.tline-legend-card {
+    padding: 6px 8px;
+    background: var(--panel-2);
+}
+
+.tline-legend-row {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    font-size: 11px;
+    line-height: 15px;
+    color: var(--ink-dim);
+}
+
+/* 记号与名称不许被压成竖排（弹性尺寸不属于几何，允许写在 CSS 里） */
+.tline-legend-mark { flex: 0 0 auto; font-size: 10px; line-height: 1; }
+.tline-legend-mark.is-cel { color: var(--ok); }
+.tline-legend-mark.is-kf { color: var(--accent); }
+
+.tline-legend-name { flex: 0 0 auto; white-space: nowrap; color: var(--ink); font-weight: 600; }
+
+.tline-legend-text { flex: 1 1 auto; min-width: 0; color: var(--ink-dim); }
+
+/* ─────────────────────────── 曲线编辑器（Graph Editor） ───────────────────────────
+ * 画布由 curve.mjs 全权绘制（canvas 2D），这里只管外壳、chip 与浮层。
+ */
+
+.curve {
+    display: flex; flex-direction: column; min-height: 0; height: 100%;
+    position: relative;              /* 通道面板绝对定位，压在绘图区上不占高度 */
+    background: var(--bg);
+}
+
+/* 工具条只留一行：通道入口 + 6 个缓动图标 + 一句状态。
+ * 原来这一行里塞了 8 个标量 chip、最多 32 个网格顶点 chip、6 个文字按钮和一段 hint，
+ * 558px 宽根本放不下，溢出部分被 overflow:hidden 直接裁掉（等于看不见的按钮）。 */
+.curve-bar {
+    display: flex; align-items: center; gap: 4px; flex: 0 0 auto;
+    height: var(--h-bar); padding: 0 4px; background: var(--bg-2);
+    border-bottom: 1px solid var(--line); overflow: hidden;
+}
+
+/* 通道入口：颜色跟着当前通道走，所以一眼能认出在编辑哪条线 */
+.curve-ch-btn {
+    display: inline-flex; align-items: center; gap: 3px;
+    height: var(--h-btn); padding: 0 5px; flex: 0 0 auto;
+    font-size: 10px; line-height: 1; color: #fff; cursor: pointer;
+    border: 1px solid var(--ch, var(--accent)); border-radius: var(--r-1);
+    background: color-mix(in srgb, var(--ch, var(--accent)) 26%, var(--panel-2));
+    font-variant-numeric: tabular-nums;
+}
+
+.curve-ch-btn:hover { border-color: var(--ink-dim); }
+
+.curve-ch-btn.is-on {
+    background: color-mix(in srgb, var(--ch, var(--accent)) 44%, var(--panel-2));
+}
+
+/* 网格有变形数据时的角点：通道收进面板后，靠它提示「顶点也有曲线」 */
+.curve-ch-btn.has-warp::after {
+    content: ''; width: 3px; height: 3px; border-radius: 50%;
+    background: var(--accent-2);
+}
+
+.curve-ch-label { min-width: 8px; text-align: center; }
+
+/* 通道面板：8 个标量 + 2×(cols+1)(rows+1) 个顶点通道，只能竖排。
+   浮层盒子（6px 圆角 / 描边 / 投影）来自共用基类；top 与 max-height 跟着 26px 工具条走 */
+.curve-pop {
+    position: absolute; z-index: 9; top: 27px; left: 4px; width: 178px;
+    max-height: calc(100% - 34px); overflow-y: auto;
+    padding: 4px;
+    scrollbar-width: thin;
+}
+
+.curve-pop[hidden] { display: none; }
+
+.curve-ch-group {
+    padding: 3px 5px 2px; font-size: 9px; color: var(--ink-faint);
+    letter-spacing: .4px;
+}
+
+.curve-ch-row {
+    display: flex; align-items: center; gap: 5px; width: 100%;
+    padding: 0 5px;
+    font-size: 10.5px;
+    cursor: pointer;
+}
+
+.curve-ch-row:hover { background: var(--surface); color: var(--ink); }
+
+/* 圆点：暗 = 没画，亮 = 参考线，带底 = 正在编辑 */
+.curve-ch-row::before {
+    content: ''; width: 5px; height: 5px; border-radius: 50%; flex: 0 0 auto;
+    background: var(--ch); opacity: .4;
+}
+
+.curve-ch-row.is-ref::before {
+    opacity: 1; box-shadow: 0 0 0 2px color-mix(in srgb, var(--ch) 30%, transparent);
+}
+
+.curve-ch-row.is-focus {
+    color: #fff; background: color-mix(in srgb, var(--ch) 22%, var(--surface));
+}
+
+.curve-ch-row.is-focus::before { opacity: 1; }
+
+.curve-ch-name {
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.curve-ch-val {
+    flex: 0 0 auto; font-size: 9.5px; color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+}
+
+.curve-ch-row.is-focus .curve-ch-val { color: var(--ink); }
+
+.curve-hint {
+    margin-left: auto; font-size: 10px; color: var(--ink-faint);
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; flex: 0 1 auto; min-width: 0;
+}
+
+.curve-plot-wrap {
+    position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden;
+    cursor: crosshair;
+}
+
+.curve-plot { display: block; }
+
+.curve-tip {
+    position: absolute; z-index: 5;
+    pointer-events: none; padding: 2px 6px;
+    font-size: 10.5px; line-height: 1.5; color: var(--ink); background: rgba(20, 21, 24, .94);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+
+.curve-menu {
+    position: absolute; z-index: 8; display: flex; flex-direction: column; min-width: 104px;
+    padding: 4px;
+}
+
+.curve-menu > button {
+    font-size: 11.5px; cursor: pointer;
+}
+
+.curve-menu > button:hover, .lyr-time:hover {
+    background: var(--surface); color: var(--ink);
+}
+
+.curve-menu > button.is-on { color: var(--accent); }
+
+.curve-menu > button.is-danger { color: var(--danger); }
+
+/* ── 画布上的对象浮动工具条 ── */
+.cv-objectbar {
+    position: absolute; z-index: 5; display: flex; align-items: center; gap: 2px;
+    padding: 2px 4px 2px 8px;
+    background: color-mix(in srgb, var(--panel) 92%, transparent);
+    backdrop-filter: blur(6px);
+    pointer-events: auto; white-space: nowrap;
+}
+
+.cv-objectbar[hidden] { display: none; }
+
+.cv-ob-name {
+    max-width: 110px; overflow: hidden;
+    text-overflow: ellipsis; margin-right: 4px;
+    color: var(--ink); font-size: 11px; font-weight: 600;
+}
+
+.cv-ob-btn {
+    padding: 0 7px; color: var(--ink-dim);
+    font-size: 11px;
+}
+
+.cv-ob-btn:hover {
+    background: var(--surface); border-color: var(--line-2);
+    color: var(--ink);
+}
+
+.cv-ob-btn.is-on {
+    background: var(--accent); border-color: var(--accent-2);
+    color: #fff;
+}
+
+.cv-ob-btn:disabled {
+    color: var(--ink-faint); opacity: 0.55;
+}
+
+.cv-ob-btn:disabled:hover {
+    background: transparent; border-color: transparent;
+    color: var(--ink-faint);
+}
+
+.cv-ob-menu {
+    position: absolute; z-index: 6; display: flex; flex-direction: column; min-width: 96px;
+    padding: 4px;
+    pointer-events: auto;
+}
+
+.cv-ob-menu[hidden] { display: none; }
+
+.cv-ob-mi:hover {
+    background: var(--accent); color: #fff;
+}
+
+/* 效果参数关键帧开关：◆ 表示该参数有轨道（拖滑杆会逐帧改） */
+.fx-key {
+    flex: 0 0 auto; width: var(--h-btn); height: var(--h-btn);
+    padding: 0; font-size: 11px; line-height: 1; color: var(--ink-faint); background: transparent;
+    border: 1px solid transparent; border-radius: var(--r-1);
+    cursor: pointer;
+}
+
+.fx-key:hover, .lyr-tp-reset:hover {
+    color: var(--ink); border-color: var(--line-2);
+}
+
+.fx-key.is-on {
+    color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.fx-param input[type='range'].has-track { accent-color: var(--accent); }
+
+.fx-param input[type='range'].has-track::-webkit-slider-runnable-track {
+    background: linear-gradient(90deg, var(--accent-2), var(--accent));
+}
+
+.curve-presets {
+    display: flex; align-items: center; gap: 2px; flex: 0 0 auto;
+}
+
+/* 缓动预设：图标化（线/入/出/双/冲），语义写在 title 里 —— 6 个文字按钮在 558px 的工具条上太贵 */
+.curve-preset {
+    height: var(--h-btn); min-width: var(--h-btn); padding: 0 4px;
+    font-size: 10px; line-height: 1; color: var(--ink-dim); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: var(--r-1);
+    cursor: pointer; white-space: nowrap;
+}
+
+.curve-preset:hover {
+    color: var(--ink); border-color: var(--accent);
+}
+
+/* ── 属性面板：时间轴分段按钮行 ─────────────────────────────── */
+
+.prop-inline.tb-btnrow {
+    display: flex; gap: 4px;
+    padding: 4px 0 2px;
+}
+
+.prop-inline.tb-btnrow .tb-btn {
+    flex: 1 1 0; min-width: 0;
+    font-size: 10.5px; white-space: nowrap;
+}
+
+/* ── v5：对象层级缩进 / 时间通道徽章 / 时间通道浮层 ───────────── */
+
+.lyr-row.is-child { box-shadow: inset 1px 0 0 var(--line-2); }
+
+.lyr-row.is-dragging { opacity: .45; }
+
+.lyr-row.drop-child {
+    outline: 1px solid var(--accent); outline-offset: -1px;
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.lyr-row.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+
+.lyr-time {
+    flex: 0 0 auto; width: var(--h-btn); height: var(--h-btn);
+    padding: 0; border: 0; border-radius: var(--r-1);
+    background: transparent; color: var(--ink-dim);
+    font-size: 11px; line-height: 1; text-align: center; cursor: pointer;
+}
+
+.lyr-time.is-off { opacity: .32; }
+
+.lyr-tp {
+    position: fixed; z-index: 90; width: 250px;
+    padding: 8px;
+    font-size: 11px; color: var(--ink);
+}
+
+.lyr-tp-title {
+    padding: 0 2px 6px; color: var(--ink-dim);
+    font-size: 10.5px; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.lyr-tp-row {
+    display: flex; align-items: center; gap: 6px; height: var(--h-btn);
+}
+
+.lyr-tp-label {
+    flex: 0 0 54px; color: var(--ink-dim);
+    font-size: 10.5px;
+}
+
+.lyr-tp-num {
+    flex: 1 1 auto; min-width: 0;
+    padding: 0 4px; background: var(--surface);
+    font-size: 10.5px;
+}
+
+.lyr-tp-modes {
+    display: flex; gap: 2px; flex: 1 1 auto;
+}
+
+.lyr-tp-mode {
+    flex: 1 1 0;
+    padding: 0; background: var(--surface);
+    font-size: 10px; cursor: pointer;
+}
+
+.lyr-tp-mode.is-on {
+    border-color: var(--accent); background: var(--accent); color: #fff;
+}
+
+.lyr-tp-hold {
+    flex: 1 1 auto;
+    background: var(--surface); color: var(--ink);
+    font-size: 10px; cursor: pointer;
+}
+
+.lyr-tp-hold.is-on {
+    border-color: var(--danger); color: var(--danger);
+}
+
+.lyr-tp-foot {
+    display: flex; gap: 4px;
+    padding-top: 6px;
+}
+
+.lyr-tp-reset {
+    flex: 1 1 0;
+    font-size: 10px; cursor: pointer;
+}
+
+/* v5：自动切线按钮（与五档缓动预设并列） */
+.curve-preset.is-auto {
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--ink);
+}
+
+.curve-preset.is-auto:hover {
+    background: color-mix(in srgb, var(--accent) 22%, var(--panel-2));
+}
+
+/* v5：时间轴对象名后的时间通道徽章 */
+.tline-tbadge {
+    margin-left: 4px; padding: 0 3px; height: 12px;
+    line-height: 12px; font-size: 9px; border-radius: var(--r-1);
+    color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent);
+    vertical-align: middle;
+}
+
+/* v5：属性面板「对象时间」只读摘要 */
+.prop-obj-time {
+    font-variant-numeric: tabular-nums; color: var(--accent);
+}
+
+/* 组时间（子樹）：一行两个小按钮 + 规模提示 */
+.prop-subtree {
+    gap: 4px;
+    margin-top: 2px;
+}
+
+.prop-subtree-btn {
+    padding: 0 6px;
+    font-size: 10px;
+    cursor: pointer;
+}
+
+.prop-subtree-btn:hover:not(:disabled) {
+    color: var(--ink);
+    border-color: var(--line-2);
+}
+
+.prop-subtree-btn.is-reset:hover:not(:disabled) {
+    color: var(--danger);
+    border-color: var(--danger);
+}
+
+.prop-subtree-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.prop-subtree-info {
+    font-size: 10px;
+    color: var(--ink-faint);
+}
+
+/* ── 时间轴：补齐「JS 在用、CSS 缺失」的 6 个选择器 ─────────────────────────
+   这组差异在拆分前后一模一样，属既有欠账：右键菜单原本没有任何样式（裸文本堆叠），
+   段帧率容器也没有定位上下文。这里给最小可用样式，几何仍以 JS 内联为准。 */
+.tline-menu {
+    position: fixed;
+    z-index: 90;
+    min-width: 136px;
+    padding: 4px;
+    background: var(--panel-2);
+}
+
+.tline-menu-item {
+    display: block;
+    width: 100%;
+    line-height: var(--h-btn);
+    color: var(--ink);
+    cursor: pointer;
+}
+
+.tline-menu-item:hover { background: var(--surface); }
+.tline-menu-item.is-danger { color: var(--danger); }
+
+.tline-fpslane { position: relative; }
+.tline-ruler-inner { position: relative; }
+.tline-pad { flex: 0 0 auto; pointer-events: none; }
+
+.tline-label-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ═══════════════ 偏好 prefs（设置模式第四块，见 app/editors/prop-prefs.mjs） ═══════════════ */
+
+/* 说明行：占满整行、小一号、压暗，免得和「可点控件」抢视线 */
+.prop-row.pref-note {
+    display: block; min-height: 0;
+    color: var(--ink-faint); font-size: 10.5px; line-height: 1.45;
+    white-space: normal;
+}
+
+/* 背景色板：只在选中那格露一点真色，其余保持按钮原本的样子 */
+button.prop-seg.pref-swatch.is-on::before {
+    content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 4px;
+    border-radius: var(--r-1); vertical-align: -1px;
+    background: var(--pref-swatch); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+/* 画布视口底色：棋盘格 / 深灰 / 纯白三档都由 --pref-cv-bg 喂给 .cv-host。
+   画板内部的透明棋盘是引擎逐像素画的（paint/engine.mjs），CSS 盖不住那一层。 */
+body.pref-bg .cv-host { background: var(--pref-cv-bg, var(--bg)); }
+
+/* 通道独立轨道的关键帧：空心菱形，与共用关键帧（实心蓝）区分。
+   曲线区单独给某通道打点时才会出现，时刻总是与共用键错开。 */
+.tline-kf.is-ch {
+    --ch: var(--accent);
+    background: transparent;
+    border: 1.5px solid var(--ch);
+    box-shadow: none;
+}
+
+.tline-kf.is-ch.is-sel {
+    background: color-mix(in srgb, var(--ch) 55%, transparent);
+}
+
+/* ── 通道独立轨道（curve 编辑器）──
+   ⤴ 角标用独立 span 而不是 ::after：has-warp 的圆点已经占用了 ::after。
+   默认 display:none，只有 is-solo 时才现身，所以共用关键帧的界面一模一样。 */
+.curve-solo {
+    display: none;
+    margin-left: 3px;
+    font-size: 10px;
+    line-height: 1;
+    color: var(--accent);
+    opacity: .85;
+}
+
+.curve-ch-btn.is-solo .curve-solo,
+.curve-ch-row.is-solo .curve-solo { display: inline-block; }
+
+/* 虚线内圈 = 这条通道有自己的轨道；与 is-on 的实底高亮叠在一起也认得出 */
+.curve-ch-btn.is-solo {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.curve-ch-row.is-solo .curve-ch-name { color: var(--accent); }
+
+/* 「回到共用」是撤销独立的动作，与上面三项缓动之间拉一条分线 */
+.curve-menu > button.is-solo-back {
+    margin-top: 4px;
+    color: var(--accent);
+    box-shadow: inset 0 1px 0 var(--line-2);
+}
+
+/* ═══════════════ 画板（.bd-*）：对象的出生地 ═══════════════ */
+
+/* 根只负责「工具条 / 舞台 / 提示」三段；画布尺寸由 JS 按舞台算，CSS 不缩放它 */
+.bd {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    box-sizing: border-box;
+    color: var(--ink);
+}
+
+.bd-bar {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+}
+
+.bd-tools {
+    display: flex;
+    gap: 2px;
+}
+
+.bd-tool {
+    padding: 0 9px;
+    background: var(--surface);
+    cursor: pointer;
+}
+
+.bd-tool:hover {
+    border-color: var(--line-2);
+    color: var(--ink);
+}
+
+.bd-tool.is-on {
+    border-color: var(--accent);
+    background: var(--accent-2);
+    color: var(--ink);
+}
+
+/* 笔尖：滑条窄一点，数字用等宽数字免得 8 → 9 时整行抖 */
+.bd-size {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--ink-dim);
+    font-size: 11px;
+}
+
+.bd-size input[type="range"] {
+    width: 92px;
+    height: 16px;
+    margin: 0;
+}
+
+.bd-size-num {
+    min-width: 16px;
+    text-align: right;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+}
+
+.bd-sizeinfo {
+    margin-left: auto;
+    color: var(--ink-faint);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.bd-btn {
+    padding: 0 10px;
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.bd-btn:hover {
+    border-color: var(--line-2);
+    background: var(--panel);
+}
+
+/* 「提交」是这块面板的主出口，视觉上要压过其它按钮 */
+.bd-btn[data-act="submit"] {
+    border-color: var(--accent);
+    background: var(--accent-2);
+}
+
+.bd-btn[data-act="submit"]:hover {
+    background: var(--accent);
+}
+
+/* 舞台：棋盘格底纹说明画板是透明的，画布按 JS 算出的 CSS 尺寸居中 */
+.bd-stage {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+    padding: 10px;
+    background-color: var(--bg);
+    background-image:
+        linear-gradient(45deg, rgba(255, 255, 255, .025) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, .025) 75%),
+        linear-gradient(45deg, rgba(255, 255, 255, .025) 25%, transparent 25%, transparent 75%, rgba(255, 255, 255, .025) 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 8px 8px;
+}
+
+.bd-canvas {
+    display: block;
+    touch-action: none;
+    cursor: crosshair;
+    box-shadow: 0 0 0 1px var(--line-2);
+}
+
+.bd-hint {
+    flex: 0 0 auto;
+    padding: 3px 8px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-faint);
+    font-size: 11px;
+}
+
+/* 改尺寸浮层：盖住整块面板，避免误点画布时又落一笔 */
+.bd-ask {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(9, 10, 12, .62);
+    z-index: 5;
+}
+
+.bd-ask[hidden] {
+    display: none;
+}
+
+.bd-ask-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 236px;
+    padding: 12px;
+}
+
+.bd-ask-title {
+    color: var(--ink);
+    font-size: 12px;
+}
+
+.bd-ask-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.bd-ask-row input[type="number"] {
+    width: 72px;
+}
+
+.bd-ask-x {
+    color: var(--ink-faint);
+}
+
+.bd-ask-note {
+    max-width: 280px;
+    color: var(--ink-faint);
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+.bd-ask-btns {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+/* ── 时间轴工具条 v8：五组（播放 / 读数 / 画格 / 关键帧 / 缩放）─────
+ * 播放控制从顶栏搬到这里：位置即语义（AE / Aseprite / Animate 的 transport
+ * 都在时间轴侧）。分组只靠 1px 竖线切分，不做胶囊、不做阴影；
+ * 圆角沿用全站的 2–3px，避免「到处都是圆角」的廉价感。
+ */
+
+.tline-tools { gap: 0; }
+
+.tline-grp {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 7px;
+    border-left: 1px solid var(--line);
+}
+
+.tline-grp:first-child {
+    padding-left: 1px;
+    border-left: 0;
+}
+
+/* 时间读数：旧版是一行只读文字（改时长得去属性面板翻），现在两个数字框
+ * 既能看也能直接改——左边是播放头，右边是总时长。
+ * 加 input. 前缀是为了压过 tokens.css 里 input[type="text"] 的同特异度声明。 */
+input.tline-now,
+input.tline-total {
+    flex: 0 0 auto;
+    width: 48px;
+    padding: 0 4px;
+    border-color: transparent;
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 11px;
+    line-height: 18px;
+    text-align: right;
+}
+
+.tline-now:hover,
+.tline-total:hover { border-color: var(--line-2); }
+
+.tline-now:focus,
+.tline-total:focus {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--panel-2);
+}
+
+.tline-total { color: var(--ink-dim); }
+
+.tline-sep {
+    padding: 0 1px;
+    color: var(--ink-faint);
+    font-size: 11px;
+}
+
+.tline-unit {
+    padding-left: 3px;
+    color: var(--ink-faint);
+    font-size: 10px;
+}
+
+/* 右端时长手柄：贴在刻度尺末端，拖动即可改总时长（松手才提交，一步撤销） */
+.tline-durhandle {
+    background: var(--accent);
+    border-radius: var(--r-0);
+    opacity: 0.35;
+}
+
+.tline-durhandle:hover { opacity: 0.9; }
+
+/* 图例是说明入口，靠右站 */
+.tline-tools > .tline-legend { margin-left: auto; }
+
+/* 拖动中的关键帧：虚线描边 + 半透明，明确「还没落盘」 */
+.tline-kf.is-drag {
+    outline: 1px dashed var(--accent);
+    outline-offset: 1px;
+    opacity: 0.75;
+    cursor: grabbing;
+}
+
+/* ═══════════════ v9：对象面板的画格库 ═══════════════
+   对象栈（.lyr-list）与画格库（.lyr-cels）是同一个面板的上下两截：
+   上面「有哪些对象」，下面「当前对象有哪些画格」。画格是可以复用的图，
+   时间轴上的只是「某段时刻显示哪张」的曝光；所以这里一行 = 一张画格，
+   行的副标题写它被几个时刻用到（×M 处），当前时刻在用的那张加 .is-cur。
+   两截之间只用一条边线分开，不加圆角（--r-0）。 */
+
+.lyr-cels {
+    flex: 0 0 auto;
+    display: flex; flex-direction: column;
+    min-height: 0;
+    max-height: 46%;
+    border-top: 1px solid var(--line);
+    background: var(--panel);
+}
+
+.lyr-cels-head {
+    flex: 0 0 var(--h-head); height: var(--h-head);
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 6px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--line);
+    font-size: 11px; color: var(--ink-dim);
+    white-space: nowrap; overflow: hidden;
+}
+
+.lyr-cels-title { color: var(--ink-dim); }
+
+.lyr-cels-count {
+    min-width: 14px; text-align: center;
+    font-variant-numeric: tabular-nums; color: var(--ink-faint);
+}
+
+.lyr-cels-acts { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+
+.lyr-cels-btn {
+    flex: 0 0 auto; height: var(--h-btn); min-width: var(--h-btn); padding: 0 4px;
+    border: 1px solid transparent; border-radius: var(--r-1);
+    background: transparent; color: var(--ink-dim);
+    font-size: 11px; line-height: 1; cursor: pointer;
+}
+.lyr-cels-btn:hover { background: var(--surface); color: var(--ink); }
+.lyr-cels-btn:active { background: var(--line-2); }
+
+.lyr-cel-list { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; }
+
+.lyr-cel {
+    display: flex; align-items: center; gap: 6px;
+    height: var(--h-row); padding: 0 6px;
+    border-bottom: 1px solid var(--line);
+    cursor: pointer; -webkit-user-select: none; user-select: none;
+}
+.lyr-cel:hover { background: var(--panel-2); }
+.lyr-cel.is-cur { background: var(--surface); box-shadow: inset 2px 0 0 var(--accent); }
+
+/* 画格缩略图：canvas 位图就是 34×22（layers.mjs 的 CEL_THUMB_W/H），与 CSS 尺寸 1:1，不缩放 */
+.lyr-cel-thumb {
+    flex: 0 0 34px; width: 34px; height: 22px;
+    border: 1px solid var(--line); border-radius: var(--r-1); background: var(--bg);
+    image-rendering: pixelated;
+}
+
+.lyr-cel-meta { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; }
+.lyr-cel-at { font-size: 11px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.lyr-cel-sub { font-size: 10px; color: var(--ink-faint); }
+.lyr-cel.is-cur .lyr-cel-sub { color: var(--ink-dim); }
+
+/* ═══════════════ v8：时间轴多选与框选 ═══════════════
+   多选里的主键用原 .is-sel（白心+光晕），次级键用 .is-sel2（半透蓝），
+   一眼能看出「整组拖」会以谁为锚。框选矩形只在这里给颜色，
+   几何（left/top/width/height）由 JS 内联写，避免和滚动补偿打架。 */
+
+.tline-kf.is-sel2 {
+    background: color-mix(in srgb, var(--accent) 55%, var(--bg));
+    border-color: rgba(255, 255, 255, 0.7);
+    box-shadow: none;
+}
+
+.tline-kf.is-sel:not(.is-sel2) {
+    border-color: #fff; background: #fff;
+    box-shadow: 0 0 0 2px rgba(74, 125, 255, 0.55);
+}
+
+.tline-marquee {
+    --tline-marquee-line: rgba(74, 125, 255, 0.9);
+    --tline-marquee-fill: rgba(74, 125, 255, 0.14);
+    border: 1px solid var(--tline-marquee-line);
+    background: var(--tline-marquee-fill);
+    border-radius: var(--r-0);
+}
+
+/* 属性面板的文本值（名字等）：与数值输入同一外观，但左对齐撑满 */
+.prop-text, .prop-num[type="text"] { width: auto; flex: 1 1 auto; text-align: left; }
+
+/* 拖放导入：文件拖到窗口上时给一层「松开即可」的提示（只在拖拽期间存在） */
+body.is-dropping #ws-host::after {
+    content: '松开以导入 PSD / 图片';
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    letter-spacing: 0.4px;
+    color: var(--ink);
+    background: rgba(20, 21, 24, 0.72);
+    border: 2px dashed var(--accent);
+    border-radius: var(--r-2);
+    z-index: 40;
+    pointer-events: none;
+}
+
+/* ── v8：对象树的折叠箭头（只影响面板显示） ───────────────────────── */
+.lyr-row > .lyr-caret {
+    flex: 0 0 12px;
+    width: 12px;
+    height: 18px;
+    margin-right: 1px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink-faint);
+    font-size: 9px;
+    line-height: 18px;
+    cursor: pointer;
+}
+.lyr-row > .lyr-caret:hover {
+    color: var(--ink);
+}
+
+/* ── v9：画格库的行不参与拖动重排（时刻由曝光决定，交换时刻没有意义） ── */
+
+/* ═══════════════ v8：快捷键一览浮层（? 打开） ═══════════════ */
+.keys-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 130;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(8, 9, 11, 0.58);
+}
+.keys-overlay[hidden] { display: none; }
+
+.keys-box {
+    display: flex;
+    flex-direction: column;
+    width: 620px;
+    max-width: calc(100vw - 80px);
+    max-height: 72vh;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-pop);
+    background: var(--panel);
+    box-shadow: var(--shadow-pop);
+    outline: none;
+}
+.keys-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: var(--h-bar);
+    padding: 0 4px 0 10px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+}
+.keys-title { flex: 1 1 auto; font-size: 11px; color: var(--ink-dim); letter-spacing: 0.3px; }
+.keys-close {
+    flex: 0 0 auto;
+    width: var(--h-btn);
+    height: var(--h-btn);
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    background: transparent;
+    color: var(--ink-dim);
+    font-size: 11px;
+    cursor: pointer;
+}
+.keys-close:hover { background: var(--surface); color: var(--ink); }
+
+.keys-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px 12px 12px;
+    columns: 2;
+    column-gap: 22px;
+}
+.keys-group { break-inside: avoid; margin-bottom: 10px; }
+.keys-group-title {
+    margin: 2px 0 4px;
+    font-size: 10px;
+    color: var(--ink-faint);
+    letter-spacing: 0.4px;
+}
+.keys-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: var(--h-field);
+}
+.keys-kbd {
+    flex: 0 0 104px;
+    overflow: hidden;
+    padding: 1px 5px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-1);
+    background: var(--bg-2);
+    color: var(--ink);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.keys-label { flex: 1 1 auto; min-width: 0; font-size: 11px; color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.keys-foot {
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    border-top: 1px solid var(--line);
+    color: var(--ink-faint);
+    font-size: 10px;
+}
+
+/* ═══════════════ v8：区域折叠（双击标题栏） ═══════════════
+折叠后只剩标题栏（layout.mjs 的 COLLAPSED_AREA = 24px），
+标题栏压暗一档表示「这块内容被收起了」，不再给圆角。 */
+.area.is-collapsed > .area-head {
+    background: var(--bg-2);
+    border-bottom-color: transparent;
+}
+.area.is-collapsed > .area-head .area-type { color: var(--ink-faint); }
+
+/* 折叠态的两种排版：竖条（父容器是 row）与扁条（父容器是 col）。
+横排时只留标题栏；竖排时标题栏竖过来，把编辑器名字用 writing-mode 贴在窄条上。 */
+.area.is-collapsed-h > .area-head { gap: 4px; }
+.area.is-collapsed-h > .area-head .area-gap,
+.area.is-collapsed-h > .area-head .area-btn[data-act^="split"],
+.area.is-collapsed-v > .area-head .area-gap,
+.area.is-collapsed-v > .area-head .area-btn[data-act^="split"] { display: none; }
+
+.area.is-collapsed-v > .area-head {
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 3px 0 6px;
+    overflow: hidden;
+}
+.area.is-collapsed-v > .area-head .area-grip { display: none; }
+.area.is-collapsed-v > .area-head .area-type { display: none; }
+.area.is-collapsed-v > .area-head::after {
+    content: attr(data-title);
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    line-height: 1;
+    color: var(--ink-faint);
+    margin-top: 2px;
+    max-height: 100%;
+    overflow: hidden;
+}
+
+/* v8：画格属于关键帧 —— 带画格的键在菱形里点一个实心方块（空白键点空心方块），
+   一眼能看出「这一帧换了画格」和「只是改了位置/缩放」。 */
+.tline-kf.has-drawing::after,
+.tline-kf.is-blank::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 3px;
+    height: 3px;
+    margin: -1.5px 0 0 -1.5px;
+    background: var(--bg);
+    pointer-events: none;
+}
+.tline-kf.is-blank::after {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--bg);
+}
+
+/* v8 画板（独立纹理编辑器）覆写 —— 旧 .bd-* 规则是「草稿板」时代的，
+   选择器用的是单类，这里统一加到 .bd 前缀下，避免被旧规则压住。 */
+.bd { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--panel); }
+.bd .bd-bar {
+    flex: 0 0 var(--h-bar); height: var(--h-bar);
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 6px; box-sizing: border-box;
+    background: var(--panel-2); border-bottom: 1px solid var(--line);
+}
+.bd .bd-brushes { display: flex; align-items: center; gap: 2px; }
+.bd .bd-brush {
+    height: var(--h-btn); padding: 0 7px; box-sizing: border-box;
+    border: 1px solid transparent; border-radius: var(--r-1);
+    background: transparent; color: var(--ink-dim);
+    font-size: 11px; line-height: 1; cursor: pointer;
+}
+.bd .bd-brush:hover { background: var(--surface); color: var(--ink); }
+.bd .bd-brush.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.bd .bd-size { display: flex; align-items: center; gap: 5px; color: var(--ink-faint); font-size: 10px; }
+.bd .bd-size input[type="range"] { width: 74px; height: var(--h-btn); }
+.bd .bd-size-num { min-width: 22px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-dim); }
+.bd .bd-acts { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.bd .bd-act {
+    height: var(--h-btn); min-width: var(--h-btn); padding: 0 6px; box-sizing: border-box;
+    border: 1px solid var(--line); border-radius: var(--r-1);
+    background: var(--surface); color: var(--ink-dim);
+    font-size: 11px; line-height: 1; cursor: pointer;
+}
+.bd .bd-act:hover { background: var(--line-2); color: var(--ink); }
+.bd .bd-stage { position: relative; flex: 1 1 auto; min-height: 0; }
+.bd .bd-canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; }
+.bd .bd-hint {
+    flex: 0 0 20px; height: 20px; line-height: 20px; padding: 0 8px;
+    font-size: 10px; color: var(--ink-faint); background: var(--panel-2);
+    border-top: 1px solid var(--line);
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+
+/* ═══════════════ v8 UI 统一：绘图区 / 编排区的尺寸令牌 ═══════════════
+   四把尺子各归各位：条 = --h-bar(26) / 按钮 = --h-btn(22) / 输入 = --h-field(20) / 行 = --h-row(28)。
+   本节只在文件末尾追加，旧规则一条不动；遇到旧规则更具体，就提高本节选择器的具体度压回来（不用 !important）。
+   适用面：对象面板（.lyr）、画板（.bd）、时间轴（.tline）、曲线（.curve）、属性（.prop）。 */
+
+/* ── 1. 条：面板顶条一律 26px，且必须是 border-box（多一条 1px 分隔线也不会顶高） ── */
+.lyr > .lyr-bar,
+.bd > .bd-bar,
+.tline > .tline-bar,
+.curve > .curve-bar,
+.prop > .prop-title {
+    box-sizing: border-box;
+    flex: 0 0 var(--h-bar);
+    height: var(--h-bar);
+}
+
+/* ── 2. 按钮：条内按钮一律 22px（⋯ 与 ＋ 同高；时间轴 13 个 act 一个不动） ── */
+.lyr-bar .lyr-btn,
+.tline-bar .tline-btn,
+.curve-bar .curve-ch-btn,
+.bd-bar .bd-brush,
+.bd-bar .bd-act {
+    box-sizing: border-box;
+    height: var(--h-btn);
+    line-height: 1;
+}
+
+/* ── 3. 输入：条内的数字框一律 20px（时间读数、调色 hex、不透明度滑杆） ── */
+.tline-bar input.tline-now,
+.tline-bar input.tline-total,
+.pal-top input.pal-hex,
+.lyr-alpha input[type="range"] {
+    box-sizing: border-box;
+    height: var(--h-field);
+    line-height: var(--h-field);
+}
+
+/* ── 4. 行：对象行与时间轴泳道同高 28px（时间轴的内联高度来自 timeline-geo.mjs 的 ROW_H=28） ── */
+.lyr .lyr-row,
+.tline .tline-row {
+    height: var(--h-row);
+}
+
+/* ── 5. 对象面板的 ⋯ 菜单：条上只留 ＋ 与 ⋯，其余 5 个动作在这里 ── */
+.lyr-bar .lyr-more {
+    margin-left: auto;          /* 主操作在左，溢出菜单贴右 */
+    font-size: 13px;            /* 11px 下 ⋯ 三个点会糊成一团 */
+    letter-spacing: 0.5px;
+}
+.lyr-bar .lyr-more[aria-expanded="true"] {
+    background: var(--surface);
+    border-color: var(--line);
+    color: var(--ink);
+}
+
+.lyr-menu {
+    position: fixed;
+    z-index: 92;                /* 压过时间通道浮层 .lyr-tp(90) */
+    min-width: 118px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 3px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-pop);
+    background: var(--panel);
+    box-shadow: var(--shadow-pop);
+}
+.lyr-menu[hidden] { display: none; }
+
+.lyr-menu .lyr-menu-item {
+    box-sizing: border-box;
+    height: var(--h-btn);
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--r-1);
+    background: transparent;
+    color: var(--ink-dim);
+    font-size: 11px;
+    line-height: 1;
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.lyr-menu .lyr-menu-item:hover {
+    background: var(--surface);
+    color: var(--ink);
+}
+.lyr-menu .lyr-menu-item.is-danger:hover {
+    background: color-mix(in srgb, var(--danger) 16%, transparent);
+    color: var(--danger);
+}
+.lyr-menu .lyr-menu-item[aria-disabled="true"] {
+    color: var(--ink-faint);
+}
+
+/* ── 6. 时间轴工具条：13 个按钮的数量与顺序不动，只切视觉段 ──
+   transport(5) / 时间读数 / 编辑(6) / 缩放(2)：段首才画分隔线与 8px 间距，段内不切。
+   段首标记由 timeline-paint.mjs 的 grp(name, zone) 写在 dataset.zoneStart 上。 */
+.tline-tools > .tline-grp {
+    box-sizing: border-box;
+    padding: 0 4px;
+    border-left: 0;
+}
+.tline-tools > .tline-grp[data-zone-start] {
+    margin-left: 8px;
+    padding-left: 8px;
+    border-left: 1px solid var(--line);
+}
+

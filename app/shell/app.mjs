@@ -1,0 +1,1247 @@
+/**
+ * MotionStudio —— 外壳入口：编排 / ctx / 调试门面 / 快捷键 / 启动
+ *
+ * 拆分后的分工（全部在 app/shell/ 下，按「谁拥有状态」划边界）：
+ *   doc-state.mjs   唯一可变状态（state / engine / shell）+ 文档与播放时钟 + 面板刷新
+ *   view-host.mjs   区域树、几何排布、编辑器挂载 / 销毁、分隔条拖拽
+ *   commands.mjs    对象 / 关键帧 / 效果器的写命令
+ *   project-io.mjs  导出（PNG / 精灵图）、项目库、.json 存档
+ *   app.mjs         本文件：把上面四块拼起来 —— ctx（编辑器的外壳契约）、
+ *                   window.motionStudio 调试门面、全局快捷键、DOM 骨架与启动
+ *
+ * 时间模型（契约 v6）：帧对象已删除，内容单位是「画格」——`obj.cels = [{ at, image }]`，
+ * at 是秒，画格从 at 起一直生效到下一个画格。画格命令（addCelAt / removeCelAt /
+ * clearCelAt / moveCel / celTimesOf / goPrevCel / goNextCel）全部定义在本文件，
+ * 时间轴与画布只通过 ctx 调它们；落笔入口是 ctx.ensureCelImage(layerId, w, h)。
+ *
+ * 设计要点（契约 §9）：
+ * 1. 每个工作区（animate / draw / free）拥有**独立的一棵区域树 + 一套 DOM**。
+ *    所有区域都是 #ws-host 的直接绝对定位子对象；切工作区只切 display，不销毁编辑器。
+ * 2. 布局几何完全由 layout.mjs 的 computeRects 求出来，外壳只写 left/top/width/height，
+ *    拖分隔条期间**绝不重建 DOM**（画布引擎的 canvas 不搬家，撤销栈不清空）。
+ * 3. 编辑器实例按区域缓存，同一个区域换编辑器才 destroy + 重挂；
+ *    画布是本工作区的单实例，区域搬家时调用 editors/canvas.mjs 的 placeCanvas 搬宿主。
+ * 4. 文档不可变：所有修改走 setDoc(updater)，由 doc-state 统一广播、重绘、刷新面板。
+ *
+ * 依赖方向：本文件是唯一根；view-host / project-io 反向 import 只为运行期拿 ctx，初始化期不会读到未初始化的值。
+
+ */
+import {
+    celTimes,
+    createDocument as createTimeDocument,
+    ensureCelAt,
+    hasCelAt,
+    swapCelAt,
+    imageAt,
+    moveCel as moveCelDoc,
+    objectById,
+    objectsOf,
+    patchObject,
+    removeCelAt as removeCelAtDoc,
+    reorderObject,
+    setObjectSize as setObjectSizeDoc,
+    drawingsOf,
+    addDrawing,
+    objectSize,
+    placeDrawing as placeDrawingDoc,
+    makeUnique as makeUniqueDoc,
+    removeDrawing as removeDrawingDoc,
+    removeObject as removeObjectDoc,
+    drawingIdAt,
+    totalSeconds,
+} from '../core/doc-model.mjs';
+import { createTrack, matrixOf, stateAt } from '../core/transform.mjs';
+import {
+    describeTime,
+    isIdentityTime,
+    localTimeOf,
+    normalizeTime,
+    setParent as setParentDoc,
+    timeDepth,
+    collectSubtree,
+    subtreeSize,
+} from '../core/timegraph.mjs';
+import { createSurface, cloneSurface } from '../paint/surface.mjs';
+import { ONION_DEFAULTS } from '../paint/onion.mjs';
+import {
+    normalizeSegments as normSegments,
+    hasTimebase,
+    fpsAt as fpsAtTime,
+    segmentIndexAt,
+    segmentRange,
+    addSegment as addTimeSegment,
+    removeSegment as removeTimeSegment,
+    setSegmentFps as setTimeSegmentFps,
+    setSegmentAt as setTimeSegmentAt,
+    resetTimebase as resetTimebaseDoc,
+    sampleTimes,
+} from '../core/timebase.mjs';
+import { hitTest, elementQuad, elementLattice } from '../core/element.mjs';
+import { createEvaluator, matrixObject } from '../core/evaluator.mjs';
+import { resizeLattice, latticeIsZero } from '../core/lattice.mjs';
+import { EFFECT_DEFS, defaultEffect, normalizeEffect } from '../paint/effects.mjs';
+import { TOOLS } from '../paint/engine.mjs';
+import { editorIds } from './registry.mjs';
+import { timeCtx } from './ctx-time.mjs';
+import { buildTopbar, buildStatusbar } from './chrome.mjs';
+import { createPalette } from './command-palette.mjs';
+import { createShortcutsOverlay, groupsFromCommands } from './shortcuts-overlay.mjs';
+import { loadLayout } from './persist.mjs';
+import * as canvasEditor from '../editors/canvas.mjs';
+import * as DS from './doc-state.mjs';
+
+import {
+    buildViews,
+    syncActiveTree,
+    setWorkspace,
+    resetLayout,
+    render,
+    syncCanvasToActive,
+    scheduleAttachToActive, setCtx as setViewHostCtx } from './view-host.mjs';
+import {
+    setEffectParam,
+    keyEffectParam,
+    clearEffectParam,
+    setLayerEffects,
+    writeKeyAt,
+} from './commands.mjs';
+
+import {
+    exportFrames,
+    exportSpritesheet,
+    project,
+    projectLabel,
+    currentProject,
+    saveProject,
+    importProjectFile,
+    loadProject,
+    newProject,
+    projectsModal,
+    openProjectsPanel,
+    onFileAct,
+    projectApi,
+    restoreLastProject, setCtx as setProjectIoCtx } from './project-io.mjs';
+
+// 顶层只拿 namespace。绑定推迟到 boot()：这台 Electron 上 doc-state 的求值时机
+// 不稳定，顶层解构会静默拿到 undefined（表现为整个 app 白屏）。
+let TOOL_KEYS, DEFAULT_W, DEFAULT_H, DEFAULT_FPS, state, shell, el, engine,
+    setDoc, subscribeDoc, setTime, setPlaying, scheduleRefresh, flash, hintText,
+    updateChrome, setTimeClamped, stepFrames, setDuration, fpsNow, goToKey;
+
+
+/* ─────────────────── 画格命令（纯时间模型，契约 v6） ─────────────────── */
+
+/**
+ * 帧对象已彻底删除：内容的唯一单位是「画格」——`obj.cels = [{ at, image }]`，
+ * at 是秒，画格从 at 起一直生效到下一个画格。下面这组是外壳唯一的画格写入口，
+ * 时间轴模块只认这四个名字：addCelAt / removeCelAt / clearCelAt / moveCel。
+ */
+
+/**
+ * 交换同一对象里两个画格的时刻（画格栈拖动重排用）。
+ * 时刻本身是内容的地址，所以「重排」= 两个 at 互换，位图各自跟着自己的格走。
+ */
+function swapCelTimes(objId, tA, tB) {
+    const doc = state.doc;
+    const id = celTargetId(objId);
+    if (!doc || id == null) return false;
+    const next = swapCelAt(doc, id, tA, tB);
+    if (next === doc) return false;
+    setDoc(() => next, { label: '交换画格' });
+    return true;
+}
+
+/** 把对象替换进文档（容器键不变：objects 优先，兼容还带 layers 的旧 doc）。 */
+function replaceObject(doc, objId, nextObj) {
+    if (Array.isArray(doc.objects)) {
+        return Object.assign({}, doc, { objects: doc.objects.map((o) => (o && o.id === objId ? nextObj : o)) });
+    }
+    if (Array.isArray(doc.layers)) {
+        return Object.assign({}, doc, { layers: doc.layers.map((o) => (o && o.id === objId ? nextObj : o)) });
+    }
+    return doc;
+}
+
+/** 目标对象 id：显式传入 > 当前选中 > 第一个对象。 */
+function celTargetId(objId) {
+    const doc = state.doc;
+    if (!doc) return null;
+    if (objId) return String(objId);
+    if (state.activeLayerId && objectById(doc, state.activeLayerId)) return state.activeLayerId;
+    const first = objectsOf(doc)[0];
+    return first ? first.id : null;
+}
+
+function celTimeArg(t) {
+    const v = Number(t);
+    if (Number.isFinite(v)) return Math.max(0, v);
+    return Math.max(0, Number(state.time) || 0);
+}
+
+/** 画布尺寸的空位图（新画格用）。 */
+/** 造一张指定尺寸的空位图（对象改尺寸时用）。 */
+function blankSurfaceOf(w, h) {
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(w));
+    cv.height = Math.max(1, Math.round(h));
+    return cv;
+}
+
+function blankSurface(doc) {
+    const w = Math.max(1, Math.round(Number(doc && doc.width) || 1));
+    const h = Math.max(1, Math.round(Number(doc && doc.height) || 1));
+    try {
+        return createSurface(w, h);
+    } catch (err) {
+        return null;
+    }
+}
+
+/** 该对象在时间 t 生效的位图（画布 / 图层面板预览用，只读）。 */
+function celImageOf(objId, t) {
+    const doc = state.doc;
+    const obj = doc ? objectById(doc, celTargetId(objId)) : null;
+    if (!obj) return null;
+    return imageAt(obj, t == null ? state.time : celTimeArg(t));
+}
+
+/**
+ * 在时间 t 建画格。
+ * 默认**继承**前一张画格的内容（拷一份独立位图）—— 这是动画里最常见的动作：
+ * 在上一格的基础上改。要空白就在时间轴上右键「清空此画格内容」。
+ * 返回画格落在的时间点。
+ */
+function fpsOfDoc() {
+    const doc = state.doc;
+    const f = doc && Number(doc.fps);
+    return Number.isFinite(f) && f > 0 ? f : DEFAULT_FPS;
+}
+
+/**
+ * 判断某个帧槽是否已被占用。
+ * 不能用 hasCelAt 的 1e-6 容差：历史数据里存在 0.167 这种「非整帧对齐」的画格，
+ * 而新落点会按帧网格算成 0.166666，两者按 1e-6 算不等，就会在旁边多造一格。
+ * 这里按「半个帧」判占用，视觉上同一帧就算同一格。
+ */
+function celSlotTaken(obj, at) {
+    const fps = fpsOfDoc();
+    const half = 0.5 / fps;
+    return celTimes(obj).some((t) => Math.abs(t - at) < half);
+}
+
+/** 从 t 开始往后找一个「还没有画格」的帧边界（最多找 240 帧，防死循环）。 */
+function findFreeCelTime(obj, t) {
+    const fps = fpsOfDoc();
+    const step = 1 / fps;
+    const base = Math.max(0, Math.round((Number(t) || 0) * fps) / fps);
+    for (let i = 0; i < 240; i += 1) {
+        const at = Math.round((base + i * step) * fps) / fps;
+        if (!celSlotTaken(obj, at)) return { at, moved: i > 0 };
+    }
+    return { at: base, moved: false };
+}
+
+function addCelAt(objId, t) {
+    const doc = state.doc;
+    const id = celTargetId(objId);
+    if (!doc || !id) return null;
+    const at = celTimeArg(t);
+    let placed = at;
+    let moved = false;
+    setDoc((d) => {
+        const obj = objectById(d, id);
+        if (!obj) return d;
+        // 该时刻已经有画格时不能静默失败（用户会觉得「加画格没反应」）：
+        // 顺延到下一个还没有画格的帧边界，落点回报给调用方。
+        const spot = findFreeCelTime(obj, at);
+        moved = spot.moved;
+        const res = ensureCelAt(obj, spot.at, { inherit: true });
+        placed = res.cel ? res.cel.at : spot.at;
+        const cur = res.cel || { at: placed, image: null };
+        // 新画格必须有可画的位图；继承来的图要拷一份，否则改一格会改坏上一格
+        let image = cur.image;
+        if (image) {
+            try {
+                image = cloneSurface(image);
+            } catch (err) {
+                image = blankSurface(d);
+            }
+        } else {
+            image = blankSurface(d);
+        }
+        const cel = Object.assign({}, cur, { image });
+        const cels = (Array.isArray(res.obj.cels) ? res.obj.cels : []).map((c) => (c === res.cel ? cel : c));
+        if (!cels.includes(cel)) cels.push(cel);
+        return replaceObject(d, id, Object.assign({}, res.obj, { cels: cels }));
+    });
+    if (moved) flash('该时刻已有画格，已放到 ' + placed.toFixed(2) + ' s');
+    return placed;
+}
+
+/** 删掉时间 t 的画格；对象只剩一个画格时拒绝并提示。 */
+function removeCelAt(objId, t) {
+    const doc = state.doc;
+    const id = celTargetId(objId);
+    if (!doc || !id) return false;
+    const obj = objectById(doc, id);
+    if (!obj) return false;
+    if (celTimes(obj).length <= 1) {
+        flash('至少要保留一个画格');
+        return false;
+    }
+    const at = celTimeArg(t);
+    const nextObj = removeCelAtDoc(obj, at);
+    if (!nextObj || nextObj === obj) {
+        flash('这个时间点没有画格');
+        return false;
+    }
+    setDoc((d) => replaceObject(d, id, nextObj));
+    flash('已删除 ' + at.toFixed(2) + 's 的画格');
+    return true;
+}
+
+/** 把时间 t 画格的内容清空（画格保留，image 置 null = 这一段全透明）。 */
+function clearCelAt(objId, t) {
+    const doc = state.doc;
+    const id = celTargetId(objId);
+    if (!doc || !id) return false;
+    const at = celTimeArg(t);
+    let cleared = false;
+    setDoc((d) => {
+        const obj = objectById(d, id);
+        if (!obj) return d;
+        const res = ensureCelAt(obj, at, { inherit: true });
+        if (!res.cel) return d;
+        cleared = true;
+        const cel = Object.assign({}, res.cel, { image: null });
+        const cels = (Array.isArray(res.obj.cels) ? res.obj.cels : []).map((c) => (c === res.cel ? cel : c));
+        return replaceObject(d, id, Object.assign({}, res.obj, { cels: cels }));
+    });
+    if (cleared) flash('已清空画格');
+    return cleared;
+}
+
+/**
+ * 落笔前保证「当前时间有可写画格」，返回位图（契约 D 的唯一入口）。
+ * 没有画格就 inherit:true 建一个：继承上一格像素，但整条链路与帧无关。
+ */
+function celImageForPaint(layerId, w, h) {
+    const doc = state.doc;
+    const id = celTargetId(layerId);
+    if (!doc || !id) return null;
+    const obj = objectById(doc, id);
+    if (!obj) return null;
+    const t = state.time;
+    const res = ensureCelAt(obj, t, { inherit: true });
+    const cur = res.cel;
+    if (cur && cur.image && !res.created) return cur.image;
+    // 新画格继承到的是上一格的位图**引用**：必须克隆，否则落笔会改坏上一格
+    const image = cur && cur.image
+        ? cloneSurface(cur.image)
+        : createSurface(Math.max(1, Math.round(Number(w) || 1)), Math.max(1, Math.round(Number(h) || 1)));
+    if (!image) return null;
+    const at = cur ? cur.at : t;
+    const cel = Object.assign({}, cur || { at: at }, { at: at, image: image });
+    const cels = (Array.isArray(res.obj.cels) ? res.obj.cels : []).map((c) => (c === cur ? cel : c));
+    if (!cels.includes(cel)) cels.push(cel);
+    setDoc((d) => replaceObject(d, id, Object.assign({}, res.obj, { cels: cels })));
+    return image;
+}
+
+/** 把画格从 fromT 挪到 toT（目标时间已有画格则覆盖）。 */
+function moveCel(objId, fromT, toT) {
+    const doc = state.doc;
+    const id = celTargetId(objId);
+    if (!doc || !id) return false;
+    const obj = objectById(doc, id);
+    if (!obj) return false;
+    const from = Number(fromT);
+    const to = Number(toT);
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return false;
+    const nextObj = moveCelDoc(obj, from, Math.max(0, to));
+    if (!nextObj || nextObj === obj) return false;
+    setDoc((d) => replaceObject(d, id, nextObj));
+    return true;
+}
+
+/** 该对象所有画格的时间点（升序）。 */
+function celTimesOf(objId) {
+    const doc = state.doc;
+    const obj = doc ? objectById(doc, celTargetId(objId)) : null;
+    return obj ? celTimes(obj) : [];
+}
+
+/** 跳到当前对象的上一个画格点；已在第一个之前则回 0。 */
+function goPrevCel() {
+    if (!state.doc) return;
+    const times = celTimesOf(null);
+    let target = 0;
+    for (const at of times) {
+        if (at < state.time - 1e-6) target = at;
+    }
+    setTime(target);
+}
+
+/** 跳到当前对象的下一个画格点；没有下一个就跳到时间轴末尾。 */
+function goNextCel() {
+    if (!state.doc) return;
+    const times = celTimesOf(null);
+    let target = totalSeconds(state.doc);
+    for (const at of times) {
+        if (at > state.time + 1e-6) {
+            target = at;
+            break;
+        }
+    }
+    setTime(Math.max(0, target));
+}
+
+/** 把 state.time 夹回 [0, totalSeconds]（时间模型里没有帧索引可夹）。 */
+function clampTime() {
+    const doc = state.doc;
+    if (!doc) {
+        state.time = 0;
+        return;
+    }
+    const total = totalSeconds(doc);
+    const t = Number(state.time);
+    if (!Number.isFinite(t) || t < 0) state.time = 0;
+    else if (total > 0 && t > total) state.time = total;
+}
+
+/**
+ * 新文档：一个对象 + t=0 的空画格。没有帧、没有帧计数。
+ * duration 显式给 1s —— 与旧版「12 帧 × 12fps」的初始时间轴等长；
+ * 时间模型里空文档的 totalSeconds 是 0，没有显式时长时间轴会没有刻度可拖。
+ */
+function newTimeDocument() {
+    return createTimeDocument({
+        width: DEFAULT_W,
+        height: DEFAULT_H,
+        fps: DEFAULT_FPS,
+        duration: 1,
+        onion: Object.assign({}, ONION_DEFAULTS),
+        objects: [{ name: '对象 1', transform: createTrack(), cels: [{ at: 0, image: null }] }],
+    });
+}
+
+/* ─────────────────────────── ctx（契约 §4） ─────────────────────────── */
+
+/**
+ * 求值器按 doc 身份缓存：doc 是不可变的，换引用即换求值器。
+ * 菜单/面板一次渲染内多次调用不会重复建对象。
+ */
+let evalDoc = null;
+let evalInst = null;
+function evaluatorFor(doc) {
+    if (!doc) return createEvaluator(null);
+    if (evalDoc === doc && evalInst) return evalInst;
+    evalDoc = doc;
+    evalInst = createEvaluator(doc);
+    return evalInst;
+}
+
+// ctx 的构造推迟到 boot()：顶层求值时 doc-state / project-io / view-host 的交叉依赖
+// 可能还没求值完，简写属性读 import 绑定会直接 ReferenceError。
+let ctx = null;
+let palette = null;   // 命令面板（命令表在 buildCommands 里，键位 Ctrl+Shift+P）
+let shortcuts = null; // 快捷键一览浮层（? 打开）
+
+function buildCtx() {
+    return {
+
+    doc: () => state.doc,
+    setDoc,
+    subscribeDoc,
+
+    time: () => state.time,
+    setTime,
+    playing: () => state.playing,
+    setPlaying,
+    /* v8：时间轴工具条与拖拽的正规入口。
+       setTime 会 wrapTime 回绕（拖播放头到末尾会跳回 0），面板一律用 setTimeClamped。 */
+    setTimeClamped,
+    stepFrames,
+    setDuration,
+    fpsNow,
+    goToKey,
+
+    /* v8：时间通道的「是否恒等」——ctx-time 没提供这个读法，面板靠它决定 ⏱ 徽章亮不亮。
+       其余 layerDepth / layerTime / setLayerTime / describeLayerTime / setLayerParent /
+       moveLayerTo 都在 shell/ctx-time.mjs 里（boot 里 Object.assign 覆盖本对象，别在这里重复实现）。 */
+    isLayerTimeIdentity: (id) => {
+        const doc = state.doc;
+        const el = doc ? objectById(doc, id) : null;
+        return isIdentityTime(el ? el.time : null);
+    },
+
+    engine,
+    tool: () => engine.tool(),
+    setTool(id) {
+        engine.setTool(id);
+        updateChrome();
+    },
+    color: () => engine.color(),
+    setColor(hex) {
+        engine.setColor(hex);
+        updateChrome();
+    },
+
+    undo: () => engine.undo(),
+    redo: () => engine.redo(),
+
+    activeLayerId: () => state.activeLayerId,
+    setActiveLayer(id) {
+        const doc = state.doc;
+        if (!doc) return;
+        const layer = objectById(doc, id);
+        if (!layer) return;
+        state.activeLayerId = id;
+        state.selection = { id, mode: (state.selection && state.selection.mode) || 'transform' };
+        engine.scheduleRender();
+        scheduleRefresh();
+    },
+
+    selection: () => state.selection,
+    setSelection(sel) {
+        const doc = state.doc;
+        if (!doc) return;
+        if (!sel || !sel.id) {
+            state.selection = null;
+        } else {
+            const layer = objectById(doc, sel.id);
+            if (!layer) return;
+            state.selection = {
+                id: sel.id,
+                mode: sel.mode === 'warp' ? 'warp' : 'transform',
+                vertex: Number.isInteger(sel.vertex) ? sel.vertex : null,
+            };
+            state.activeLayerId = sel.id;
+        }
+        engine.scheduleRender();
+        scheduleRefresh();
+        canvasEditor.syncSelectionUI();
+    },
+
+    /**
+     * 改对象自己的画布尺寸（位图整张拉伸，视觉不变、只改分辨率）。
+     * 一次 setDoc = 一步撤销；尺寸没变时不动文档。
+     */
+    setObjectSize(objId, w, h) {
+        const doc = state.doc;
+        const id = celTargetId(objId);
+        if (!doc || id == null) return null;
+        const res = setObjectSizeDoc(doc, id, w, h, { makeCanvas: (cw, ch) => blankSurfaceOf(cw, ch) });
+        if (!res.changed) return res.size;
+        setDoc(() => res.doc, { label: '改对象尺寸' });
+        return res.size;
+    },
+
+
+    notify(msg) {
+        flash(msg);
+        updateChrome();
+    },
+    requestRender() {
+        engine.scheduleRender();
+        scheduleRefresh();
+    },
+
+    /* ── 画格（时间模型）：时间轴面板只通过这四个名字改画格 ── */
+    /**
+     * 新建画格：只往库里加一张图，**不在时间轴上占位**。
+     * clone=true 时复制当前时刻那张（复制画格），否则给一张空白（尺寸跟对象一致）。
+     * 返回值是新画格的 id；用户点库里那一行才会形成曝光。
+     */
+    newDrawing(objId, opts) {
+        const doc = state.doc;
+        if (!doc) return null;
+        const id = celTargetId(objId);
+        const obj = id ? objectById(doc, id) : null;
+        if (!obj) return null;
+        const clone = !!(opts && opts.clone);
+        const size = objectSize(obj) || { w: doc.width, h: doc.height };
+        const src = clone ? imageAt(obj, state.time) : null;
+        const image = src ? cloneSurface(src) : createSurface(Math.max(1, Math.round(size.w)), Math.max(1, Math.round(size.h)));
+        const next = addDrawing(obj, image);
+        if (next === obj) return null;
+        setDoc(() => replaceObject(state.doc, id, next), { label: clone ? '复制画格' : '新建画格' });
+        const lib = drawingsOf(next);
+        const made = lib[lib.length - 1];
+        return made ? made.id : null;
+    },
+    /** 在给定时刻加一次「曝光」，复用当前画格（不新建图）——时间轴「加曝光」用。 */
+    addExposure(objId, t) {
+        const doc = state.doc;
+        if (!doc) return null;
+        const id = celTargetId(objId);
+        const obj = id ? objectById(doc, id) : null;
+        if (!obj) return null;
+        const lib = drawingsOf(obj);
+        const cur = drawingIdAt(obj, celTimeArg(t)) || (lib[0] ? lib[0].id : null);
+        if (!cur) return null;
+        // findFreeCelTime 返回 { at, moved }（不是一个数字），直接当秒用会算出 NaN
+        const spot = findFreeCelTime(obj, celTimeArg(t));
+        const at = spot && typeof spot === 'object' ? spot.at : Number(spot);
+        if (!Number.isFinite(at)) return null;
+        const next = placeDrawingDoc(obj, at, cur);
+        if (next === obj) return null;
+        setDoc(() => replaceObject(state.doc, id, next), { label: '加曝光' });
+        setTimeClamped(at);
+        flash('已加曝光 ' + at.toFixed(2) + ' s（复用当前画格）');
+        return at;
+    },
+    addCelAt,
+    removeCelAt,
+    clearCelAt,
+    moveCel,
+    swapCelTimes,
+    celTimesOf,
+    celImage: celImageOf,
+    /* v8：画格库 —— 画格是可以复用/切换的「图」，时间轴上的是曝光。
+       同一张画格可以出现在多个时刻，改它所有时刻一起变；要脱钩用 makeUniqueCel。 */
+    drawingsOf: (objId) => {
+        const doc = state.doc;
+        const id = celTargetId(objId);
+        const obj = doc && id ? objectById(doc, id) : null;
+        return obj ? drawingsOf(obj) : [];
+    },
+    currentDrawingId: (objId) => {
+        const doc = state.doc;
+        const id = celTargetId(objId);
+        const obj = doc && id ? objectById(doc, id) : null;
+        return obj ? drawingIdAt(obj, state.time) : null;
+    },
+    placeDrawing(objId, t, drawingId) {
+        const doc = state.doc;
+        const id = celTargetId(objId);
+        if (!doc || id == null || !drawingId) return false;
+        const at = celTimeArg(t);
+        let changed = false;
+        setDoc((d) => {
+            const obj = objectById(d, id);
+            if (!obj) return d;
+            const next = placeDrawingDoc(obj, at, drawingId);
+            if (next === obj) return d;
+            changed = true;
+            return replaceObject(d, id, next);
+        }, { label: '切换画格' });
+        return changed;
+    },
+    /** 把当前时刻的曝光独特化：拷一张新图，之后改它不影响别的时刻。 */
+    makeUniqueCel(objId, t) {
+        const doc = state.doc;
+        const id = celTargetId(objId);
+        if (!doc || id == null) return false;
+        const at = celTimeArg(t);
+        let changed = false;
+        setDoc((d) => {
+            const obj = objectById(d, id);
+            if (!obj) return d;
+            const next = makeUniqueDoc(obj, at, (w, h) => blankSurfaceOf(w, h));
+            if (next === obj) return d;
+            changed = true;
+            return replaceObject(d, id, next);
+        }, { label: '独特化画格' });
+        return changed;
+    },
+    /** 旋转/缩放的原点（归一化 0–1，相对对象自己的画布）。0.5/0.5 = 中心。 */
+    setAnchor(objId, anchor, opts) {
+        const doc = state.doc;
+        const id = celTargetId(objId);
+        if (!doc || id == null || !anchor) return false;
+        const clamp01 = (v) => Math.max(0, Math.min(1, Number.isFinite(Number(v)) ? Number(v) : 0.5));
+        const next = { x: clamp01(anchor.x), y: clamp01(anchor.y) };
+        const keepPlace = !!(opts && opts.keepPlace);
+        let changed = false;
+        setDoc((d) => {
+            const obj = objectById(d, id);
+            if (!obj) return d;
+            const cur = obj.anchor || { x: 0, y: 0 };
+            if (Math.abs(cur.x - next.x) < 1e-6 && Math.abs(cur.y - next.y) < 1e-6) return d;
+            changed = true;
+            let doc2 = patchObject(d, id, (o) => Object.assign({}, o, { anchor: next }));
+            if (!keepPlace) return doc2;
+            // 换原点会让对象整体位移（q = a + L·(p−a) + t）。要保持画面不动，就把位移补到 x/y 上：
+            //   t' = t + d − L·d，其中 d = a₀ − a₁（像素），L 是旋转/斜切/缩放的线性部分。
+            const size = objectSize(obj) || { w: d.width, h: d.height };
+            const st = stateAt(obj.transform, state.time) || {};
+            const d0 = { x: (cur.x - next.x) * size.w, y: (cur.y - next.y) * size.h };
+            const M = matrixOf(st);
+            const Lx = M.a * d0.x + M.c * d0.y;
+            const Ly = M.b * d0.x + M.d * d0.y;
+            const dx = d0.x - Lx;
+            const dy = d0.y - Ly;
+            if (Math.abs(dx) > 1e-9 || Math.abs(dy) > 1e-9) {
+                doc2 = writeKeyAt(doc2, id, state.time, {
+                    x: (Number(st.x) || 0) + dx,
+                    y: (Number(st.y) || 0) + dy,
+                });
+            }
+            return doc2;
+        }, { label: '改旋转原点' });
+        return changed;
+    },
+    removeDrawing(objId, drawingId) {
+        const doc = state.doc;
+        const id = celTargetId(objId);
+        if (!doc || id == null || !drawingId) return false;
+        let changed = false;
+        setDoc((d) => {
+            const obj = objectById(d, id);
+            if (!obj) return d;
+            const next = removeDrawingDoc(obj, drawingId);
+            if (next === obj) return d;
+            changed = true;
+            return replaceObject(d, id, next);
+        }, { label: '删除画格' });
+        return changed;
+    },
+
+    goPrevCel,
+    goNextCel,
+    clampTime,
+    /** 引擎落笔用：保证当前时间有可写画格（旧的 (帧下标, layerId, w, h) 签名已废） */
+    ensureCelImage: celImageForPaint,
+
+    exportFrames,
+    exportSpritesheet,
+    // v3：效果器
+    setLayerEffects,
+    setEffectParam,
+    keyEffectParam,
+    clearEffectParam,
+    effectDefs: EFFECT_DEFS,
+    makeEffect: defaultEffect,
+    normalizeEffect,
+    /** 时间 t 上该对象生效的位图（图层面板缩略图用）；兼容旧的 (帧下标, layerId) 参数序 */
+    resolveCel: (a, b) => (typeof a === 'number' && typeof b === 'string' ? celImageOf(b, a) : celImageOf(a, b)),
+        // ctx.project 在 boot 里补挂（projectApi 定义在后面）
+    };
+}
+
+
+/* ────────────────────── 拖放导入（PSD / 图片） ────────────────────── */
+
+/**
+ * 把拖进窗口的文件直接导入当前文档。渲染进程能读 File 的字节，
+ * 所以这里不走主进程对话框；解析与落文档全在 project-io 的 importDropped 里。
+ */
+function installDropImport() {
+    const readOne = (file) => new Promise((resolve) => {
+        try {
+            const fr = new FileReader();
+            fr.onload = () => resolve({ name: file.name, data: fr.result });
+            fr.onerror = () => resolve({ name: file.name, data: null });
+            fr.readAsArrayBuffer(file);
+        } catch (err) {
+            resolve({ name: file && file.name, data: null });
+        }
+    });
+
+    const hasFiles = (e) => {
+        const dt = e.dataTransfer;
+        if (!dt) return false;
+        if (dt.types) {
+            for (let i = 0; i < dt.types.length; i += 1) if (dt.types[i] === 'Files') return true;
+        }
+        return !!dt.files && dt.files.length > 0;
+    };
+
+    document.addEventListener('dragover', (e) => {
+        if (!hasFiles(e)) return;
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        document.body.classList.add('is-dropping');
+    });
+
+    document.addEventListener('dragleave', (e) => {
+        // 只有真的离开窗口才收起高亮：子元素之间的 dragleave 不算
+        if (e.relatedTarget) return;
+        document.body.classList.remove('is-dropping');
+    });
+
+    document.addEventListener('drop', async (e) => {
+        if (!hasFiles(e)) return;
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        document.body.classList.remove('is-dropping');
+        const files = [];
+        for (const f of e.dataTransfer.files) files.push(f);
+        if (!files.length) return;
+        flash('正在导入 ' + files.length + ' 个文件…');
+        const payload = await Promise.all(files.map(readOne));
+        try {
+            await projectApi.importDropped(payload);
+        } catch (err) {
+            flash('导入失败：' + ((err && err.message) || err));
+        }
+    });
+}
+
+/* ─────────────────────────── 快捷键 ─────────────────────────── */
+
+/**
+ * Del 的两段式删除：第一次只提示「再按一次」，3 秒内第二次才真正执行。
+ * 顺序是「先删纹理，再删对象」——
+ *  · 当前时刻有纹理且库里不止一张 → 删这张纹理（不动对象）；
+ *  · 否则删对象（含它的全部纹理）。
+ * 返回 true 表示这次按键已被吃掉（调用方不再走别的分支）。
+ */
+let pendingDelete = null;
+function onDeleteKey(e) {
+    const doc = state.doc;
+    if (!doc) return false;
+    const id = (state.selection && state.selection.id) || state.activeLayerId;
+    const obj = id ? objectById(doc, id) : null;
+    if (!obj) return false;
+    const lib = drawingsOf(obj);
+    const cur = drawingIdAt(obj, state.time);
+    // 与对象面板的「删纹理」同一优先级：当前时刻有纹理就删它；
+    // 没有（播放头落在两段曝光之间）就删最近一张没被用到的纹理 ——
+    // 这样 Del 不会第一下就打到对象上（防误删）。
+    const unused = lib.filter((d) => !d.times || !d.times.length);
+    // 优先删「没被任何时刻用到」的那张：删正在显示的那张会把整段画面挖掉，
+    // 用户点 Del 十次有九次是想清掉库里多出来的草稿。
+    const textureId = (unused.length ? unused[unused.length - 1].id : null) || cur;
+    const kind = lib.length > 1 && textureId ? 'texture' : 'object';
+    const key = kind + ':' + obj.id + (kind === 'texture' ? ':' + textureId : '');
+    const now = Date.now();
+    if (pendingDelete && pendingDelete.key === key && now - pendingDelete.at < 3000) {
+        pendingDelete = null;
+        if (kind === 'texture') {
+            // 必须走 ctx.removeDrawing（内部 setDoc → 广播 → 面板重绘）。
+            // 直接调纯函数 removeDrawingDoc 只算出新对象、不写回文档，
+            // 表现就是「提示已删除、列表不刷新」——这就是用户看到的那一幕。
+            if (!ctx || typeof ctx.removeDrawing !== 'function') {
+                flash('删除纹理：该操作尚未接线');
+            } else if (ctx.removeDrawing(obj.id, textureId) === false) {
+                flash('至少要保留一张纹理');
+            } else {
+                flash('已删除纹理（Ctrl+Z 可恢复）');
+            }
+        } else {
+            const name = obj.name || '对象';
+            setDoc((d) => removeObjectDoc(d, obj.id), { label: '删除对象' });
+            if (state.activeLayerId === obj.id && typeof ctx.setActiveLayer === 'function') ctx.setActiveLayer(null);
+            flash('已删除对象「' + name + '」（Ctrl+Z 可恢复）');
+        }
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        updateChrome();
+        return true;
+    }
+    pendingDelete = { key: key, at: now };
+    flash(kind === 'texture' ? '再按一次 Del 删除这张纹理（3 秒内有效）' : '再按一次 Del 删除对象「' + (obj.name || '对象') + '」（3 秒内有效）');
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+    return true;
+}
+
+function isTypingTarget(target) {
+    if (!target || !target.tagName) return false;
+    const tag = target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+    return !!target.isContentEditable;
+}
+
+function nudgeSize(delta) {
+    const b = engine.brush();
+    engine.setBrush({ size: Math.max(1, Math.min(400, Math.round(b.size) + delta)) });
+    updateChrome();
+}
+
+/**
+ * 把「关键帧剪贴板」这类面板内状态留在面板里：外壳只派发一个 CustomEvent，
+ * 时间轴收到后自己复制/粘贴（见 editors/timeline-keys.mjs 的 onCopyEvent/onPasteEvent）。
+ * 没有监听者时什么都不发生，所以不检查返回值。
+ */
+function dispatchTimeEvent(name, detail) {
+    try {
+        document.dispatchEvent(new CustomEvent(name, { detail: detail || null }));
+    } catch (err) {
+        /* 派发失败不该拖垮外壳 */
+    }
+}
+
+/* ─────────────────────────── 命令面板（Ctrl+Shift+P） ─────────────────────────── */
+
+/**
+ * 命令表：一条命令就是「喊一句话」，真正的状态仍归各模块自己。
+ * 全部包一层箭头函数 —— engine/state 是 boot 里才赋值的模块级 let，直接引用会
+ * 在赋值前捕获 undefined。
+ */
+/**
+ * 在当前时刻切换成库里相邻的那张画格（画格是复用的图，不是「每加一格就多一条时间」）。
+ * 没有任何画格时提示；越界时绕回另外一端。
+ */
+function cycleDrawing(dir) {
+    const step = dir < 0 ? -1 : 1;
+    const list = typeof ctx.drawingsOf === 'function' ? ctx.drawingsOf(null) : [];
+    if (!list.length) {
+        flash('这个对象还没有画格');
+        return false;
+    }
+    const cur = typeof ctx.currentDrawingId === 'function' ? ctx.currentDrawingId(null) : null;
+    const i = list.findIndex((d) => d.id === cur);
+    const next = list[(i < 0 ? (step > 0 ? 0 : list.length - 1) : (i + step + list.length) % list.length)];
+    if (!next) return false;
+    const ok = ctx.placeDrawing(null, state.time, next.id);
+    if (ok) flash('当前时刻显示第 ' + (list.indexOf(next) + 1) + ' 张画格');
+    return ok;
+}
+
+function buildCommands() {
+    const toolCmd = (t) => ({
+        id: 'tool.' + t.id,
+        title: t.name,
+        hint: '工具',
+        keys: t.key,
+        group: '工具',
+        run: () => {
+            engine.setTool(t.id);
+            flash('工具：' + t.name);
+            updateChrome();
+        },
+    });
+    return [
+        // 文件
+        { id: 'file.save', title: '保存项目', hint: '写入当前存档', keys: 'Ctrl+S', group: '文件', run: () => saveProject() },
+        { id: 'file.open', title: '打开项目库', hint: '最近项目 / 新建 / 导入', keys: 'Ctrl+O', group: '文件', run: () => openProjectsPanel() },
+        { id: 'file.export-frames', title: '导出帧序列', hint: 'PNG 序列 + 帧清单', keys: 'Ctrl+Shift+E', group: '文件', run: () => exportFrames(projectLabel()) },
+        { id: 'file.export-sheet', title: '导出精灵图', hint: '单张 PNG + 每帧坐标 JSON', keys: '', group: '文件', run: () => exportSpritesheet({}) },
+        { id: 'file.export-video', title: '导出 WebM 视频', hint: '按当前帧率录制整段时长', keys: '', group: '文件', run: () => projectApi.exportVideo() },
+        // 编辑
+        { id: 'edit.undo', title: '撤销', hint: '', keys: 'Ctrl+Z', group: '编辑', run: () => engine.undo() },
+        { id: 'edit.redo', title: '重做', hint: '', keys: 'Ctrl+Shift+Z', group: '编辑', run: () => engine.redo() },
+        { id: 'edit.copy-keys', title: '复制关键帧', hint: '时间轴里选中的那些', keys: 'Ctrl+C', group: '编辑', run: () => dispatchTimeEvent('ms:copy-keys') },
+        { id: 'edit.paste-keys', title: '粘贴关键帧', hint: '粘到当前时间', keys: 'Ctrl+V', group: '编辑', run: () => dispatchTimeEvent('ms:paste-keys') },
+        // 播放与定位
+        { id: 'play.toggle', title: '播放 / 暂停', hint: '时间轴走带', keys: 'Space', group: '播放', run: () => setPlaying(!state.playing) },
+        { id: 'play.first', title: '回到开头', hint: 't = 0', keys: 'Home', group: '播放', run: () => setTimeClamped(0) },
+        { id: 'play.last', title: '跳到结尾', hint: '文档末端', keys: 'End', group: '播放', run: () => setTimeClamped(totalSeconds(state.doc)) },
+        { id: 'play.prev-cel', title: '上一个画格', hint: '', keys: 'Shift+,', group: '播放', run: () => goPrevCel() },
+        { id: 'play.next-cel', title: '下一个画格', hint: '', keys: 'Shift+.', group: '播放', run: () => goNextCel() },
+        { id: 'play.prev-key', title: '上一个关键帧', hint: '当前对象', keys: ',', group: '播放', run: () => goToKey(-1) },
+        { id: 'play.next-key', title: '下一个关键帧', hint: '当前对象', keys: '.', group: '播放', run: () => goToKey(1) },
+        // 画格
+        { id: 'cel.new', title: '新建画格（只进库）', hint: '生成一张新图，不占时间轴；点亮库里那一行才放到时间轴', keys: '', group: '画格', run: () => ctx.newDrawing(null) },
+        { id: 'cel.add', title: '加曝光', hint: '在播放头处再曝光一次当前画格（不新建图）', keys: '', group: '画格', run: () => ctx.addExposure(null, null) },
+        { id: 'cel.remove', title: '删画格', hint: '播放头所在画格', keys: '', group: '画格', run: () => removeCelAt(null, null) },
+        { id: 'cel.cycle-prev', title: '切换画格：上一张', hint: '把库里上一张画格放到当前时刻（复用，不加时间）', keys: '', group: '画格', run: () => cycleDrawing(-1) },
+        { id: 'cel.cycle-next', title: '切换画格：下一张', hint: '把库里下一张画格放到当前时刻（复用，不加时间）', keys: '', group: '画格', run: () => cycleDrawing(1) },
+        { id: 'cel.unique', title: '画格独特化', hint: '当前时刻的画格脱钩成独立一张', keys: '', group: '画格', run: () => ctx.makeUniqueCel && ctx.makeUniqueCel(null, state.time) },
+        // 画布
+        { id: 'canvas.fit', title: '适配视图', hint: '画布撑满可视区', keys: '0', group: '画布', run: () => { engine.fitView(); flash('已适配视图'); updateChrome(); } },
+        { id: 'canvas.brush-smaller', title: '笔刷变小', hint: '每次 −4px', keys: '[', group: '画布', run: () => nudgeSize(-4) },
+        { id: 'canvas.brush-bigger', title: '笔刷变大', hint: '每次 +4px', keys: ']', group: '画布', run: () => nudgeSize(4) },
+        // 工作区
+        { id: 'ws.animate', title: '切到编排', hint: 'animate', keys: '', group: '工作区', run: () => setWorkspace('animate') },
+        { id: 'ws.draw', title: '切到画板', hint: 'draw', keys: '', group: '工作区', run: () => setWorkspace('draw') },
+        { id: 'ws.free', title: '切到设置', hint: 'free', keys: '', group: '工作区', run: () => setWorkspace('free') },
+        // 界面
+        { id: 'ui.shortcuts', title: '快捷键一览', hint: '列出所有按键', keys: '?', group: '界面', run: () => { if (shortcuts) shortcuts.open(); } },
+        // 工具
+        ...TOOLS.map(toolCmd),
+    ];
+}
+
+function onKeyDown(e) {
+    // 项目库浮层打开时，全局快捷键让位：Esc 由浮层自己处理，别顺手切工具/播动画
+    if (projectsModal) return;
+    // 命令面板先于 isTypingTarget：焦点在面板输入框里时也要能 Esc / Ctrl+Shift+P 收起
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
+        e.preventDefault();
+        if (palette) palette.toggle();
+        return;
+    }
+    if (palette && palette.isOpen()) return;
+    if (shortcuts && shortcuts.isOpen()) return;
+    // Del / Backspace：两段式删除，先提示再执行 —— 单键直接删对象太危险
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (onDeleteKey(e)) return;
+    }
+    // ? 打开快捷键一览（Shift+/ 在多数布局上就是 ?）
+    if (!(e.ctrlKey || e.metaKey) && (e.key === '?' || (e.shiftKey && e.key === '/'))) {
+        e.preventDefault();
+        if (shortcuts) shortcuts.toggle();
+        return;
+    }
+    const target = e.target;
+    if (isTypingTarget(target)) {
+        if (e.key === 'Escape' && typeof target.blur === 'function') target.blur();
+        return;
+    }
+    const mod = e.ctrlKey || e.metaKey;
+    const key = e.key;
+    if (mod && (key === 'z' || key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) engine.redo();
+        else engine.undo();
+        return;
+    }
+    if (mod && (key === 'y' || key === 'Y')) {
+        e.preventDefault();
+        engine.redo();
+        return;
+    }
+    if (mod && !e.altKey) {
+        const k = String(key).toLowerCase();
+        if (k === 's' && !e.shiftKey) {
+            e.preventDefault();
+            saveProject();
+            return;
+        }
+        if (k === 'o' && !e.shiftKey) {
+            e.preventDefault();
+            openProjectsPanel();
+            return;
+        }
+        if (k === 'e' && e.shiftKey) {
+            e.preventDefault();
+            exportFrames(projectLabel());
+            return;
+        }
+        // 关键帧复制/粘贴由时间轴模块自己维护剪贴板：外壳只派发事件，
+        // 免得「选中了什么」这类状态散落在两个模块里。
+        if ((k === 'c' || k === 'v') && !e.shiftKey) {
+            dispatchTimeEvent(k === 'c' ? 'ms:copy-keys' : 'ms:paste-keys');
+            return;
+        }
+        return;
+    }
+    if (e.altKey) return;
+
+    if (key === ' ') {
+        e.preventDefault();
+        setPlaying(!state.playing);
+        return;
+    }
+    // 契约 v5：`,` `.` 是「上一个 / 下一个关键帧」。画格切换挪到 Shift+, / Shift+.
+    if (key === ',' || key === '<') {
+        e.preventDefault();
+        if (e.shiftKey) goPrevCel();
+        else goToKey(-1);
+        return;
+    }
+    if (key === '.' || key === '>') {
+        e.preventDefault();
+        if (e.shiftKey) goNextCel();
+        else goToKey(1);
+        return;
+    }
+    if (key === 'Home') {
+        e.preventDefault();
+        setTimeClamped(0);
+        return;
+    }
+    if (key === 'End') {
+        e.preventDefault();
+        setTimeClamped(totalSeconds(state.doc));
+        return;
+    }
+    // 逐帧（1/fps）用方向键：比 `,` `.` 的按画格跳更适合修帧率与对位
+    if (key === 'ArrowLeft' && !e.shiftKey) {
+        e.preventDefault();
+        stepFrames(-1);
+        return;
+    }
+    if (key === 'ArrowRight' && !e.shiftKey) {
+        e.preventDefault();
+        stepFrames(1);
+        return;
+    }
+    if (key === 'Escape') {
+        // 画板 / 设置里没有「选中」概念，Esc 就是回到编排
+        if (state.workspace !== 'animate') {
+            e.preventDefault();
+            setWorkspace('animate');
+        }
+        return;
+    }
+    if (key === '[') {
+        e.preventDefault();
+        nudgeSize(-4);
+        return;
+    }
+    if (key === ']') {
+        e.preventDefault();
+        nudgeSize(4);
+        return;
+    }
+    if (key === '0') {
+        e.preventDefault();
+        engine.fitView();
+        flash('已适配视图');
+        updateChrome();
+        return;
+    }
+    const toolId = TOOL_KEYS[String(key).toLowerCase()];
+    if (toolId) {
+        engine.setTool(toolId);
+        const t = TOOLS.find((x) => x.id === toolId);
+        flash(t ? t.name : toolId);
+        updateChrome();
+    }
+}
+
+/* ─────────────────────────── 启动 ─────────────────────────── */
+
+function ensureDom() {
+    const body = document.body;
+    let top = document.getElementById('topbar');
+    if (!top) {
+        top = el('div');
+        top.id = 'topbar';
+        body.appendChild(top);
+    }
+    let host = document.getElementById('ws-host');
+    if (!host) {
+        host = el('div');
+        host.id = 'ws-host';
+        body.insertBefore(host, top.nextSibling);
+    }
+    let stb = document.getElementById('statusbar');
+    if (!stb) {
+        stb = el('div');
+        stb.id = 'statusbar';
+        body.appendChild(stb);
+    }
+    return { top, host, stb };
+}
+
+function expose() {
+    // ctx 里已经有的键直接铺开，只补「ctx 没有、但外部脚本要用」的那些
+    window.motionStudio = Object.assign({}, ctx, {
+        state,
+        engine,
+        palette,
+        setWorkspace,
+        render,
+        resetLayout,
+        editorIds,
+        tree: () => state.activeTree,
+        addCelAt,
+        removeCelAt,
+        clearCelAt,
+        moveCel,
+        celTimesOf,
+        celImage: celImageOf,
+        goPrevCel,
+        goNextCel,
+        ensureCelImage: celImageForPaint,
+        exportFrames,
+        exportSpritesheet,
+        exportVideo: (opts) => projectApi.exportVideo(opts),
+        recordVideo: (opts) => projectApi.recordVideo(opts),
+        setLayerEffects,
+        setEffectParam,
+        keyEffectParam,
+        clearEffectParam,
+        effectDefs: EFFECT_DEFS,
+        makeEffect: defaultEffect,
+        normalizeEffect,
+        // 兼容旧的 (帧下标, layerId) 参数序
+        resolveCel: (a, b) => (typeof a === 'number' && typeof b === 'string' ? celImageOf(b, a) : celImageOf(a, b)),
+        saveProject,
+        loadProject,
+        newProject,
+        currentProject,
+        importProjectFile,
+        openProjectsPanel,
+        project: projectApi,
+        ctx,
+    });
+}
+
+function boot() {
+    ({
+        TOOL_KEYS, DEFAULT_W, DEFAULT_H, DEFAULT_FPS, state, shell, el, engine,
+        setDoc, subscribeDoc, setTime, setPlaying, scheduleRefresh, flash, hintText,
+        updateChrome, setTimeClamped, stepFrames, setDuration, fpsNow, goToKey,
+    } = DS);
+    // 先造 ctx：此时所有模块都已求值完毕，import 绑定一定可用
+    ctx = buildCtx();
+    // 命令面板：模块自己挂 body、自己管焦点，外壳只给命令表并按键
+    palette = createPalette({ commands: buildCommands() });
+    // 快捷键浮层与命令面板同源：命令表里带 keys 的条目自动进浮层
+    shortcuts = createShortcutsOverlay({
+        groups: groupsFromCommands(buildCommands()).concat([
+            {
+                // 面板/浮层自己的键不在命令表里（命令表只收「命令 + 快捷键」），单独补一组
+                title: '全局',
+                items: [
+                    { keys: 'Ctrl+Shift+P', title: '命令面板' },
+                    { keys: 'Esc', title: '取消 / 失焦 / 关闭浮层' },
+                    { keys: '↑ ↓', title: '在列表里换行' },
+                    { keys: 'Shift+拖', title: '关键帧临时自由拖动（忽略磁铁）' },
+                    { keys: 'Ctrl+滚轮', title: '时间轴以指针为锚缩放' },
+                ],
+            },
+        ]),
+    });
+    // 偏好要在 boot 里显式落一次：引擎刚建好，撤销上限得跟着 localStorage 走，
+    // 不能指望用户点开「设置 → 偏好」才生效。loadPrefs 内部也会调 setPrefs，
+    // 这里再调一次 setHistoryLimit 是为了绕开 boot 早期的订阅回调时序。
+    const pref0 = DS.loadPrefs();
+    if (engine && typeof engine.setHistoryLimit === 'function' && pref0) {
+        engine.setHistoryLimit(pref0.undoLimit);
+    }
+    ctx.project = projectApi;
+    Object.assign(ctx, timeCtx({
+        getDoc: () => state.doc,
+        setDoc,
+        flash,
+        now: () => state.time,
+        activeId: () => state.activeLayerId,
+        evaluatorFor,
+        writeKeyAt,
+    }));
+    setViewHostCtx(ctx);
+    setProjectIoCtx(ctx);
+
+    const dom = ensureDom();
+    shell.host = dom.host;
+    shell.topbar = buildTopbar(dom.top, {
+        workspace: () => state.workspace,
+        setWorkspace,
+        hint: hintText,
+        file: onFileAct,
+        projectName: () => project.name,
+        dirty: () => project.dirty,
+    });
+    shell.statusbar = buildStatusbar(dom.stb, {});
+
+    // 没有任何 CSS 时也保证绝对定位以 #ws-host 为参照
+    try {
+        if (getComputedStyle(shell.host).position === 'static') shell.host.style.position = 'relative';
+    } catch (err) {
+        shell.host.style.position = 'relative';
+    }
+
+    state.doc = newTimeDocument();
+    state.time = 0;
+    state.activeLayerId = objectsOf(state.doc)[0] ? objectsOf(state.doc)[0].id : null;
+
+    buildViews(loadLayout());
+    // 冷启动也套用工作区规则（动画工作区：锁画笔 + 默认选择工具）。
+    // 必须在 buildViews 之后：setWorkspace 首行是 `if (!state.views[id]) return;`
+    setWorkspace(state.workspace);
+    syncActiveTree();
+    render();
+    window.addEventListener('keydown', onKeyDown);
+    installDropImport();
+    window.addEventListener('resize', () => render());
+    expose();
+    flash('就绪');
+    updateChrome();
+    scheduleRefresh();
+    syncCanvasToActive();
+    // 编辑器模块可能在 mount 之后异步 attach，下一帧再收回一次
+    scheduleAttachToActive();
+    // 上次打开过项目就恢复它（读库是异步的，不阻塞首屏）
+    restoreLastProject();
+}
+
+boot();
+
+
+/* 编辑器契约：view-host 挂编辑器、project-io 开项目面板，都从这里取 ctx。 */
+export { ctx };

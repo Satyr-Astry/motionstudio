@@ -1,0 +1,209 @@
+/* palette.css —— 命令面板（app/shell/command-palette.mjs）
+ *
+ * 契约：tokens.css 是唯一声明变量的文件，这里只许 var() 引用，不新造令牌。
+ * 圆角阶梯（契约 §2）：浮层面板 --r-pop(6px)，输入框与列表行 --r-1(2px)，
+ * 不用 --r-pill，也不出现任何阶梯外的像素圆角。
+ * CSP 是 default-src 'self'：没有 @import、没有 url()、没有 !important。
+ *
+ * 结构（类名见 command-palette.mjs 头注释）：
+ *   .cmd-overlay > .cmd-box > .cmd-input + .cmd-list + .cmd-foot
+ *   .cmd-list 内：.cmd-group / .cmd-item / .cmd-more / .cmd-empty
+ *
+ * body.cmd-open 是给外壳用的钩子，这里刻意不写规则（免得和主线意图打架）。
+ */
+
+/* ═══════════════ 遮罩 ═══════════════ */
+
+/* 几何：JS 会给内联 position / inset 兜底，这里补齐层叠顺序与排布 */
+.cmd-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 120;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 12vh 12px 12px;
+    /* 深色洗底：由 --bg 派生的 68% 半透明，不手写 rgba */
+    background: color-mix(in srgb, var(--bg) 68%, transparent);
+}
+
+/* display:flex 会盖掉浏览器默认的 [hidden]{display:none}，这里显式收回 */
+.cmd-overlay[hidden] {
+    display: none;
+}
+
+/* ═══════════════ 面板 ═══════════════ */
+
+.cmd-box {
+    display: flex;
+    flex-direction: column;
+    width: 520px;
+    max-width: calc(100vw - 24px);
+    max-height: 60vh;
+    overflow: hidden;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-pop);
+    box-shadow: var(--shadow-pop);
+}
+
+/* ═══════════════ 搜索框 ═══════════════ */
+
+.cmd-input {
+    flex: 0 0 auto;
+    height: var(--h-bar);
+    margin: 6px 6px 0;
+    padding: 0 6px;
+    color: var(--ink);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: var(--r-1);
+    font-size: 12px;
+}
+
+.cmd-input::placeholder {
+    color: var(--ink-faint);
+}
+
+/* 类选择器权重低于 tokens 的 input:hover / input:focus，这里显式补一条同权重更高的 */
+.cmd-input:hover {
+    border-color: var(--line-2);
+}
+
+.cmd-input:focus {
+    border-color: var(--accent);
+}
+
+/* ═══════════════ 列表 ═══════════════ */
+
+.cmd-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 4px 6px 6px;
+}
+
+/* 分组标题行：只做分隔，不抢视线 */
+.cmd-group {
+    height: var(--h-head);
+    padding: 0 6px;
+    line-height: var(--h-head);
+    color: var(--ink-faint);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ═══════════════ 列表行 ═══════════════ */
+
+.cmd-item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: var(--h-row);
+    padding: 0 8px 0 10px;
+    border-radius: var(--r-1);
+    color: var(--ink-dim);
+    cursor: pointer;
+}
+
+/* 高亮行：--accent 的 18% 底 + 左侧 2px accent 竖条（Fluent 的克制版选中态） */
+.cmd-item[data-active="true"] {
+    color: var(--ink);
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.cmd-item[data-active="true"]::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 2px;
+    bottom: 2px;
+    width: 2px;
+    border-radius: var(--r-1);
+    background: var(--accent);
+}
+
+/* 禁用的命令仍然可见、可被搜到，只是点不动 */
+.cmd-item[data-disabled="true"] {
+    color: var(--ink-faint);
+    cursor: default;
+}
+
+.cmd-title {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.cmd-hint {
+    flex: 0 1 auto;
+    min-width: 0;
+    margin-left: 8px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--ink-faint);
+    font-size: 10.5px;
+}
+
+.cmd-keys {
+    flex: 0 0 auto;
+    margin-left: auto;
+    padding-left: 12px;
+    color: var(--ink-faint);
+    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+    font-size: 10.5px;
+    white-space: nowrap;
+}
+
+/* 空串的 hint / keys 不占位：靠结构恒定，靠 :empty 收口 */
+.cmd-hint:empty,
+.cmd-keys:empty {
+    display: none;
+}
+
+/* ═══════════════ 辅助行（无匹配 / 截断） ═══════════════ */
+
+.cmd-empty,
+.cmd-more {
+    height: var(--h-row);
+    padding: 0 8px;
+    line-height: var(--h-row);
+    font-size: 11px;
+    color: var(--ink-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.cmd-empty {
+    color: var(--ink-dim);
+}
+
+.cmd-more {
+    margin-top: 4px;
+    border-top: 1px solid var(--line);
+}
+
+/* ═══════════════ 底栏 ═══════════════ */
+
+.cmd-foot {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    height: var(--h-head);
+    padding: 0 8px;
+    background: var(--panel-2);
+    border-top: 1px solid var(--line);
+    color: var(--ink-faint);
+    font-size: 10.5px;
+    white-space: nowrap;
+}

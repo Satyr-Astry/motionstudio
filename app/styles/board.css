@@ -1,0 +1,306 @@
+/* ────────────────────────────────────────────────────────────────
+ * board.css —— 画板（纹理编辑器，.bd-*）专用样式
+ *
+ * 只负责画板自己造出来的东西：
+ *   .bd-bar        高密度单行工具条（笔刷 chip / 色块 / 大小 / 不透明度 / 取色器 /
+ *                  镜像 / 撤销重做 / ⋯ 设置 … 右侧 ‹ › ＋纹理 独特化 适配）
+ *   .bd-swatch     当前色块 + .bd-pal 极小色板浮层
+ *   .bd-pop        笔刷设置浮层（硬度 / 间距 / 抖动 / 流量 + 恢复默认）
+ *   .bd-ovl        笔刷游标层（独立 canvas，不重绘纹理）
+ *
+ * 两个约定：
+ * 1. panels.css 末尾还有一套单类旧规则（.bd-tool / .bd-btn / .bd-ask …）以及
+ *    v8 覆写（.bd .bd-bar 等）。这里一律带 .bd 前缀、保持同级或更高特异性，
+ *    靠「本文件在 panels.css 之后加载」压过去 —— 不用 !important。
+ * 2. 尺寸只用 tokens.css 的令牌：--h-bar / --h-btn / --h-field / --r-1 / --r-pop。
+ * ──────────────────────────────────────────────────────────────── */
+
+/* ── 工具条：一行到底，挤不下就横向滚动 ── */
+
+.bd .bd-bar {
+    flex-wrap: nowrap;
+    gap: 5px;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+/* 全局 ::-webkit-scrollbar 是 8px，工具条里不留横条（滚轮/触控板照样能滚） */
+.bd .bd-bar::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
+/* 子控件一律不压缩：宁可滚动，也不要把滑杆挤成一条线 */
+.bd .bd-bar > * {
+    flex: 0 0 auto;
+}
+
+/* ── 笔刷 chip ── */
+
+.bd .bd-brushes {
+    gap: 1px;
+}
+
+.bd .bd-brush {
+    min-width: 22px;
+    padding: 0 5px;
+    font-size: 11px;
+    letter-spacing: 0;
+}
+
+/* ── 当前色块 ── */
+
+.bd .bd-swatch {
+    width: var(--h-btn);
+    min-width: var(--h-btn);
+    height: var(--h-btn);
+    padding: 0;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-1);
+    background-color: var(--panel-2);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+.bd .bd-swatch:hover {
+    border-color: var(--accent);
+}
+
+/* ── 大小 / 不透明度：range + 数字 ── */
+
+.bd .bd-field {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--ink-faint);
+    font-size: 10px;
+    line-height: 1;
+}
+
+.bd .bd-field > .bd-lab {
+    color: var(--ink-faint);
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.bd .bd-field input[type="range"] {
+    width: 56px;
+    height: var(--h-btn);
+    margin: 0;
+}
+
+.bd .bd-field input[type="number"] {
+    width: 38px;
+    height: var(--h-field);
+    padding: 0 3px;
+    font-size: 11px;
+}
+
+/* ── 图标按钮：取色器 / 撤销 / 重做 / ⋯ ── */
+
+.bd .bd-ico {
+    min-width: var(--h-btn);
+    height: var(--h-btn);
+    padding: 0 5px;
+    border: 1px solid transparent;
+    border-radius: var(--r-1);
+    background: transparent;
+    color: var(--ink-dim);
+    font-size: 12px;
+    line-height: 1;
+}
+
+.bd .bd-ico:hover {
+    background: var(--surface);
+    border-color: var(--line);
+    color: var(--ink);
+}
+
+.bd .bd-ico.is-on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+}
+
+.bd .bd-ico:disabled {
+    opacity: 0.38;
+    cursor: default;
+}
+
+.bd .bd-ico:disabled:hover {
+    background: transparent;
+    border-color: transparent;
+    color: var(--ink-dim);
+}
+
+/* ── 镜像下拉 ── */
+
+.bd .bd-select {
+    height: var(--h-btn);
+    padding: 0 2px;
+    border-radius: var(--r-1);
+    font-size: 11px;
+}
+
+/* ── 右侧动作组（panels.css 里已有 margin-left:auto，这里只收紧间距） ── */
+
+.bd .bd-acts {
+    gap: 2px;
+}
+
+/* ── 浮层基座：色板 / 笔刷设置 ──
+ * position:absolute 挂在 .bd 上（根元素是 relative），由 JS 算 left/top；
+ * 注意必须显式处理 [hidden]：下面 display:flex 会盖掉浏览器默认的 display:none。 */
+
+.bd .bd-pop,
+.bd .bd-pal {
+    position: absolute;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 7px 8px;
+    box-sizing: border-box;
+    background: var(--panel-2);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-pop);
+    box-shadow: var(--shadow-pop);
+}
+
+.bd .bd-pop[hidden],
+.bd .bd-pal[hidden] {
+    display: none;
+}
+
+.bd .bd-pop {
+    width: 208px;
+}
+
+.bd .bd-pop-title {
+    color: var(--ink-faint);
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ── 笔刷设置：四条滑杆 + 恢复默认 ── */
+
+.bd .bd-set-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: var(--h-btn);
+    color: var(--ink-dim);
+    font-size: 11px;
+    line-height: 1;
+}
+
+.bd .bd-set-lab {
+    flex: 0 0 26px;
+    color: var(--ink-dim);
+    white-space: nowrap;
+}
+
+.bd .bd-set-row input[type="range"] {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    height: var(--h-btn);
+    margin: 0;
+}
+
+.bd .bd-set-num {
+    flex: 0 0 24px;
+    text-align: right;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    font-size: 10px;
+}
+
+.bd .bd-set-reset {
+    height: var(--h-btn);
+    margin-top: 2px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-1);
+    background: var(--surface);
+    color: var(--ink-dim);
+    font-size: 11px;
+}
+
+.bd .bd-set-reset:hover {
+    border-color: var(--line-2);
+    color: var(--ink);
+    background: var(--line-2);
+}
+
+/* ── 色板：最近 6 色 + 前景/背景交换 ── */
+
+.bd .bd-pal {
+    min-width: 148px;
+}
+
+.bd .bd-pal-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 18px);
+    gap: 3px;
+    align-items: center;
+}
+
+.bd .bd-pal-cell {
+    width: 18px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-1);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.bd .bd-pal-cell:hover {
+    border-color: var(--accent);
+}
+
+/* 占位格：把 6 列的网格撑满，弹层宽度不随「用过的颜色」数量跳 */
+.bd .bd-pal-cell.is-empty {
+    border-style: dashed;
+    border-color: var(--line);
+    background: transparent;
+    box-shadow: none;
+}
+
+.bd .bd-pal-empty {
+    grid-column: 1 / -1;
+    color: var(--ink-faint);
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+.bd .bd-pal-swap {
+    height: var(--h-field);
+    border: 1px solid var(--line);
+    border-radius: var(--r-1);
+    background: var(--surface);
+    color: var(--ink-dim);
+    font-size: 11px;
+}
+
+.bd .bd-pal-swap:hover {
+    border-color: var(--line-2);
+    color: var(--ink);
+    background: var(--line-2);
+}
+
+/* ── 笔刷游标层：盖在画布上，不吃指针事件 ── */
+
+.bd .bd-ovl {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    pointer-events: none;
+}
