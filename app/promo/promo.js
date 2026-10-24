@@ -570,7 +570,7 @@ function webmFromChunks(chunks, width, height, fps, durationMs) {
             EBML.el('b0', EBML.uint(width)),
             EBML.el('ba', EBML.uint(height)),
         ])),
-    ]))));
+    ])));
     // 每 2 秒一个 Cluster；SimpleBlock 的相对时间戳是 int16（毫秒）
     const clusters = [];
     let cur = null;

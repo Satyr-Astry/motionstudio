@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>MotionStudio · 宣传片</title>
+<style>
+    html, body { margin: 0; min-height: 100%; background: #0e0f11; color: #e6e8ec;
+        font: 13px/1.7 "Microsoft YaHei", "Segoe UI", system-ui, sans-serif; }
+    main { max-width: 1000px; margin: 0 auto; padding: 28px 20px 60px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p.sub { color: #9aa1ac; margin: 0 0 18px; }
+    video { width: 100%; background: #141518; border: 1px solid #33363d; border-radius: 4px; display: block; }
+    figure { margin: 22px 0 0; }
+    figcaption { color: #6b7280; font-size: 12px; margin-top: 6px; }
+    img { width: 100%; border: 1px solid #33363d; border-radius: 4px; display: block; }
+    code { background: #212328; padding: 1px 5px; border-radius: 2px; }
+    ul { color: #9aa1ac; padding-left: 20px; }
+</style>
+</head>
+<body>
+<main>
+    <h1>MotionStudio · 宣传片</h1>
+    <p class="sub">27 秒，1384×840，VP9 WebM —— 时间驱动、画板独立、纹理挂在关键帧上。</p>
+    <video src="./motionstudio-promo.webm" poster="./poster.png" controls autoplay muted loop playsinline></video>
+    <figcaption>注：MediaRecorder 录出的 WebM 没有 Cues 索引，部分播放器拖进度条会跳到开头；顺序播放正常。要可拖动版本需在封装里写 Cues。</figcaption>
+
+    <figure>
+        <img src="./poster.png" alt="封面：MotionStudio" />
+        <figcaption>封面（token 1.2s：标题场景）</figcaption>
+    </figure>
+
+    <h2>分镜（共 8 段，27.4s）</h2>
+    <ul>
+        <li>0.0–3.4 标题：时间驱动，没有「帧」，只有秒与关键帧</li>
+        <li>3.4–7.0 编排：一个工作区只做一件事</li>
+        <li>7.0–10.6 纹理属于关键帧：key.drawing / 显式空白 / 沿用</li>
+        <li>10.6–14.2 画板只编辑一张纹理：自带画布与相机</li>
+        <li>14.2–17.8 笔刷：晕染 + 离散点</li>
+        <li>17.8–21.2 工具条一行：笔刷 / 色块 / 大小 / 透明 / 取色 / 镜像 / 撤销</li>
+        <li>21.2–24.2 进出：PSD 导入、WebM / 精灵图 / PNG 序列、项目存档</li>
+        <li>24.2–27.4 结尾：仓库地址</li>
+    </ul>
+
+    <h2>重新生成</h2>
+    <p>宣传片是「代码画的」，不是录屏：<code>app/promo/promo.js</code> 导出确定性渲染 <code>draw(g, t, w, h)</code> 与两个录制入口。</p>
+    <ul>
+        <li>预览：浏览器打开 <code>app/promo/index.html</code>（需由本机静态服务托管，路径 <code>/promo/index.html</code>）</li>
+        <li>录制：在应用页面里 <code>const P = await import('./promo/promo.js'); await P.preload(); const r = await P.record({fps:30})</code>，
+            再把 <code>r.bytes</code> 落到 <code>docs/promo/motionstudio-promo.webm</code></li>
+        <li>注意：应用窗口必须可见（<code>document.hidden === false</code>）。窗口被遮挡/最小化时 Chromium 会节流 rAF 与合帧，
+            MediaRecorder 录出来是静止画面。另一种 <code>encodeWebM()</code> 用 WebCodecs 逐帧编码（与可见性无关），
+            但自写的 WebM 封装没有 Cues，拖动进度条同样会回到开头。</li>
+    </ul>
+</main>
+</body>
+</html>
