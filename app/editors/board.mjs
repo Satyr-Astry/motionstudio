@@ -252,7 +252,14 @@ export function mount(el, ctx) {
     const cam = { zoom: 1, panX: 0, panY: 0 };
     let fittedFor = '';
 
-    function fit() {
+    /**
+     * 把整张纹理缩放到刚好可见。**只动视图相机，不动像素**。
+     * silent 用于启动/换图后的自动适配（每次都弹提示会很吵）；
+     * 用户主动点「适配」时会区分「本来就在适配位」和「刚适配过」，
+     * 否则零变化会让人以为按钮坏了（见 docs/修复列表-v8.md §1s）。
+     */
+    function fit(opts) {
+        const silent = !!(opts && opts.silent);
         userCam = false;
         const img = texture();
         const r = canvas.getBoundingClientRect();
@@ -261,10 +268,17 @@ export function mount(el, ctx) {
         const w = img ? img.width : 640;
         const h = img ? img.height : 480;
         const z = Math.min((vw - 24) / w, (vh - 24) / h);
+        const same = Math.abs(cam.zoom - Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z))) < 1e-6
+            && Math.abs(cam.panX - Math.round((vw - w * Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z))) / 2)) <= 1
+            && Math.abs(cam.panY - Math.round((vh - h * Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z))) / 2)) <= 1;
         cam.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
         cam.panX = Math.round((vw - w * cam.zoom) / 2);
         cam.panY = Math.round((vh - h * cam.zoom) / 2);
         draw();
+        if (silent) return;
+        notify(same
+            ? '视图已经在适配位置：整张纹理都可见。要去掉四周的透明区，用「裁到内容」'
+            : '已适配视图：整张纹理铺满可视区（不动像素）');
     }
 
     /** 画布尺寸或纹理换了 → 重新适配一次（适配过就不再打扰）。 */
@@ -273,7 +287,7 @@ export function mount(el, ctx) {
         const key = (img ? img.width + 'x' + img.height : 'none') + '@' + Math.round(canvas.clientWidth) + 'x' + Math.round(canvas.clientHeight);
         if (key === fittedFor) return;
         fittedFor = key;
-        fit();
+        fit({ silent: true });
     }
 
     /* ── DOM：工具条 ── */
@@ -397,7 +411,7 @@ export function mount(el, ctx) {
         // 查询会命中错的那个（W20 的端到端脚本就踩过），一个面板内不必让路，跨面板必须唯一。
         ['new-tex', 'plus', '纹理', '新建一张空白纹理并绑定到当前时刻'],
         ['unique', 'sparkle', '独特化', '把当前纹理拷一份，之后改它不影响别处'],
-        ['fit', 'fit', '适配', '缩放到刚好放下这张纹理（0 键）'],
+        ['fit', 'fit', '适配', '把整张纹理缩放到刚好可见（只动视图，不改像素）· 0 键'],
     ]) {
         const btn = mk('button', 'bd-act');
         btn.type = 'button';

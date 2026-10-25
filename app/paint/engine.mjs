@@ -200,16 +200,24 @@ export function createEngine(opts) {
     }
 
     function fitView() {
-        if (!view) return;
+        if (!view) return false;
         const { w, h } = docSize();
         const r = view.getBoundingClientRect();
         const vw = Math.max(32, r.width || host.clientWidth || w);
         const vh = Math.max(32, r.height || host.clientHeight || h);
         const z = Math.min((vw - 24) / w, (vh - 24) / h);
-        state.zoom = Math.max(0.05, Math.min(8, z));
-        state.panX = Math.round((vw - w * state.zoom) / 2);
-        state.panY = Math.round((vh - h * state.zoom) / 2);
+        const nz = Math.max(0.05, Math.min(8, z));
+        const nx = Math.round((vw - w * nz) / 2);
+        const ny = Math.round((vh - h * nz) / 2);
+        // 返回「这次是否真的改变了视图」：调用方要靠它区分「适配过」和「本来就在适配位」，
+        // 否则零变化会让人以为按钮坏了（与 board.mjs fit() 同一处理，见台账 §1s）。
+        const changed = Math.abs(nz - state.zoom) > 1e-6
+            || Math.abs(nx - state.panX) > 1 || Math.abs(ny - state.panY) > 1;
+        state.zoom = nz;
+        state.panX = nx;
+        state.panY = ny;
         scheduleRender();
+        return changed;
     }
 
     function setZoom(z, cx, cy) {

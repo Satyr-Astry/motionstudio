@@ -278,8 +278,14 @@ export function buildChrome(deps) {
 
     const onFit = () => {
         if (!docReady() || !engine || typeof engine.fitView !== 'function') return;
-        engine.fitView();
+        const changed = engine.fitView();
         syncZoom();
+        // 零变化也要说一句，否则用户会以为按钮坏了（与画板同名按钮同一处理）
+        if (typeof ctx.notify === 'function') {
+            ctx.notify(changed
+                ? '已适配视图：整幅画布铺满可视区'
+                : '视图已经在适配位置：整幅画布都可见');
+        }
     };
     const onZoom = () => {
         if (!docReady() || !engine || typeof engine.setZoom !== 'function') return;
