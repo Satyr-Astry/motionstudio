@@ -330,12 +330,15 @@ body {
 }
 
 /* 关键：max-width + 可收缩 —— 缺了 max-width 会被压到只剩下拉箭头；
-   但也不能 `flex: 0 0 auto`（永不让位），否则面板一窄就把整条标题顶出边界。 */
+   但也不能 `flex: 0 0 auto`（永不让位），否则面板一窄就把整条标题顶出边界。
+   min-width 是第三条边界：设置工作区在 1000×620 时有一个面板只剩 70px 宽，
+   没有 min-width 时这个下拉被压成 8px（实测 select.area-type 8×22，等于点不到），
+   宁可让右侧的浮动/关闭按钮被 `.area-head` 的 overflow 裁掉。 */
 select.area-type {
     flex: 0 1 auto;
     width: auto;
     max-width: 118px;
-    min-width: 0;
+    min-width: 44px;
     height: var(--h-btn);
     padding: 0 3px;
     background: var(--panel);
