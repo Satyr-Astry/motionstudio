@@ -356,7 +356,7 @@ canvas.pal-sv-canvas {
 /* 色相条：轨道直接画 0→360 的渐变（语义固定的彩虹，不算主题色）。
    JS 不再设 background，块状轨道与白色竖条手柄全在这里。 */
 input.pal-hue {
-    -webkit-appearance: none; appearance: none; flex: 0 0 14px; width: 100%; height: 14px;
+    -webkit-appearance: none; appearance: none; flex: 0 0 20px; width: 100%; height: 20px;
     padding: 0; border: 1px solid var(--line-2); border-radius: var(--r-1);
     background: linear-gradient(
         to right,
@@ -619,39 +619,42 @@ button.prop-seg.is-on {
     color: #fff;
 }
 
-/* 小开关：34×16 轨道 + 12px 滑块，靠 ::after 半像素对齐。胶囊形只属于开关与圆点 */
+/* 小开关：34×22 命中盒，轨道 34×16 垂直居中，12px 滑块。
+   以前是「16px 高的按钮 + 透明伪元素撑命中区」——指针手感够，但元素盒本身只有 16px，
+   审计量 getBoundingClientRect 仍判矮。改成盒子就是 22，轨道降级为 ::before。 */
 button.prop-toggle {
-    position: relative; flex: 0 0 auto; width: 34px; min-width: 34px; height: 16px;
-    padding: 0; border: 1px solid var(--line-2); border-radius: var(--r-pill);
-    background: var(--line); cursor: pointer;
+    position: relative; flex: 0 0 auto; width: 34px; min-width: 34px; height: 22px;
+    padding: 0; border: 0; background: none; cursor: pointer;
+}
+
+button.prop-toggle::before {
+    content: "";
+    position: absolute; left: 0; right: 0; top: 3px; height: 16px;
+    border: 1px solid var(--line-2); border-radius: var(--r-pill);
+    background: var(--line);
+    transition: background-color var(--t-fast), border-color var(--t-fast);
 }
 
 button.prop-toggle::after {
-    content: ""; position: absolute; left: 1px; top: 1px; width: 12px; height: 12px;
+    content: ""; position: absolute; left: 2px; top: 5px; width: 12px; height: 12px;
     border-radius: 50%; background: var(--ink-faint);
-    transition: transform 80ms linear, background-color 80ms linear;
-}
-
-/* 轨道本身只有 34×16（16px 高，矮于 24px 的可点下限）：
-   用透明伪元素把命中区上下各撑 3px，视觉不动，手感回到 34×22。
-   滑块占了 ::after，这里用 ::before，互不干扰。 */
-button.prop-toggle::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: -3px;
-    bottom: -3px;
+    transition: transform var(--t-fast), background-color var(--t-fast);
 }
 
 button.prop-toggle:hover::after { background: var(--ink-dim); }
 
-button.prop-toggle.is-on {
+button.prop-toggle.is-on::before {
     background: var(--ok); border-color: var(--ok);
 }
 
 button.prop-toggle.is-on::after {
     background: var(--ink); transform: translateX(18px);
+}
+
+/* 属性面板里的复选框（对象「显示」）：原生控件 14px 宽，配 22px 行高时命中区只有 14×22，
+   低于 20 的可点下限。拉到 20×20 —— 原生绘制跟着缩小一圈，观感反而更整齐，整格都可点。 */
+input.prop-check {
+    width: 20px; height: 20px; margin: 0; accent-color: var(--accent);
 }
 
 /* ═══════════════ 变换 xform（内嵌在 properties 的 .prop-body[data-k=xform]） ═══════════════ */

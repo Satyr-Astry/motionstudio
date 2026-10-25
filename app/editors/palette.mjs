@@ -198,11 +198,9 @@ export function mount(el, ctx) {
     val.value = '0';
     val.title = '明度 0–100';
     val.setAttribute('aria-label', '明度');
-    // UA 给 range 自带 2px 外边距，会把「width:100%」顶出内容盒 4px（面板 overflow-x:hidden 后表现为右侧被切）
+    // 尺寸全交给 CSS 的 input.pal-hue（18px 换成 20px 时不该有第二处要改）；
+    // 只有 UA 的 2px 外边距必须在这里清掉——否则 width:100% 会顶出内容盒，被面板裁掉右侧。
     val.style.margin = '0';
-    val.style.flex = '0 0 18px';
-    val.style.height = '18px';
-    val.style.minHeight = '18px';
 
     /* 色相：固定 18px 一条，不参与伸缩 */
     const hue = document.createElement('input');
@@ -215,9 +213,6 @@ export function mount(el, ctx) {
     hue.title = '色相 0–359';
     hue.setAttribute('aria-label', '色相');
     hue.style.margin = '0'; // 同上：清掉 UA 外边距，100% 才不会被顶出内容盒
-    hue.style.flex = '0 0 18px';
-    hue.style.height = '18px';
-    hue.style.minHeight = '18px';
 
     /* 最近用色 */
     const recentRow = mk('div', 'pal-recent');

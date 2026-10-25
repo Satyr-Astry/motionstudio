@@ -19,7 +19,10 @@
 
 .bd .bd-bar {
     flex-wrap: nowrap;
-    gap: 5px;
+    /* 4px 而非 5px：1000×620 下 `.bd-bar` 只有 760px，而桶/取色这类「点一下生效」的
+       工具还会再进来。21 个间隔各让 1px = 省 11px，把「加一个 22px 按钮」的预算留出来，
+       换来的是 1000 宽下不出现横向滚动。间距差 1px 肉眼读不出来，滚动条是实打实的。 */
+    gap: 4px;
     min-width: 0;
     overflow-x: auto;
     overflow-y: hidden;
