@@ -2039,6 +2039,11 @@ body.is-dropping #ws-host::after {
     flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
+    /* 最小窗口下浮层内容比框高：滚动条必须看得见（Firefox/Chromium 同名属性），
+       否则用户看到的是「列表到这儿就没了」。overscroll 防止滚到底把整页带着走。 */
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-2) transparent;
+    overscroll-behavior: contain;
     padding: 10px 12px 12px;
     columns: 2;
     column-gap: 22px;
@@ -2078,6 +2083,19 @@ body.is-dropping #ws-host::after {
     border-top: 1px solid var(--line);
     color: var(--ink-faint);
     font-size: 10px;
+}
+
+/* 最小窗口（1000×620）：两列 36 行实测 .keys-body clientHeight 395 / scrollHeight 457，
+   约 1.5 行被滚出视野。高度不足 700px 时加宽浮层改三列并放宽到 84vh —— 数据、结构与行高都不动。 */
+@media (max-height: 700px) {
+    .keys-box {
+        width: 900px;
+        max-height: 84vh;
+    }
+    .keys-body {
+        columns: 3;
+        column-gap: 18px;
+    }
 }
 
 /* ═══════════════ v8：区域折叠（双击标题栏） ═══════════════
