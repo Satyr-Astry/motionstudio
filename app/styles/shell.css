@@ -84,9 +84,13 @@ body {
     flex: 0 1 auto;
 }
 
+/* 右侧读数（画布尺寸 / 时间 / 帧号）是用户会盯着看的数字：
+   用 ink-dim 而不是 ink-faint（faint 在白底深色上对比度不足），
+   数字走等宽字形，播放时不会左右抖。 */
 .stb-right {
     flex: 0 0 auto;
-    color: var(--ink-faint);
+    color: var(--ink-dim);
+    font-variant-numeric: tabular-nums;
 }
 
 /* ═══════════════ 顶栏 ═══════════════ */
@@ -110,6 +114,11 @@ body {
     display: flex;
     align-items: center;
     gap: 2px;
+    /* 品牌字与文件动作之间来一道 1px 竖线：顶栏三段（品牌 / 文件 / 项目）各自的起点一目了然，
+       没有这条线时「MotionStudio」与最左的「＋」会读成同一个词组。 */
+    margin-left: var(--sp-2);
+    padding-left: var(--sp-2);
+    border-left: 1px solid var(--line);
 }
 
 .top-file-btn {
@@ -141,6 +150,10 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    /* 与文件动作分开：撤销/重做属于文件段，项目名是新的一段 */
+    margin-left: var(--sp-3);
+    padding-left: var(--sp-3);
+    border-left: 1px solid var(--line);
 }
 
 .top-project.is-dirty {
@@ -228,7 +241,7 @@ body {
     margin-left: 6px;
     text-align: right;
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-    font-size: 11.5px;
+    font-size: 12px;
     font-variant-numeric: tabular-nums;
     color: var(--ink-dim);
     white-space: nowrap;
@@ -288,6 +301,10 @@ body {
     cursor: default;
     -webkit-user-select: none;
     user-select: none;
+    /* 面板被拖到极窄（设置工作区 1000×620 下实测出现过 70px 宽的面板）时，
+       标题条宁可裁掉尾部按钮，也不许把内容顶出面板画到邻居身上。 */
+    min-width: 0;
+    overflow: hidden;
 }
 
 /* 拖动柄：10px 的竖向触区，悬停点亮 */
@@ -312,9 +329,10 @@ body {
     background: var(--accent-2);
 }
 
-/* 关键：flex:0 0 auto + max-width —— 缺了这两条，select 会被压到只剩下拉箭头 */
+/* 关键：max-width + 可收缩 —— 缺了 max-width 会被压到只剩下拉箭头；
+   但也不能 `flex: 0 0 auto`（永不让位），否则面板一窄就把整条标题顶出边界。 */
 select.area-type {
-    flex: 0 0 auto;
+    flex: 0 1 auto;
     width: auto;
     max-width: 118px;
     min-width: 0;

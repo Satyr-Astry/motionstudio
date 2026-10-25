@@ -23,6 +23,7 @@ import * as ipc from './ipc.mjs';
 import { importBuffer, pickAndImport } from './import-file.mjs';
 import * as store from './project-store.mjs';
 import { buildSpritesheet } from './spritesheet.mjs';
+import { icon } from '../core/icons.mjs';
 import { pickVideoMime, videoBitrate, videoCanvasSize, videoFps, videoFrameCount, videoSeconds } from './video-plan.mjs';
 import {
     DEFAULT_W,
@@ -469,27 +470,36 @@ const MODAL_CSS = [
     '.ms-modal .prj-empty{display:none}',
     '.ms-modal .prj-count{color:var(--ink-dim)}',
     '.ms-modal .prj-gap{flex:1 1 auto}',
-    '.ms-modal .prj-btn{font:inherit;color:var(--ink);background:var(--panel-2);border:1px solid var(--line-2);border-radius:5px;padding:3px 9px;cursor:pointer}',
+    '.ms-modal .prj-btn{font:inherit;color:var(--ink);background:var(--panel-2);border:1px solid var(--line-2);border-radius:var(--r-1);padding:3px 9px;cursor:pointer}',
     '.ms-modal .prj-btn:hover{background:var(--surface)}',
     '.ms-modal .prj-btn:active{background:var(--bg-2)}',
-    '.ms-modal .prj-hint{padding:4px 12px;color:var(--ink-faint);font-size:11.5px;border-bottom:1px solid var(--line)}',
+    '.ms-modal .prj-hint{padding:4px 12px;color:var(--ink-faint);font-size:12px;border-bottom:1px solid var(--line)}',
     '.ms-modal .prj-list{flex:1 1 auto;min-height:0;overflow:auto;padding:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;align-content:start}',
-    '.ms-modal .prj-card{display:grid;grid-template-columns:104px minmax(0,1fr);grid-template-areas:"thumb meta" "thumb actions";align-items:start;gap:6px 10px;padding:8px;border:1px solid var(--line-2);border-radius:7px;background:var(--panel-2);cursor:pointer}',
+    '.ms-modal .prj-card{display:grid;grid-template-columns:104px minmax(0,1fr);grid-template-areas:"thumb meta" "thumb actions";align-items:start;gap:6px 10px;padding:8px;border:1px solid var(--line-2);border-radius:var(--r-2);background:var(--panel-2);cursor:pointer}',
     '.ms-modal .prj-card:hover{border-color:var(--ink-faint)}',
     '.ms-modal .prj-card.is-current{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}',
-    '.ms-modal .prj-thumb{grid-area:thumb;width:104px;height:74px;border-radius:5px;overflow:hidden;background:var(--bg-2);display:flex;align-items:center;justify-content:center}',
+    '.ms-modal .prj-thumb{grid-area:thumb;width:104px;height:74px;border-radius:var(--r-1);overflow:hidden;background:var(--bg-2);display:flex;align-items:center;justify-content:center}',
     '.ms-modal .prj-thumb-img{width:100%;height:100%;object-fit:cover;display:block}',
     '.ms-modal .prj-thumb-empty{color:var(--ink-faint);font-size:11px}',
     '.ms-modal .prj-meta{grid-area:meta;min-width:0;display:flex;flex-direction:column;gap:2px}',
     '.ms-modal .prj-name-row{display:flex;align-items:center;gap:6px;min-width:0}',
     '.ms-modal .prj-name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-    '.ms-modal .prj-badge{flex:0 0 auto;font-size:10.5px;line-height:1.6;padding:0 5px;border-radius:4px;background:rgba(74,125,255,.22);color:var(--ink)}',
-    '.ms-modal .prj-sub,.ms-modal .prj-time{color:var(--ink-dim);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+    '.ms-modal .prj-badge{flex:0 0 auto;font-size:11px;line-height:1.6;padding:0 5px;border-radius:var(--r-1);background:rgba(74,125,255,.22);color:var(--ink)}',
+    '.ms-modal .prj-sub,.ms-modal .prj-time{color:var(--ink-dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
     '.ms-modal .prj-actions{grid-area:actions;display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}',
-    '.ms-modal .prj-actions .prj-btn{padding:2px 7px;font-size:11.5px}',
-    '.ms-modal .prj-rename{font:inherit;color:var(--ink);background:var(--bg-2);border:1px solid var(--accent);border-radius:5px;padding:2px 6px;width:150px;min-width:0}',
+    '.ms-modal .prj-actions .prj-btn{padding:2px 7px;font-size:12px}',
+    '.ms-modal .prj-rename{font:inherit;color:var(--ink);background:var(--bg-2);border:1px solid var(--accent);border-radius:var(--r-1);padding:2px 6px;width:150px;min-width:0}',
     '.ms-modal .prj-empty{padding:24px 12px;text-align:center;color:var(--ink-faint)}',
     '.ms-modal .prj-off{opacity:.5}',
+    // 空库时的唯一主行动：放在列表区正中（grid 里跨满整行），而不是塞在工具栏上方当第二排按钮。
+    '.ms-modal .ms-modal-cta{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:46px 16px;text-align:center}',
+    '.ms-modal .ms-modal-cta-icon{display:flex;color:var(--ink-faint)}',
+    '.ms-modal .ms-modal-cta-icon .ms-icon{width:var(--icon-lg);height:var(--icon-lg);stroke-width:1.4}',
+    '.ms-modal .ms-modal-cta-tip{color:var(--ink-dim);font-size:13px}',
+    '.ms-modal .ms-modal-cta-sub{color:var(--ink-faint);font-size:12px}',
+    '.ms-modal .ms-modal-cta-btn{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;padding:7px 16px;border:1px solid var(--accent);border-radius:var(--r-2);background:rgba(74,125,255,.16);color:var(--ink);cursor:pointer;transition:background-color var(--t-fast)}',
+    '.ms-modal .ms-modal-cta-btn:hover{background:rgba(74,125,255,.26)}',
+    '.ms-modal .ms-modal-cta-btn:active{background:rgba(74,125,255,.34)}',
 ].join('\n');
 
 /** 惰性注入上面的样式表（只插一次）。 */
@@ -535,25 +545,26 @@ function syncProjectsCta(m) {
             }
             if (old) return;
             const cta = el('div', 'ms-modal-cta');
-            cta.style.display = 'flex';
-            cta.style.flexDirection = 'column';
-            cta.style.alignItems = 'center';
-            cta.style.gap = '10px';
-            cta.style.padding = '28px 16px 20px';
-            const tip = el('div', 'ms-modal-cta-tip', '还没有已保存的项目');
-            tip.style.opacity = '.72';
-            const btn = el('button', 'ms-modal-cta-btn', '＋ 新建项目');
+            const iconBox = el('div', 'ms-modal-cta-icon');
+            iconBox.innerHTML = icon('folder-open');
+            const tip = el('div', 'ms-modal-cta-tip', '项目库还是空的');
+            const sub = el('div', 'ms-modal-cta-sub', '新建一个项目开始画；也可以把 .msp 存档或 PSD 拖进窗口导入');
+            const btn = el('button', 'ms-modal-cta-btn');
             btn.type = 'button';
-            btn.style.cursor = 'pointer';
-            btn.style.padding = '8px 16px';
-            btn.style.font = 'inherit';
+            btn.innerHTML = icon('plus') + '<span>新建项目</span>';
             btn.addEventListener('click', () => {
                 closeProjectsModal();
                 newProject();
             });
+            cta.appendChild(iconBox);
             cta.appendChild(tip);
+            cta.appendChild(sub);
             cta.appendChild(btn);
-            body.insertBefore(cta, body.firstChild || null);
+            // 列表区是 grid（auto-fill 卡片），CTA 在 grid 里跨满整行居中；
+            // 没有列表容器时才退回面板顶部。
+            const listHost = (typeof body.querySelector === 'function' && body.querySelector('.prj-list')) || null;
+            if (listHost) listHost.appendChild(cta);
+            else body.insertBefore(cta, body.firstChild || null);
         })
         .catch(() => {
             /* 读库失败时面板自己会给提示 */

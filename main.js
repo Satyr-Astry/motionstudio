@@ -190,6 +190,13 @@ function createWindow() {
             evt.preventDefault();
         }
     });
+    // 应用自己的 Ctrl+滚轮用途：画板调稳定器档位、时间轴以指针为锚缩放。
+    // 把浏览器级缩放锁死（含触控板捏合），保证这两种手势不会被 Chromium 抢走、把整个界面放大。
+    // 实测边界（ms-view/verify-zoom-real.mjs，Win32 SendInput 真实 Ctrl+滚轮）：
+    //   本机 Electron 40 上即便没有这两行，Ctrl+滚轮也不缩放页面（负对照 pageZoomed=false）。
+    //   所以这是「把策略写死」的防御性约束，不是已复现缺陷的修复；捏合手势无法用该手段验证。
+    win.webContents.setVisualZoomLevelLimits(1, 1);
+    win.webContents.on('zoom-changed', (evt) => evt.preventDefault());
     win.webContents.setWindowOpenHandler(({ url }) => {
         if (/^https?:/i.test(url)) shell.openExternal(url);
         return { action: 'deny' };

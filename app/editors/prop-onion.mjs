@@ -15,6 +15,8 @@ export function mount(el, ctx) {
     onionToggle.type = 'button';
     onionToggle.className = 'prop-toggle';
     onionToggle.textContent = '开';
+    onionToggle.title = '洋葱皮：开 / 关';
+    onionToggle.setAttribute('aria-label', '洋葱皮开关');
     toggleField.appendChild(onionToggle);
     const beforeInput = makeNum(onionBody, '前方帧数', { min: 0, max: 8, step: 1, value: 1, key: 'onion-before' });
     const afterInput = makeNum(onionBody, '后方帧数', { min: 0, max: 8, step: 1, value: 1, key: 'onion-after' });

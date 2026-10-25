@@ -12,18 +12,25 @@
 
 import { handlePoints } from '../core/element.mjs';
 import { objectsOf } from '../core/doc-model.mjs';
+import { icon } from '../core/icons.mjs';
 
 export function zoomText(engine) {
     const z = engine && typeof engine.zoom === 'function' ? Number(engine.zoom()) : 1;
     return Math.round((Number.isFinite(z) && z > 0 ? z : 1) * 100) + '%';
 }
 
-function mkBtn(act, label) {
+function mkBtn(act, label, title, html) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'cv-hud-btn';
     b.dataset.act = act;
-    b.textContent = label;
+    // html 给的是图标串（已转义过），否则就是纯文字标签
+    if (html) b.innerHTML = html;
+    else b.textContent = label;
+    if (title) {
+        b.title = title;
+        b.setAttribute('aria-label', title);
+    }
     return b;
 }
 
@@ -46,10 +53,16 @@ export function buildChrome(deps) {
 
     const hud = document.createElement('div');
     hud.className = 'cv-hud';
-    const fitBtn = mkBtn('fit', '适配');
-    const zoomBtn = mkBtn('zoom', zoomText(engine));
-    hud.appendChild(fitBtn);
+    // 缩放控件组：− 百分比 ＋ 适配。百分比本身是「回到 100%」的按钮，
+    // 这里排成一段连续的控制带，比原来两个孤立按钮更好认（AE / Krita 的通行做法）。
+    const outBtn = mkBtn('out', '', '缩小一级（Ctrl+滚轮向下）', icon('minus'));
+    const zoomBtn = mkBtn('zoom', zoomText(engine), '点按回到 100%');
+    const inBtn = mkBtn('in', '', '放大一级（Ctrl+滚轮向上）', icon('plus'));
+    const fitBtn = mkBtn('fit', '适配', '缩放到刚好铺满视图（0）', icon('fit') + '<span>适配</span>');
+    hud.appendChild(outBtn);
     hud.appendChild(zoomBtn);
+    hud.appendChild(inBtn);
+    hud.appendChild(fitBtn);
     el.appendChild(hud);
 
     /* ── 叠加层画布（pointer-events:none，只负责显示） ── */
@@ -273,11 +286,21 @@ export function buildChrome(deps) {
         engine.setZoom(1);
         syncZoom();
     };
+    // 视角围绕视图中心缩放（zoomBy 的 cx/cy 省略即为中心，见 paint/engine.mjs:187）
+    const zoomStep = (k) => {
+        if (!docReady() || !engine || typeof engine.zoomBy !== 'function') return;
+        engine.zoomBy(k);
+        syncZoom();
+    };
+    const onOut = () => zoomStep(1 / 1.25);
+    const onIn = () => zoomStep(1.25);
     const onWheel = () => syncZoom();
     const onWinResize = () => syncZoom();
 
     fitBtn.addEventListener('click', onFit);
     zoomBtn.addEventListener('click', onZoom);
+    outBtn.addEventListener('click', onOut);
+    inBtn.addEventListener('click', onIn);
     host.addEventListener('wheel', onWheel, { passive: true });
     window.addEventListener('resize', onWinResize);
 
@@ -299,6 +322,8 @@ export function buildChrome(deps) {
     const disposeHud = () => {
         fitBtn.removeEventListener('click', onFit);
         zoomBtn.removeEventListener('click', onZoom);
+        outBtn.removeEventListener('click', onOut);
+        inBtn.removeEventListener('click', onIn);
         host.removeEventListener('wheel', onWheel);
         window.removeEventListener('resize', onWinResize);
         if (ro) ro.disconnect();
@@ -306,5 +331,5 @@ export function buildChrome(deps) {
         polls = 0;
     };
 
-    return { hud, fitBtn, zoomBtn, gizmo, obar, fxMenu, syncZoom, updateObjectBar, hideBar, ensureVisibleHost, disposeHud };
+    return { hud, fitBtn, zoomBtn, outBtn, inBtn, gizmo, obar, fxMenu, syncZoom, updateObjectBar, hideBar, ensureVisibleHost, disposeHud };
 }

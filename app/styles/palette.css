@@ -90,7 +90,7 @@
     padding: 0 6px;
     line-height: var(--h-head);
     color: var(--ink-faint);
-    font-size: 10.5px;
+    font-size: 11px;
     letter-spacing: 0.04em;
     white-space: nowrap;
     overflow: hidden;
@@ -150,7 +150,7 @@
     white-space: nowrap;
     text-overflow: ellipsis;
     color: var(--ink-faint);
-    font-size: 10.5px;
+    font-size: 11px;
 }
 
 .cmd-keys {
@@ -159,7 +159,7 @@
     padding-left: 12px;
     color: var(--ink-faint);
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-    font-size: 10.5px;
+    font-size: 11px;
     white-space: nowrap;
 }
 
@@ -204,6 +204,6 @@
     background: var(--panel-2);
     border-top: 1px solid var(--line);
     color: var(--ink-faint);
-    font-size: 10.5px;
+    font-size: 11px;
     white-space: nowrap;
 }
