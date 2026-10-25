@@ -174,10 +174,13 @@ npm run check   # 静态一致性：帧概念残留 + 失效 import
 
 ## 文档
 
+> 全部文档的索引：[docs/README.md](docs/README.md)（契约 / 账本 / 专题三类，新增文档的规矩也写在那里）
+
 - [使用说明](docs/使用说明.md) —— 概念、工作区、画板、时间轴、导出
 - [CONTRACT-v8-分区与时间轴](docs/CONTRACT-v8-分区与时间轴.md) —— 分区、画板控件、纹理与关键帧契约
 - [CONTRACT-v6-时间模型](docs/CONTRACT-v6-时间模型.md) —— 「没有帧，只有时间」的数据模型
 - [修复列表-v8](docs/修复列表-v8.md) —— 逐条问题的根因、修法与真机验证
+- [画板与 Klecks 对照](docs/画板-与klecks对照-2026-10.md) —— 复刻进度、缺口与有意差异（带 Klecks 源码行号）
 - [宣传片](docs/promo/motionstudio-promo.webm) —— 27 秒概览（WebM）
 
 ## License
