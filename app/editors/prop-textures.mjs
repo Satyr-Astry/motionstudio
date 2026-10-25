@@ -192,13 +192,14 @@ export function mount(el, ctx) {
     sizeW.setAttribute('aria-label', '纹理宽度（像素）');
     sizeH.setAttribute('aria-label', '纹理高度（像素）');
 
-    /* ⑤ 重设 + 对齐三档同一行：44px 标签 + 一个按钮 + 三个分段在 292px 面板里放得下
+    /* ⑤ 尺寸重设 + 对齐三档同一行：44px 标签 + 「应用」按钮 + 三个分段在 292px 面板里放得下
+       （行标签叫「重设」、按钮叫「应用」—— v11 前两处都叫「重设」，一行动词重复读着别扭）
        （.prop-row 自带 flex-wrap，真挤了也是换行，不会横向溢出）。 */
     const applyField = makeRow(body, '重设');
     const applyBtn = document.createElement('button');
     applyBtn.type = 'button';
     applyBtn.className = 'prop-seg ptx-apply';
-    applyBtn.textContent = '重设';
+    applyBtn.textContent = '应用';
     applyBtn.title = '按上面的宽 × 高重设纹理画布（旧内容按对齐档落位）';
     applyBtn.setAttribute('aria-label', applyBtn.title);
     applyField.appendChild(applyBtn);

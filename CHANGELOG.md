@@ -1,3 +1,29 @@
+## v0.4.0-alpha.12 — 2026-10-26 · 叠放与父子彻底分离 + Blender 式列表拖拽
+
+这一版把「层级」和「叠放」从**数据**到**手势**都拆干净：改谁就只改谁，另一个数据一个字节都不动。
+
+### 叠放面板：只改叠放
+- 拖拽落点收成两区（插到这一行之上 / 之下），写入只走 `ctx.moveDrawOrder` —— v10 之前这里调 `moveSubtree`（改 parentId），在叠放面板拖一下会静默改掉父子关系。
+- `↑ / ↓` 改走 `drawOrder`（以前调 `reorderObject` 改 `doc.objects`，在 drawOrder 世界里点了没反应）。
+- 「向下合并」的「下层」按 `drawOrder` 取（视觉上压在它下面的那个），不再按数组下一个。
+
+### 父子面板：三区落点（Blender Outliner 手感）
+- 行上缘 25% = 插到它上面（成为同一父级的兄弟）、中段 50% = 成为它的子对象、下缘 25% = 插到它下面；`before/after` 画 2px 强调线 + 左端圆点，`into` 是虚线框。
+- 拖到空白 = 脱父并排到最底（`rootEnd`）。
+- 拖进自己的子孙 → 淡红底 + 禁手光标（不弹窗，指针不动就能看出为什么）。
+- 全部走 `ctx.moveSubtree`：一次 `setDoc`、一条撤销，**层级与叠放一起回退**。
+
+### core
+- `moveSubtreeDoc` 补第 3 步：整块子树在 `drawOrder` 里跟着搬（`before` → 目标子树首项之前，`after`/`into` → 目标子树末项之后，`rootEnd` → 末尾），末尾 `normalizeDrawOrder`。
+- `app/core/layer-order.mjs` 新增 `treeZone(ratio)`、`reorderIndex(order, id, targetId, where)`（返回「移除自身之后」的下标，向下拖不会差一位）。
+
+### 顺带修的
+- 属性面板「纹理」组那行「重设」与按钮重名 → 按钮叫「应用」。
+- 三处注释还写着 v10 前的两步模型（`setLayerParent` + `moveLayerTo`），已改成「层级走 moveSubtree、叠放走 moveDrawOrder」。
+- 落点判定曾因「先记落点再清落点」导致上缘被当成中段，调换顺序后正常。
+
+### 验证
+`1035 tests / 1033 pass / 2 skipped / 0 fail`；静态检查 82 模块、`node --check` 82/82。真机：叠放拖 `a,b,c → a,c,b` 且三行 `parentId` 全空；父子拖 `c` 到 `a` 中段 → `c:a` + `drawOrder a,c,b`，一次撤销两样一起回退；1000×620 下 `.tree` 无溢出。
 # MotionStudio 更新日志
 
 ## v0.3.0-alpha.11 — 2026-10-26 · 层级与叠放拆成两个模块，纹理搬进属性面板

@@ -8,6 +8,8 @@
 //
 // 本模块是纯函数集合：零 DOM、零副作用、不改入参、任何非法输入都不抛异常。
 
+import { drawOrderOf, normalizeDrawOrder } from './draw-order.mjs';
+
 // 这里刻意不 import doc-model 的 objectsOf：doc-model 反过来要用本模块的
 // normalizeTime / isIdentityTime，互相 import 会成环，导致整个 shell 的绑定
 // 全部 uninitialized（历史上真把 app 打成白屏过）。就三行，内联。
@@ -389,7 +391,31 @@ export function moveSubtreeDoc(doc, id, mode, targetId, offsetOf) {
         }
     }
     const next = rest.slice(0, at).concat(moving, rest.slice(at));
-    return { ok: true, doc: withObjects(base, next) };
+    // 3) 叠放顺序跟着子树块一起搬（v10）：层级与叠放各管一处，但「拖到 A 的下面」这个意图
+    //    在列表上表达的是**显示位置**，而列表按 drawOrder 排。只动数组不动 drawOrder，
+    //    结果会是「树里插到 A 下面、叠放里留在原地」—— 用户看到的就是拖了没反应。
+    const order = drawOrderOf(base).filter((oid) => !subSet.has(oid));
+    let oAt = order.length;
+    if (mode !== 'rootEnd' && tid) {
+        const tSet = new Set(collectSubtree(base, tid));
+        const first = order.findIndex((oid) => tSet.has(oid));
+        if (first >= 0) {
+            if (mode === 'before') {
+                oAt = first;
+            } else {
+                let last = first;
+                order.forEach((oid, i) => { if (tSet.has(oid)) last = i; });
+                oAt = last + 1;
+            }
+        }
+    }
+    const nextOrder = order.slice(0, oAt).concat(subIds, order.slice(oAt));
+    return {
+        ok: true,
+        doc: Object.assign({}, withObjects(base, next), {
+            drawOrder: normalizeDrawOrder(next, nextOrder),
+        }),
+    };
 }
 
 /**

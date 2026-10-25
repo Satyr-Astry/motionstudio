@@ -531,6 +531,7 @@ input.pal-hue:focus-visible::-webkit-slider-thumb {
 }
 
 .tree-row {
+    position: relative;   /* v11：落点插入线用 ::before/::after 绝对定位在行边 */
     display: flex; align-items: center; gap: 4px; height: var(--h-row);
     padding-right: 6px; border-bottom: 1px solid var(--line);
     cursor: pointer; -webkit-user-select: none; user-select: none;
@@ -541,8 +542,7 @@ input.pal-hue:focus-visible::-webkit-slider-thumb {
 .tree-row.is-active {
     background: var(--sel-bg-strong); box-shadow: inset 2px 0 0 var(--sel-bar);
 }
-
-/* 拖到行上 = 成为它的子对象；这个面板没有行间落点，叠放顺序不归它管 */
+/* 拖到行中段 = 成为它的子对象（into）；行上下缘的插入线见下方 .drop-before/.drop-after */
 .tree-row.is-drop { background: var(--sel-bg-strong); outline: 1px dashed var(--accent); outline-offset: -1px; }
 .tree-list.is-drop-blank { box-shadow: inset 0 0 0 1px var(--accent); }
 
@@ -1510,10 +1510,41 @@ input.lyr-rename {
     background: var(--accent);
 }
 
-/* 投进这一行：整行高亮 + 1px 虚线框（和「插到前后」的横线区分开） */
-.lyr-row.drop-into {
-    background-color: var(--sel-bg-strong);
-    outline: 1px dashed var(--accent); outline-offset: -2px;
+/* v11：叠放列表不再有「投进去」这一区（改层级归「父子」面板），
+   .lyr-row.drop-into 随之下线 —— 落点只剩上下两条插入线。 */
+
+
+/* ── v11：父子面板的三区落点（Blender Outliner 手感） ──
+   before/after 用 2px 强调线 + 左端 3px 圆点（与叠放列表的插入线同一套语言），
+   into 沿用 .tree-row.is-drop 的虚线框。线用伪元素画，行高不变、不挤动列表。 */
+.tree-row.drop-before::before,
+.tree-row.drop-after::after {
+    content: '';
+    position: absolute; left: 6px; right: 6px; height: 2px;
+    background: var(--accent); border-radius: 1px;
+    pointer-events: none;
+}
+
+.tree-row.drop-before::before { top: -1px; }
+.tree-row.drop-after::after { bottom: -1px; }
+
+.tree-row.drop-before::after,
+.tree-row.drop-after::before {
+    content: '';
+    position: absolute; left: 3px; width: 5px; height: 5px;
+    margin-top: -1.5px;
+    border-radius: 50%; background: var(--accent);
+    pointer-events: none;
+}
+
+.tree-row.drop-before::after { top: -1px; }
+.tree-row.drop-after::before { bottom: -1px; }
+
+/* 非法落点（拖进自己的子孙 / 拖到自身）：淡红底 + 禁手，不弹窗 */
+.tree-row.drop-invalid {
+    background-color: color-mix(in srgb, var(--danger) 14%, transparent);
+    outline: 1px dashed var(--danger); outline-offset: -1px;
+    cursor: not-allowed;
 }
 
 /* 非法目标（自身 / 自己的后代）：danger 淡底 + 禁止光标 */

@@ -7,7 +7,9 @@
  * - 子对象必须排在父之后且连续（L3 的「父在子前」约定）。
  *
  * 本模块只回答「目标父级 + 目标全局下标」，真正的文档变更由调用方执行：
- * 先 `setParentDoc`（改 parentId），再 `reorderObject`（改顺序），两步都在 `ctx` 里。
+ * v10 起层级与叠放是两个独立事实（docs/层级与叠放-2026-10.md）——
+ * 改层级走 `ctx.moveSubtree`（只动 parentId 与子树块位置），改叠放走 `ctx.moveDrawOrder`
+ * （只动 `doc.drawOrder`）。两者互不代偿，本模块的 `*Target` 只服务层级那一路。
  * 这样键盘操作和拖拽可以共用同一条落点语义，也便于在 node 里直接测。
  */
 
@@ -148,4 +150,44 @@ export function layerKeyFromEvent(e) {
     default:
         return null;
     }
+}
+
+/**
+ * 父子面板的三区落点（模仿 Blender Outliner 的拖放手感）。
+ *
+ * 上缘 25% = `before`（成为目标的兄弟，排在它上面）、
+ * 下缘 25% = `after`（排在它下面）、中间 50% = `into`（成为它的子对象，追加到子列表末尾）。
+ * 叠放面板不用这个：那边只有「插到上面 / 插到下面」两区（见 `app/editors/layers.mjs` 的 `dropZone`）。
+ *
+ * @param {number} ratio 指针落在行内的比例 0–1
+ * @returns {'before'|'after'|'into'}
+ */
+export function treeZone(ratio) {
+    const r = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0.5;
+    if (r < 0.25) return 'before';
+    if (r > 0.75) return 'after';
+    return 'into';
+}
+
+/**
+ * 叠放面板的落点下标：把 `id` 插到 `targetId` 的上方或下方后，它在**移除自身之后**的数组里的位置。
+ *
+ * 为什么要「移除之后」的下标：`moveInOrder(order, id, index)` 的语义就是「先摘掉再插到 index」，
+ * 用移除前的下标会差一位（往下拖时差的那一位正好是自己）。
+ *
+ * @param {string[]} order 当前 drawOrder（`[0]` = 最上层）
+ * @param {string} id 被拖动的 id
+ * @param {string} targetId 落点行
+ * @param {'above'|'below'} where
+ * @returns {number} 可直接喂给 `moveInOrder` 的下标；找不到落点时返回 -1
+ */
+export function reorderIndex(order, id, targetId, where) {
+    const list = Array.isArray(order) ? order : [];
+    const key = id == null ? '' : String(id);
+    const target = targetId == null ? '' : String(targetId);
+    if (!key || !target || key === target) return -1;
+    const rest = list.filter((x) => x !== key);
+    const at = rest.indexOf(target);
+    if (at < 0) return -1;
+    return where === 'below' ? at + 1 : at;
 }

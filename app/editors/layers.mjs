@@ -2,10 +2,12 @@
 // 结构变更全部委托 core/cel.mjs 与 paint/ops.mjs 的纯函数，本文件只管交互与重绘。
 // 选中态：.is-active = 当前操作对象（ctx.activeLayerId），.is-sel = 画布/面板选中的对象（ctx.selection）。
 
-import { addLayer, removeLayer, moveLayer, patchLayer, celAt, imageAt, celTimes, objectsOf } from '../core/cel.mjs';
+import { addLayer, removeLayer, patchLayer, celAt, imageAt, celTimes, objectsOf } from '../core/cel.mjs';
 import { objectSize } from '../core/doc-model.mjs';
 import { icon } from '../core/icons.mjs';
 import { duplicateLayer, mergeDown } from '../paint/ops.mjs';
+import { reorderIndex } from '../core/layer-order.mjs';
+import { drawOrderOf } from '../core/draw-order.mjs';
 import { textureCount } from '../core/textures.mjs';
 
 // 对象种类文案（CONTRACT-v2 §1：kind = 'paint' 手绘 / 'image' 导入图片）
@@ -95,21 +97,19 @@ export function isDescendantId(all, id, ancestorId) {
     return subtreeIds(all, ancestorId).includes(id);
 }
 
-/** 三区判定：上缘 25% = 插到前、中间 50% = 投进去、下缘 25% = 插到后。 */
+/** 二区判定（叠放列表）：上半 = 插到这一行之上，下半 = 插到之下。
+ *  v11：叠放面板没有「投进去」这一区 —— 改层级是「父子」面板的事
+ *  （docs/层级与叠放-2026-10.md §5：一个手势只改一处数据）。 */
 export function dropZone(ratio) {
-    const r = Number.isFinite(ratio) ? ratio : 0.5;
-    if (r < 0.25) return 'before';
-    if (r > 0.75) return 'after';
-    return 'into';
+    const r = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0.5;
+    return r < 0.5 ? 'above' : 'below';
 }
 
-/** 落点合法性：非法时 reason 直接进 title / 光标提示，不弹窗。 */
-export function dropVerdict(all, fromId, targetId, mode) {
+/** 落点合法性：叠放只重排、不改父子，所以只禁止拖到自身。 */
+export function dropVerdict(all, fromId, targetId) {
     if (fromId == null) return { ok: false, reason: '没有可拖动的对象' };
-    if (mode === 'rootEnd') return { ok: true, reason: '' };
     if (targetId == null) return { ok: false, reason: '没有落点' };
-    if (fromId === targetId) return { ok: false, reason: '不能拖到自身' };
-    if (isDescendantId(all, targetId, fromId)) return { ok: false, reason: '不能拖进自己的子对象里' };
+    if (String(fromId) === String(targetId)) return { ok: false, reason: '不能拖到自身' };
     return { ok: true, reason: '' };
 }
 
@@ -196,7 +196,7 @@ export function mount(el, ctx) {
         const rowEl = e.target && e.target.closest ? e.target.closest('.lyr-row') : null;
         if (rowEl) return;   // 行内的落点由行自己处理
         e.preventDefault();
-        dropState = { targetId: null, mode: 'rootEnd', ok: true };
+        dropState = { targetId: null, where: 'below', ok: true };
         clearDropMarks();
         const last = visibleRows().pop() || null;
         if (last) showDropLine(last, 'after', indentOf(0));
@@ -216,7 +216,7 @@ export function mount(el, ctx) {
         const from = dragId;
         dragId = null;
         endDropHover();
-        if (from) commitDrop(from, { mode: 'rootEnd', targetId: null });
+        if (from) commitToBottom(from);
     });
 
     // layerId → 行内对象引用，避免每次重绘重建 DOM
@@ -228,7 +228,7 @@ export function mount(el, ctx) {
 
     /* ── L3：拖拽落点状态与视觉 ──
        只在「目标 / 模式」变化时重绘；dragover 每帧都会来，改 class 比重建 DOM 便宜得多。 */
-    let dropState = { targetId: null, mode: null, ok: false };
+    let dropState = { targetId: null, where: null, ok: false };
 
     const dropLine = document.createElement('div');
     dropLine.className = 'lyr-drop-line';
@@ -258,7 +258,7 @@ export function mount(el, ctx) {
 
     function clearDropMarks() {
         for (const rec of rows.values()) {
-            rec.row.classList.remove('drop-before', 'drop-after', 'drop-into', 'drop-invalid');
+            rec.row.classList.remove('drop-before', 'drop-after', 'drop-invalid');
         }
         dropLine.hidden = true;
     }
@@ -276,14 +276,14 @@ export function mount(el, ctx) {
 
     function endDropHover() {
         clearDropMarks();
-        dropState = { targetId: null, mode: null, ok: false };
+        dropState = { targetId: null, where: null, ok: false };
     }
 
-    function hoverRow(targetId, mode) {
+    function hoverRow(targetId, where) {
         const doc = ctx.doc();
         const all = doc ? objectsOf(doc) : [];
-        const v = dropVerdict(all, dragId, targetId, mode);
-        dropState = { targetId, mode, ok: v.ok };
+        const v = dropVerdict(all, dragId, targetId);
+        dropState = { targetId, where, ok: v.ok };
         clearDropMarks();
         const rec = rows.get(targetId);
         if (!rec) return;
@@ -291,13 +291,8 @@ export function mount(el, ctx) {
             rec.row.classList.add('drop-invalid');
             return;
         }
-        if (mode === 'into') {
-            rec.row.classList.add('drop-into');
-            return;
-        }
-        const indent = indentOf(depthOf(targetId));
-        rec.row.classList.add(mode === 'before' ? 'drop-before' : 'drop-after');
-        showDropLine(rec.row, mode, indent);
+        rec.row.classList.add(where === 'above' ? 'drop-before' : 'drop-after');
+        showDropLine(rec.row, where === 'above' ? 'before' : 'after', indentOf(0));
     }
 
     /** 列表上/下边缘 24px 内自动滚动：拖长列表时不必先松手再滚。 */
@@ -308,37 +303,41 @@ export function mount(el, ctx) {
         else if (e.clientY > lr.bottom - EDGE) list.scrollTop += 10;
     }
 
-    /** 一次落点 = 一条撤销记录。优先原子接口 `ctx.moveSubtree`（L1 线提供），
-        没有时降级成「改父 + 移动」两步 —— 撤销会变两步，但功能不丢。 */
-    function commitDrop(fromId, opts) {
+    /* ── 叠放落点：只改 drawOrder（v11） ──
+       v10 之前这里走 `ctx.moveSubtree`，也就是「在叠放面板拖一下会静默改父子关系」——
+       用户报的「叠放和父子逻辑没完全分离」就是这一处。现在落点只有两区（上/下），
+       写入只走 `ctx.moveDrawOrder`（一次 setDoc、一条撤销），层级一个字节都不碰。 */
+    function commitReorder(fromId, opts) {
         const doc = ctx.doc();
         if (!doc) return;
         const all = objectsOf(doc);
-        const v = dropVerdict(all, fromId, opts.targetId, opts.mode);
+        const v = dropVerdict(all, fromId, opts && opts.targetId);
         if (!v.ok) {
             notify(v.reason);
             return;
         }
-        if (typeof ctx.moveSubtree === 'function') {
-            if (ctx.moveSubtree(fromId, { mode: opts.mode, targetId: opts.targetId }) === false) notify('移动失败');
-            paint();
+        if (typeof ctx.moveDrawOrder !== 'function') {
+            notify('这个版本没有叠放接口');
             return;
         }
-        // 降级路径：L1 的 moveSubtree 落地前，撤销会多一步
-        const target = opts.targetId == null ? null : all.find((o) => o.id === opts.targetId) || null;
-        if (opts.mode === 'rootEnd') {
-            if (typeof ctx.setLayerParent === 'function') ctx.setLayerParent(fromId, null);
-            if (typeof ctx.moveLayerTo === 'function') ctx.moveLayerTo(fromId, all.length - 1);
-        } else if (opts.mode === 'into') {
-            if (typeof ctx.setLayerParent === 'function') ctx.setLayerParent(fromId, opts.targetId);
-        } else if (target) {
-            const parentId = target.parentId == null ? null : target.parentId;
-            if (typeof ctx.setLayerParent === 'function') ctx.setLayerParent(fromId, parentId);
-            const ti = all.findIndex((o) => o.id === opts.targetId);
-            if (ti >= 0 && typeof ctx.moveLayerTo === 'function') {
-                ctx.moveLayerTo(fromId, opts.mode === 'before' ? ti : ti + 1);
-            }
+        const order = drawOrderOf(doc);
+        const to = reorderIndex(order, fromId, opts.targetId, opts.where);
+        if (to < 0) {
+            notify('找不到落点');
+            return;
         }
+        if (ctx.moveDrawOrder(fromId, to) === false) notify('调整叠放失败');
+        paint();
+    }
+
+    /** 拖到列表空白处 = 移到最底层（最后画，遮住别人最少）。 */
+    function commitToBottom(fromId) {
+        const doc = ctx.doc();
+        if (!doc) return;
+        const order = drawOrderOf(doc);
+        if (!order.length || typeof ctx.moveDrawOrder !== 'function') return;
+        if (order[order.length - 1] === fromId) return;
+        if (ctx.moveDrawOrder(fromId, order.length - 1) === false) notify('调整叠放失败');
         paint();
     }
 
@@ -452,13 +451,13 @@ export function mount(el, ctx) {
         row.addEventListener('drop', (e) => {
             e.preventDefault();
             const from = dragId;
-            const mode = dropState.mode;
+            const where = dropState.where;
             const targetId = dropState.targetId;
             dragId = null;
             row.classList.remove('is-dragging');
             endDropHover();
-            if (!from || from === layer.id || !mode) return;
-            commitDrop(from, { mode, targetId });
+            if (!from || from === layer.id || !where) return;
+            commitReorder(from, { targetId, where });
         });
 
         row.append(vis, meta, kids, timeBadge);
@@ -790,15 +789,21 @@ const TIME_MODE_TEXT = [
             });
             if (newId) ctx.setActiveLayer(newId);
         } else if (act === 'up' || act === 'down') {
+            // v11：↑/↓ 走 drawOrder（叠放），不再动 doc.objects 的顺序 ——
+            // 后者在 drawOrder 世界里改不动画面，用户看到的是「点了没反应」。
             if (!active) return;
-            const i = objectsOf(doc).findIndex((l) => l.id === active);
-            const to = act === 'up' ? i - 1 : i + 1;
-            if (to < 0 || to >= objectsOf(doc).length) return;
-            ctx.setDoc((d) => moveLayer(d, active, to));
+            const order = drawOrderOf(doc);
+            const oi = order.indexOf(active);
+            const to = act === 'up' ? oi - 1 : oi + 1;
+            if (oi < 0 || to < 0 || to >= order.length) return;
+            if (typeof ctx.moveDrawOrder === 'function') ctx.moveDrawOrder(active, to);
         } else if (act === 'merge') {
             if (!active) return;
-            const i = objectsOf(doc).findIndex((l) => l.id === active);
-            const lower = i >= 0 ? objectsOf(doc)[i + 1] : null;
+            // 「下层」按 drawOrder 取：视觉上压在它下面的那一个（不是数组里的下一个）
+            const order = drawOrderOf(doc);
+            const oi = order.indexOf(active);
+            const lowerId = oi >= 0 ? order[oi + 1] : null;
+            const lower = lowerId ? objectsOf(doc).find((l) => l.id === lowerId) || null : null;
             let error = null;
             ctx.setDoc((d) => {
                 const res = mergeDown(d, active);
@@ -810,7 +815,6 @@ const TIME_MODE_TEXT = [
             });
             if (error) notify(error);
             else if (lower) ctx.setActiveLayer(lower.id);
-        } else if (act === 'del') {
             if (!active) return;
             // v8：不再有「至少保留一个对象」的死胡同 —— 删光就得到一个空文档
             const i = objectsOf(doc).findIndex((l) => l.id === active);

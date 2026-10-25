@@ -1,8 +1,10 @@
 // 父子树面板（编辑器 id: tree）：只编辑 parentId（跟谁动），不表达叠放顺序。
-// 契约：docs/层级与叠放-2026-10.md §5 —— 这里没有行间插入线，拖到行上 = 成为子对象，
-// 拖到空白 = 脱父。叠放顺序在 layers.mjs（扁平列表，改 drawOrder），两个面板各改一处数据。
+// 契约：docs/层级与叠放-2026-10.md §5 —— 拖拽三区（上缘 before / 中间 into / 下缘 after），
+// 全走 ctx.moveSubtree（一次 setDoc、一条撤销）；拖到空白 = 脱父并排到最底（rootEnd）。
+// 叠放顺序在 layers.mjs（扁平列表，改 drawOrder），两个面板各改一处数据，互不代偿。
 
 import { treeOrder, isDescendantId } from './layers.mjs';
+import { treeZone } from '../core/layer-order.mjs';
 import { objectsOf } from '../core/cel.mjs';
 import { icon } from '../core/icons.mjs';
 
@@ -25,7 +27,8 @@ function saveCollapsed() {
     }
 }
 
-let dragId = null;   // 正在拖的对象 id
+let dragId = null;     // 正在拖的对象 id
+let dropWhere = null;   // 当前悬停的落点：before / into / after
 
 export function mount(el, ctx) {
     const root = document.createElement('div');
@@ -43,6 +46,15 @@ export function mount(el, ctx) {
     const objects = () => objectsOf(ctx.doc());
     const activeId = () => (typeof ctx.activeLayerId === 'function' ? ctx.activeLayerId() : null);
     const notify = (msg) => { if (typeof ctx.notify === 'function') ctx.notify(msg); };
+
+    /** 清掉所有落点标记（行内三态 + 空白态）。dragover 每帧都来，改 class 比重建便宜。 */
+    function clearDropMarks() {
+        list.querySelectorAll('.is-drop, .drop-before, .drop-after, .drop-invalid').forEach((n) => {
+            n.classList.remove('is-drop', 'drop-before', 'drop-after', 'drop-invalid');
+        });
+        dropWhere = null;
+        list.classList.remove('is-drop-blank');
+    }
 
     /** 折叠：任一祖先被折叠，这一行就不画。返回 null 表示可见。 */
     function hiddenByCollapse(layer, byId) {
@@ -142,7 +154,9 @@ export function mount(el, ctx) {
 
         row.addEventListener('click', () => select(layer.id));
 
-        // ── 拖拽：只改 parentId。没有行间落点，落点上就是「当它的子对象」
+        // ── 拖拽：三区落点（Blender Outliner 手感）
+        // 上缘 25% = 插到它上面（成为同一父级的兄弟）、下缘 25% = 插到下面、中间 50% = 成为它的子对象。
+        // 落点非法时（拖进自己的子孙、拖到自身）只标红不拦事件 —— 指针不动，用户能自己看出来。
         row.addEventListener('dragstart', (e) => {
             dragId = layer.id;
             if (e.dataTransfer) {
@@ -152,27 +166,49 @@ export function mount(el, ctx) {
         });
         row.addEventListener('dragend', () => {
             dragId = null;
-            list.querySelectorAll('.is-drop').forEach((n) => n.classList.remove('is-drop'));
+            clearDropMarks();
         });
         row.addEventListener('dragover', (e) => {
             if (!dragId || dragId === layer.id) return;
             const all = objects();
-            if (isDescendantId(all, layer.id, dragId)) return;   // 不能拖进自己的子孙
+            // 任何落点都不能进自己的子树（before/after 也一样：整棵子树搬到自己里面没有意义）
+            if (isDescendantId(all, layer.id, dragId)) {
+                clearDropMarks();
+                row.classList.add('drop-invalid');
+                return;
+            }
             e.preventDefault();
             if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-            row.classList.add('is-drop');
+            const r = row.getBoundingClientRect();
+            const ratio = r.height > 0 ? (e.clientY - r.top) / r.height : 0.5;
+            const where = treeZone(ratio);
+            clearDropMarks();   // 先清（它会把 dropWhere 归零），再记本帧落点
+            dropWhere = where;
+            row.classList.add(where === 'into' ? 'is-drop' : (where === 'before' ? 'drop-before' : 'drop-after'));
         });
-        row.addEventListener('dragleave', () => row.classList.remove('is-drop'));
+        row.addEventListener('dragleave', (e) => {
+            const to = e.relatedTarget;
+            if (to && row.contains(to)) return;
+            clearDropMarks();
+        });
         row.addEventListener('drop', (e) => {
             e.preventDefault();
             e.stopPropagation();
-            row.classList.remove('is-drop');
             const from = dragId;
+            const where = dropWhere || 'into';
             dragId = null;
+            dropWhere = null;
+            clearDropMarks();
             if (!from || from === layer.id) return;
-            setParentOf(from, layer.id);
+            if (typeof ctx.moveSubtree === 'function') {
+                if (ctx.moveSubtree(from, { mode: where, targetId: layer.id }) === false) notify('移动失败');
+            } else if (where === 'into') {
+                setParentOf(from, layer.id);   // 老接口降级：只有「成为子对象」这一种
+            } else {
+                notify('这个版本不支持插入到行间');
+            }
+            paint();
         });
-
         return row;
     }
 
@@ -204,7 +240,7 @@ export function mount(el, ctx) {
         return shown;
     }
 
-    // 拖到面板空白 = 脱父（顶层）。行上的 drop 已经 stopPropagation，不会走到这里
+    // 拖到面板空白 = 脱父并排到最底层（Blender 里把行拖到空白处就是这个意思）
     list.addEventListener('dragover', (e) => {
         if (!dragId) return;
         e.preventDefault();
@@ -220,7 +256,9 @@ export function mount(el, ctx) {
         const from = dragId;
         dragId = null;
         if (!from) return;
-        setParentOf(from, null);
+        if (typeof ctx.moveSubtree === 'function') ctx.moveSubtree(from, { mode: 'rootEnd', targetId: null });
+        else setParentOf(from, null);
+        paint();
     });
 
     paint();

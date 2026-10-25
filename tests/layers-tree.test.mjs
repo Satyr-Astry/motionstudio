@@ -55,38 +55,29 @@ test('isDescendantId：自身算真，旁支算假', () => {
     assert.equal(isDescendantId(all, 'a', null), false);
 });
 
-test('dropZone：上缘 25% 前 / 中间 50% 投进 / 下缘 25% 后，边界归中间', () => {
-    assert.equal(dropZone(0), 'before');
-    assert.equal(dropZone(0.2), 'before');
-    assert.equal(dropZone(0.25), 'into');
-    assert.equal(dropZone(0.5), 'into');
-    assert.equal(dropZone(0.75), 'into');
-    assert.equal(dropZone(0.8), 'after');
-    assert.equal(dropZone(0.99), 'after');
-    // 量不到几何（NaN）时按「投进去」——它是唯一不会误删层级的落点
-    assert.equal(dropZone(NaN), 'into');
+// v11：叠放列表改成两区（上/下），「投进去」这一区下线 —— 改层级归父子面板
+test('dropZone：上半插到之上、下半插到之下，量不到几何时当作下半', () => {
+    assert.equal(dropZone(0), 'above');
+    assert.equal(dropZone(0.2), 'above');
+    assert.equal(dropZone(0.49), 'above');
+    assert.equal(dropZone(0.5), 'below');
+    assert.equal(dropZone(0.8), 'below');
+    assert.equal(dropZone(0.99), 'below');
+    // 越界钳到 0–1，NaND 当作下半（插到它下面是最保守的落点）
+    assert.equal(dropZone(-2), 'above');
+    assert.equal(dropZone(9), 'below');
+    assert.equal(dropZone(NaN), 'below');
 });
 
-test('dropVerdict：拖到自身或自己的后代一律非法，理由可读', () => {
+test('dropVerdict：叠放只重排，只拒绝「拖到自身」', () => {
     const all = [obj('a'), obj('b', 'a'), obj('c', 'b')];
-    assert.equal(dropVerdict(all, 'a', 'a', 'into').ok, false);
-    assert.equal(dropVerdict(all, 'a', 'b', 'into').ok, false);
-    assert.equal(dropVerdict(all, 'a', 'c', 'after').ok, false);
-    assert.match(dropVerdict(all, 'a', 'b', 'into').reason, /子对象/);
-});
-
-test('dropVerdict：正常落点与「移到根层末尾」都允许', () => {
-    const all = [obj('a'), obj('b', 'a'), obj('x')];
-    assert.equal(dropVerdict(all, 'x', 'a', 'before').ok, true);
-    assert.equal(dropVerdict(all, 'b', 'x', 'into').ok, true);
-    assert.equal(dropVerdict(all, 'b', null, 'rootEnd').ok, true);
-    // 已经在根层的对象再拖到根层末尾不算非法（只是原地不动）
-    assert.equal(dropVerdict(all, 'b', 'b', 'rootEnd').ok, true);
-});
-
-test('dropVerdict：没有源对象时直接拒绝', () => {
-    assert.equal(dropVerdict([], null, 'a', 'into').ok, false);
-    assert.equal(dropVerdict([obj('a')], 'a', null, 'into').ok, false);
+    assert.equal(dropVerdict(all, 'a', 'a').ok, false);
+    assert.match(dropVerdict(all, 'a', 'a').reason, /自身/);
+    // 拖到自己的后代在叠放里是合法的（只换图层顺序，不动 parentId）
+    assert.equal(dropVerdict(all, 'a', 'c').ok, true);
+    assert.equal(dropVerdict(all, 'c', 'a').ok, true);
+    assert.equal(dropVerdict(all, null, 'a').ok, false);
+    assert.equal(dropVerdict(all, 'a', null).ok, false);
 });
 
 // 插入线坐标（用户报的「列表下滚后插入线留在滚动前的位置」）

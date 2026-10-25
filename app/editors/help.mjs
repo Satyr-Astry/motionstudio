@@ -83,7 +83,8 @@ export const SHORTCUT_GROUPS = [
     //
     // 计算侧已落地：app/core/layer-order.mjs 的 layerKeyFromEvent / layerKeyTarget
     // （纯函数，tests/layers-keys.test.mjs 覆盖：兄弟换位、升级/降级目标、首兄弟/根对象不动作）。
-    // 接线侧（layers.mjs 的 keydown 调 layerKeyFromEvent → ctx.setLayerParent + ctx.moveLayerTo）
+    // 接线侧（app.mjs 的 installLayerKeys 用 resolveMove → ctx.moveSubtree：一次 setDoc、一条撤销；
+    // 叠放顺序那一路是 ctx.moveDrawOrder，与这里的方向键无关）
     // 由 Lead 在图层线合并时完成；接线前这两个键位不生效。
     {
         id: 'layer',

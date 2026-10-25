@@ -551,7 +551,8 @@ function buildCtx() {
 
     /* v8：时间通道的「是否恒等」——ctx-time 没提供这个读法，面板靠它决定 ⏱ 徽章亮不亮。
        其余 layerDepth / layerTime / setLayerTime / describeLayerTime / setLayerParent /
-       moveLayerTo 都在 shell/ctx-time.mjs 里（boot 里 Object.assign 覆盖本对象，别在这里重复实现）。 */
+       moveLayerTo / moveDrawOrder 都在 shell/ctx-time.mjs 里（boot 里 Object.assign 覆盖本对象，别在这里重复实现）。
+       v11 起：层级走 moveSubtree、叠放走 moveDrawOrder，setLayerParent/moveLayerTo 只作为老调用方的兼容壳保留。 */
     isLayerTimeIdentity: (id) => {
         const doc = state.doc;
         const el = doc ? objectById(doc, id) : null;
