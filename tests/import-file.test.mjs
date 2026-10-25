@@ -14,6 +14,7 @@ import {
     kindOf,
     toBytes,
     psdToObjects,
+    psdLayerImage,
     imageToObject,
     importBuffer,
     pickAndImport,
@@ -719,4 +720,249 @@ test('psdToObjects：组内的留白层，裁剪偏移与父对象偏移各算�
     assert.deepEqual([child.cels[0].image.width, child.cels[0].image.height], [2, 2]);
     // 组原点恒为 0（组自身不位移），所以子对象仍是文档坐标：left + dx
     assert.deepEqual([child.transform.keys[0].state.x, child.transform.keys[0].state.y], [11, 7]);
+});
+
+// ── alphaBounds 的两条执行路径 ────────────────────────────────────────────────
+//
+// 满内容层走「边界抽查」快路径（O(w+h)），有留白的层必须整体扫描。
+// 两条路径给出同一个答案才算对，所以这里逐项对照，专门挑会互相打架的形状。
+
+/** 造 w×h 的 RGBA 缓冲，`on(x,y)` 返回 alpha（0 = 透明）。 */
+function rgbaMask(w, h, on) {
+    const px = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y += 1) {
+        for (let x = 0; x < w; x += 1) {
+            const a = on(x, y);
+            if (a) px[(y * w + x) * 4 + 3] = a;
+        }
+    }
+    return px;
+}
+
+test('alphaBounds：四条边都满 → 整张；某条边整条透明 → 收缩一条', () => {
+    // 边界抽查命中：矩形就是整张
+    assert.deepEqual(alphaBounds(rgbaMask(6, 5, () => 255), 6, 5), { x: 0, y: 0, w: 6, h: 5 });
+    // 角落缺一个像素不算「缺边」——其余边界像素仍不透明，包围盒没变
+    assert.deepEqual(alphaBounds(rgbaMask(6, 5, (x, y) => (x === 0 && y === 0 ? 0 : 255)), 6, 5), { x: 0, y: 0, w: 6, h: 5 });
+    // 单点内容：四条边都透明，包围盒是 1×1
+    assert.deepEqual(alphaBounds(rgbaMask(6, 5, (x, y) => (x === 3 && y === 2 ? 255 : 0)), 6, 5), { x: 3, y: 2, w: 1, h: 1 });
+
+    // 每条边各整条透明一次：抽查发现透明 → 全扫定边界
+    assert.deepEqual(alphaBounds(rgbaMask(6, 5, (x, y) => (y === 0 ? 0 : 255)), 6, 5), { x: 0, y: 1, w: 6, h: 4 });
+    assert.deepEqual(alphaBounds(rgbaMask(6, 5, (x, y) => (y === 4 ? 0 : 255)), 6, 5), { x: 0, y: 0, w: 6, h: 4 });
+    assert.deepEqual(alphaBounds(rgbaMask(6, 5, (x, y) => (x === 0 ? 0 : 255)), 6, 5), { x: 1, y: 0, w: 5, h: 5 });
+    assert.deepEqual(alphaBounds(rgbaMask(6, 5, (x, y) => (x === 5 ? 0 : 255)), 6, 5), { x: 0, y: 0, w: 5, h: 5 });
+    // 1 像素高/宽的退化层：不能因为「没有中间行可抽」就越界读数
+    assert.deepEqual(alphaBounds(rgbaMask(1, 5, () => 255), 1, 5), { x: 0, y: 0, w: 1, h: 5 });
+    assert.deepEqual(alphaBounds(rgbaMask(5, 1, (x) => (x === 2 ? 255 : 0)), 5, 1), { x: 2, y: 0, w: 1, h: 1 });
+});
+
+test('alphaBounds：整行透明被短路跳过，稀疏内容仍得到紧包围盒', () => {
+    // 只有四个角 + 一条斜线：每行/每列都可能被跳过，两端收缩必须收敛到真实边界
+    const sparse = rgbaMask(9, 7, (x, y) => (x === y || (x === 0 && y === 6) || (x === 8 && y === 0) ? 255 : 0));
+    assert.deepEqual(alphaBounds(sparse, 9, 7), { x: 0, y: 0, w: 9, h: 7 });
+
+    // 内容只在第 3 行第 4 列一个点：上下左右都留白
+    const dot = rgbaMask(9, 7, (x, y) => (x === 4 && y === 3 ? 1 : 0));
+    assert.deepEqual(alphaBounds(dot, 9, 7), { x: 4, y: 3, w: 1, h: 1 });
+
+    // 一行两段不连续的内容：整行短路不能把中间的空洞算进包围盒（两端收缩只看外侧）
+    const two = rgbaMask(9, 1, (x) => (x === 1 || x === 7 ? 255 : 0));
+    assert.deepEqual(alphaBounds(two, 9, 1), { x: 1, y: 0, w: 7, h: 1 });
+
+    // alpha=1 也算内容（只认 alpha>0，不设阈值）
+    const faint = rgbaMask(4, 4, (x, y) => (x === 2 && y === 2 ? 1 : 0));
+    assert.deepEqual(alphaBounds(faint, 4, 4), { x: 2, y: 2, w: 1, h: 1 });
+});
+
+test('alphaBounds：字节视图未对齐、或不是 Uint8ClampedArray 也能算对', () => {
+    const px = rgbaMask(5, 4, (x, y) => (x >= 1 && x <= 3 && y >= 1 && y <= 2 ? 200 : 0));
+    const want = { x: 1, y: 1, w: 3, h: 2 };
+    assert.deepEqual(alphaBounds(px, 5, 4), want);
+
+    // 同一份像素装进大缓冲的奇数偏移：byteOffset 不能被 4 整除，
+    // 直接拿 Uint32Array 视图会错位，所以内部必须先拷一份对齐的
+    const host = new Uint8ClampedArray(px.length + 5);
+    host.set(px, 3);
+    const unaligned = host.subarray(3, 3 + px.length);
+    assert.equal(unaligned.byteOffset % 4, 3);
+    assert.deepEqual(alphaBounds(unaligned, 5, 4), want);
+
+    // 普通数组也算（走拷贝分支）；Uint32Array 视图同样接受
+    assert.deepEqual(alphaBounds(Array.from(px), 5, 4), want);
+    const u32view = new Uint32Array(new Uint8ClampedArray(px).buffer);
+    assert.deepEqual(alphaBounds(u32view, 5, 4), want);
+});
+
+// ── psdLayerImage 的返回形状（不再往 layer 上挂 __trim） ───────────────────────
+
+test('psdLayerImage：返回 {image,trim}，图层对象上不留 __trim', async () => {
+    const psd = buildPsd({
+        width: 40,
+        height: 30,
+        layers: [{ name: '留白层', left: 10, top: 6, width: 4, height: 4, planes: planesOf(INSET_4X4) }],
+    });
+    // 直接从解析结果里拿图层，验证函数对这个对象的副作用
+    const { parsePsd } = await import('../app/core/psd.mjs');
+    const parsed = await parsePsd(psd);
+    assert.equal(parsed.layers.length, 1);
+    const layer = parsed.layers[0];
+    const before = Object.keys(layer).sort();
+
+    const out = await psdLayerImage(layer);
+    assert.deepEqual([out.image.width, out.image.height], [2, 2]);
+    assert.deepEqual(out.trim, { dx: 1, dy: 1, srcW: 4, srcH: 4, trimmed: true });
+    // 关键：共享的图层对象一个键都不能多（旧实现会挂 __trim）
+    assert.deepEqual(Object.keys(layer).sort(), before);
+    assert.equal('__trim' in layer, false);
+});
+
+test('psdLayerImage：交给 ImageData 的是裁后缓冲，长度与尺寸严格配对', async () => {
+    const hadImageData = 'ImageData' in globalThis;
+    const hadBitmap = 'createImageBitmap' in globalThis;
+    const oldImageData = globalThis.ImageData;
+    const oldBitmap = globalThis.createImageBitmap;
+    const seen = [];
+    // 桩：Chromium 的 ImageData 构造器在 data 长度 ≠ w*h*4 时抛 IndexSizeError，
+    // 这里照抄那条约束，于是「不抛」就等于「缓冲和尺寸配上了」
+    globalThis.ImageData = class {
+        constructor(data, width, height) {
+            if (data.length !== width * height * 4) throw new Error('IndexSizeError: bad input data length');
+            this.data = data;
+            this.width = width;
+            this.height = height;
+            seen.push({ len: data.length, width, height });
+        }
+    };
+    globalThis.createImageBitmap = async (d) => ({ kind: 'ImageBitmap', width: d.width, height: d.height });
+    try {
+        const psd = buildPsd({
+            width: 40,
+            height: 30,
+            layers: [{ name: '留白层', left: 10, top: 6, width: 4, height: 4, planes: planesOf(INSET_4X4) }],
+        });
+        const res = await psdToObjects(psd);
+        assert.equal(res.ok, true);
+        assert.equal(res.report.trimmed, 1);
+        assert.deepEqual(seen, [{ len: 2 * 2 * 4, width: 2, height: 2 }]);
+        const obj = res.doc.objects[0];
+        assert.equal(obj.cels[0].image.kind, 'ImageBitmap');
+        assert.deepEqual([obj.cels[0].image.width, obj.cels[0].image.height], [2, 2]);
+        assert.deepEqual([obj.transform.keys[0].state.x, obj.transform.keys[0].state.y], [11, 7]);
+    } finally {
+        if (hadImageData) globalThis.ImageData = oldImageData; else delete globalThis.ImageData;
+        if (hadBitmap) globalThis.createImageBitmap = oldBitmap; else delete globalThis.createImageBitmap;
+    }
+});
+
+test('splitLayerImage 的兼容边界：注入裸位图时 trim 为 0，不补偏移', async () => {
+    const psd = buildPsd({
+        width: 40,
+        height: 30,
+        layers: [{ name: '留白层', left: 10, top: 6, width: 4, height: 4, planes: planesOf(INSET_4X4) }],
+    });
+    // 老用法：makeImage 返回裸位图（没有 trim 键）→ 偏移一律 0，坐标就是 layer.left/top
+    const bare = await psdToObjects(psd, { makeImage: () => ({ width: 9, height: 9 }) });
+    assert.equal(bare.ok, true);
+    assert.equal(bare.report.trimmed, 0);
+    const a = bare.doc.objects[0];
+    assert.deepEqual([a.cels[0].image.width, a.cels[0].image.height], [9, 9]);
+    assert.deepEqual([a.transform.keys[0].state.x, a.transform.keys[0].state.y], [10, 6]);
+
+    // 新用法：makeImage 自己返回容器 → trim 生效
+    const boxed = await psdToObjects(psd, {
+        makeImage: () => ({ image: { width: 7, height: 7 }, trim: { dx: 2, dy: 3, srcW: 4, srcH: 4, trimmed: true } }),
+    });
+    assert.equal(boxed.report.trimmed, 1);
+    const b = boxed.doc.objects[0];
+    assert.deepEqual([b.cels[0].image.width, b.cels[0].image.height], [7, 7]);
+    assert.deepEqual([b.transform.keys[0].state.x, b.transform.keys[0].state.y], [12, 9]);
+
+    // makeImage 返回 null：当作空位图计数，不抛
+    const empty = await psdToObjects(psd, { makeImage: () => null });
+    assert.equal(empty.ok, false);
+    assert.match(empty.error, /没有可导入的图层/);
+});
+
+// ── 位图（PNG/JPG/WebP）走同一套裁剪规则 ──────────────────────────────────────
+//
+// 位图没有「图层矩形」，所以裁剪只影响两件事：画格位图尺寸、原点偏移。
+// 居中仍按原图尺寸算 —— 裁掉的只是透明的纸，画面位置不能挪。
+
+test('imageToObject：留白 PNG 裁到内容，原点补 dx/dy，居中原点不变', async () => {
+    // 40×20 里内容在 (5,4) 起的 10×6，其余全透明
+    const px = new Uint8ClampedArray(40 * 20 * 4);
+    for (let y = 4; y < 10; y += 1) {
+        for (let x = 5; x < 15; x += 1) {
+            const at = (y * 40 + x) * 4;
+            px[at] = 12;
+            px[at + 1] = 34;
+            px[at + 2] = 56;
+            px[at + 3] = 255;
+        }
+    }
+    const base = createDoc({ width: 900, height: 640, objects: [{ name: '已有', cels: [{ at: 0, image: null }] }] });
+    const res = await imageToObject(new Uint8Array([1]), {
+        doc: base,
+        name: '带留白的图.png',
+        decode: () => ({ width: 40, height: 20, data: px }),
+    });
+    assert.equal(res.ok, true);
+    // 居中原点 = ((900-40)/2, (640-20)/2) = (430, 310)，再补内容偏移 (5, 4)
+    assert.deepEqual([res.report.x, res.report.y], [435, 314]);
+    assert.deepEqual([res.doc.objects[0].transform.keys[0].state.x, res.doc.objects[0].transform.keys[0].state.y], [435, 314]);
+    // report 的 width/height 仍是原图尺寸（既有语义不改），裁后尺寸另给字段
+    assert.deepEqual([res.report.width, res.report.height], [40, 20]);
+    assert.equal(res.report.trimmed, true);
+    assert.deepEqual([res.report.contentWidth, res.report.contentHeight], [10, 6]);
+    assert.equal(res.report.trimSkipped, '');
+
+    const img = res.doc.objects[0].cels[0].image;
+    assert.deepEqual([img.width, img.height], [10, 6]);
+    // node 里没有 canvas，裁出来的只能是裸像素描述：首像素就是原图 (5,4)
+    assert.deepEqual(Array.from(img.data.slice(0, 4)), [12, 34, 56, 255]);
+    assert.equal(img.data.length, 10 * 6 * 4);
+});
+
+test('imageToObject：裁不了就保持原图 —— 读不到像素/超大图/关开关/全透明都不算失败', async () => {
+    const cases = [
+        // 只有尺寸、没有 data：node 里没有 canvas 可读，读不到就是读不到
+        { name: 'nopixels', bitmap: { width: 40, height: 20 }, opts: {}, skipped: 'nopixels' },
+        // 超过上限：再读一份像素会让峰值内存翻倍，宁可保持原样
+        { name: 'big', bitmap: { width: 5000, height: 5000 }, opts: {}, skipped: 'big' },
+        // 调用方明确不要裁剪
+        {
+            name: 'off',
+            bitmap: { width: 4, height: 4, data: rgbaMask(4, 4, () => 255) },
+            opts: { trim: false },
+            skipped: 'off',
+        },
+        // 全透明：没有内容可裁（alphaBounds 返回 null），保留原矩形
+        {
+            name: 'clear',
+            bitmap: { width: 4, height: 4, data: rgbaMask(4, 4, () => 0) },
+            opts: {},
+            skipped: 'clear',
+        },
+        // 边界全不透明：包围盒等于整张，等于没裁
+        {
+            name: 'full',
+            bitmap: { width: 4, height: 4, data: rgbaMask(4, 4, () => 255) },
+            opts: {},
+            skipped: 'full',
+        },
+    ];
+    for (const c of cases) {
+        const res = await imageToObject(new Uint8Array([1]), {
+            name: c.name + '.png',
+            ...c.opts,
+            decode: () => c.bitmap,
+        });
+        assert.equal(res.ok, true, c.name + ' 必须导入成功');
+        assert.equal(res.report.trimSkipped, c.skipped, c.name + ' 的跳过原因');
+        assert.equal(res.report.trimmed, false, c.name + ' 不该标成已裁剪');
+        // 位图原样保留（同一个对象引用），坐标 = 纯居中
+        assert.equal(res.doc.objects[0].cels[0].image, c.bitmap, c.name + ' 位图不该被替换');
+        assert.deepEqual([res.report.contentWidth, res.report.contentHeight], [c.bitmap.width, c.bitmap.height]);
+    }
 });

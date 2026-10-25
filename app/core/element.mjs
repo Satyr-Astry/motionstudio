@@ -3,7 +3,7 @@
 // 约定：doc 空间 = 画布像素坐标；变换在 doc 空间内进行；屏幕换算留给画布叠加层。
 import { imageAt } from './doc-model.mjs';
 import { stateAt, matrixOf, warpQuad } from './transform.mjs';
-import { normalizeLattice, createLattice, latticeOffset, latticeInverse } from './lattice.mjs';
+import { normalizeLattice, createLattice, latticeOffset, latticeInverse, latticeInverseRaw } from './lattice.mjs';
 
 /** 八个缩放手柄，顺时针从左上开始 */
 export const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -192,6 +192,56 @@ export function localToWorld(doc, el, time, p, parentM) {
     return { x: out[0], y: out[1] };
 }
 
+/** 网格是否等于「没有任何变形」（1×1 且四个顶点偏移都是 0） */
+function isFlatLattice(L) {
+    if (!L) return true;
+    if (L.cols !== 1 || L.rows !== 1) return false;
+    const pts = L.pts;
+    if (!Array.isArray(pts) || pts.length !== 4) return false;
+    for (const q of pts) {
+        const x = Array.isArray(q) ? q[0] : q && q.x;
+        const y = Array.isArray(q) ? q[1] : q && q.y;
+        if (Math.abs(x || 0) > 1e-6 || Math.abs(y || 0) > 1e-6) return false;
+    }
+    return true;
+}
+
+/**
+ * doc 点 → 对象局部坐标，**不夹取**。
+ *
+ * 和 worldToLocal 的区别：这里把「边界上」与「边界外」分开返回（uv 可能是 -0.01 或 1.02），
+ * 由调用方按自己的容差判定。`tolerance` 是**局部像素**的越界放宽量（默认 0 = 严格）。
+ *
+ * 无变形时直接走一次逆矩阵，完全不碰 lattice 反解；
+ * 有变形时才调 latticeInverseRaw，并把像素容差换算成每格归一化容差
+ * （否则同样的 2px 容差在 1×1 网格上是 2px、在 4×4 网格上只有 0.5px）。
+ *
+ * @returns {{u:number,v:number,x:number,y:number}|null} x/y 是局部像素（可能略微越界）
+ */
+export function localUv(doc, el, time, p, parentM, tolerance) {
+    const tol = Number.isFinite(tolerance) && tolerance > 0 ? tolerance : 0;
+    const info = elementLattice(doc, el, time, parentM);
+    const w = info.size.w;
+    const h = info.size.h;
+    if (!(w > 0) || !(h > 0)) return null;
+    const inv = invertMatrix(info.matrix);
+    if (!inv) return null;
+    const local = applyMatrix(inv, p);
+    if (!Number.isFinite(local.x) || !Number.isFinite(local.y)) return null;
+    if (isFlatLattice(info.lattice)) {
+        return { u: local.x / w, v: local.y / h, x: local.x, y: local.y };
+    }
+    const L = info.lattice;
+    const cellW = w / L.cols;
+    const cellH = h / L.rows;
+    // 1e-6 是给浮点误差留的保底，远小于 1px，不会让边界外的点混进来
+    const edgeX = Math.max(tol / cellW, 1e-6);
+    const edgeY = Math.max(tol / cellH, 1e-6);
+    const raw = latticeInverseRaw(L, w, h, local, { pad: Math.max(2, tol), edgeX, edgeY });
+    if (!raw) return null;
+    return { u: raw[0], v: raw[1], x: raw[0] * w, y: raw[1] * h };
+}
+
 /**
  * 手柄位置（doc 空间）。
  * 返回 { handles: [{name, x, y}], rotate: {x, y, dir:{x, y}}, center: {x, y} }
@@ -228,15 +278,35 @@ export function pixelAlpha(img, x, y) {
     }
 }
 
+/** 把像素索引夹进 [lo, hi]（lo > hi 时返回 lo） */
+function clampIdx(v, lo, hi) {
+    if (hi < lo) return lo;
+    return v < lo ? lo : v > hi ? hi : v;
+}
+
 /**
  * 画布点击命中测试。
- * opts: { threshold = 8, skip = [id...] }
+ *
+ * opts: {
+ *   threshold = 8,            像素 alpha 阈值
+ *   skip = [id...],           跳过的对象
+ *   parentMatrix,             父级矩阵取值函数
+ *   tolerance = 0,            几何越界容差，单位**对象局部像素**。0 = 严格按边界，
+ *                             边界外 0.001px 也不算命中。要按屏幕像素放宽，调用方传
+ *                             `screenPx / zoom`（画布缩放不是 1 时）。
+ * }
+ *
  * 返回 { id, local, alpha } 或 null。layers[0] 是最上层，从上层往下找。
+ *
+ * 历史行为提醒：本函数此前用 worldToLocal + `uv ∈ [0,1]` 判定，而 worldToLocal 会把
+ * 越界点夹回 [0,1]、且自身带 2px 的包围盒容差 —— 结果是「上/左边界外 1px 能选中，
+ * 右/下边界本身却选不中」。改为 localUv（不夹取）+ 显式容差后四方向一致。
  */
 export function hitTest(doc, time, x, y, opts) {
     const o = opts || {};
     const list = doc.objects || doc.layers || [];
     const threshold = o.threshold == null ? 8 : o.threshold;
+    const tol = Number.isFinite(o.tolerance) && o.tolerance > 0 ? o.tolerance : 0;
     const skip = o.skip && o.skip.length ? new Set(o.skip) : null;
     const p = { x, y };
     for (let i = 0; i < list.length; i++) {
@@ -245,12 +315,21 @@ export function hitTest(doc, time, x, y, opts) {
         if (skip && skip.has(el.id)) continue;
         // 父子层级：命中必须走世界矩阵，否则父对象旋转后点不中
         const pm = typeof o.parentMatrix === 'function' ? o.parentMatrix(el, time) : null;
-        const uv = worldToLocal(doc, el, time, p, pm);
-        if (!uv) continue;
-        if (uv.u < 0 || uv.u > 1 || uv.v < 0 || uv.v > 1) continue;
+        const loc = localUv(doc, el, time, p, pm, tol);
+        if (!loc) continue;
         const size = elementSize(doc, el, time);
-        const lx = Math.floor(uv.u * size.w);
-        const ly = Math.floor(uv.v * size.h);
+        const w = size.w;
+        const h = size.h;
+        if (!(w > 0) || !(h > 0)) continue;
+        // 1e-6 的浮点余量：旋转后世界 → 局部的往返误差在 1e-16 量级，
+        // 少了它，容差恰好等于 tolerance 的点会随机变成「越界 4e-16 像素」而被挡掉。
+        const eps = 1e-6;
+        if (loc.x < -tol - eps || loc.x > w + tol + eps) continue;
+        if (loc.y < -tol - eps || loc.y > h + tol + eps) continue;
+        // 夹进像素范围：uv 恰为 1 时 floor 得到 width（越界），
+        // 于是「贴着右边/下边的最后一列像素」永远点不中，那是个历史缺陷。
+        const lx = clampIdx(Math.floor(loc.x), 0, w - 1);
+        const ly = clampIdx(Math.floor(loc.y), 0, h - 1);
         const alpha = pixelAlpha(imageAt(el, time), lx, ly);
         if (alpha > threshold) return { id: el.id, local: { x: lx, y: ly }, alpha };
     }

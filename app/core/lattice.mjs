@@ -230,8 +230,13 @@ export function latticeBounds(lat, w, h) {
     return { x0, y0, x1, y1 };
 }
 
-/** 单 cell 双线性反解：给定点 p，在四边形 q 内求 (s,t)，越界返回 null */
-function quadInverseLocal(q, p, tol = 1e-4) {
+/**
+ * 单 cell 双线性反解：给定点 p，在四边形 q 内求 (s,t)。
+ * `edgeX/edgeY` 是 cell 归一化单位的越界容差（默认 0.02，与历史行为一致）；
+ * 返回**未夹取**的 (s,t)，越界多少由调用方判断 —— 夹取会让「边界外」与「边界上」
+ * 变成同一个值，命中判定就再也分不清两者。
+ */
+function quadInverseLocal(q, p, tol = 1e-4, edgeX = 0.02, edgeY = 0.02) {
     let s = 0.5;
     let t = 0.5;
     for (let k = 0; k < 12; k++) {
@@ -256,25 +261,37 @@ function quadInverseLocal(q, p, tol = 1e-4) {
         s = clamp(s, -0.5, 1.5);
         t = clamp(t, -0.5, 1.5);
     }
-    if (s < -0.02 || s > 1.02 || t < -0.02 || t > 1.02) return null;
-    return [clamp(s, 0, 1), clamp(t, 0, 1)];
+    if (s < -edgeX || s > 1 + edgeX || t < -edgeY || t > 1 + edgeY) return null;
+    return [s, t];
 }
 
 /**
- * 世界点 → (u,v)。遍历所有 cell 取最优解，找不到（点在网格外）返回 null。
- * 网格很稠时先按包围盒粗筛，再逐 cell 反解。
+ * 世界点 → **未夹取**的 (u,v)。返回 `[u, v]`，可能略小于 0 或略大于 1
+ * （越界容差由 `opts.pad`（局部像素）与 `opts.edge`（cell 归一化）控制）。
+ *
+ * 命中判定要的就是这个：`latticeInverse` 会把越界值夹回 [0,1]，
+ * 于是「对象边界外 1px」和「恰好在边界上」返回同一个 uv，判定层无法区分。
+ *
+ * opts: { pad = 2, edge = 0.02, edgeX, edgeY }
+ *   pad   包围盒早退的放宽量（局部像素，默认 2 = 历史行为）
+ *   edge  cell 内越界容差（归一化，默认 0.02 = 历史行为）
+ *   edgeX / edgeY  分别覆盖水平、垂直方向的归一化容差（网格格子不是正方形时用）
  */
-export function latticeInverse(lat, w, h, p) {
+export function latticeInverseRaw(lat, w, h, p, opts) {
+    const o = opts || {};
+    const pad = Number.isFinite(o.pad) ? o.pad : 2;
+    const edge = Number.isFinite(o.edge) ? o.edge : 0.02;
     const L = normalizeLattice(lat) || createLattice(1, 1);
     const bb = latticeBounds(L, w, h);
-    const pad = 2;
     if (p.x < bb.x0 - pad || p.x > bb.x1 + pad || p.y < bb.y0 - pad || p.y > bb.y1 + pad) return null;
+    const edgeX = Number.isFinite(o.edgeX) ? o.edgeX : edge;
+    const edgeY = Number.isFinite(o.edgeY) ? o.edgeY : edge;
     let best = null;
     let bestD = Infinity;
     for (let r = 0; r < L.rows; r++) {
         for (let c = 0; c < L.cols; c++) {
             const q = cellQuad(L, w, h, c, r);
-            const st = quadInverseLocal(q, p);
+            const st = quadInverseLocal(q, p, 1e-4, edgeX, edgeY);
             if (!st) continue;
             const got = latticePoint(L, w, h, (c + st[0]) / L.cols, (r + st[1]) / L.rows);
             const d = Math.hypot(got.x - p.x, got.y - p.y);
@@ -285,6 +302,16 @@ export function latticeInverse(lat, w, h, p) {
         }
     }
     return bestD <= Math.max(1.5, pad) ? best : null;
+}
+
+/**
+ * 世界点 → (u,v)。遍历所有 cell 取最优解，找不到（点在网格外）返回 null。
+ * 返回的 uv 一定夹在 [0,1]（老接口的语义，别在这里改）；
+ * 需要区分「边界上」与「边界外」请用 `latticeInverseRaw`。
+ */
+export function latticeInverse(lat, w, h, p, opts) {
+    const raw = latticeInverseRaw(lat, w, h, p, opts);
+    return raw ? [clamp(raw[0], 0, 1), clamp(raw[1], 0, 1)] : null;
 }
 
 /** 网格线：返回若干条折线（每条是 uv 采样点），供画布叠加层绘制 */

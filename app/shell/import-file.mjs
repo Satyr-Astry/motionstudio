@@ -153,35 +153,114 @@ function stripExt(name) {
  * 三层兜底是为了让同一份代码在渲染进程、node 测试、无 GPU 环境里都能走通。
  */
 /**
+ * alpha 字节在 32 位字里的掩码。
+ *
+ * 为什么要探测字节序：下面的扫描把 4 个字节当**一个** 32 位字读（省掉三次索引计算，
+ * 单层扫描因此快 2~3 倍），而 alpha 是第 4 个字节——小端机落在最高字节，大端机落在
+ * 最低字节。用 [0,0,0,1] 探一次：小端读出 0x01000000，大端读出 0x00000001。
+ * 写死 0xff000000 在 x86/ARM64 上是对的，但那是把字节序当常量，这里不赌。
+ */
+const ALPHA_MASK = (() => {
+    const probe = new Uint32Array(new Uint8ClampedArray([0, 0, 0, 1]).buffer);
+    return probe[0] === 1 ? 0x000000ff : 0xff000000;
+})();
+
+/**
+ * RGBA 字节缓冲有多少字节。
+ * 视图按 byteLength 算（Uint32Array 的 length 是元素数，按元素数比会把合法缓冲判短）；
+ * 普通数组按元素数算，一个元素就是一个字节。
+ */
+function byteSizeOf(pixels) {
+    if (ArrayBuffer.isView(pixels)) return pixels.byteLength;
+    return typeof pixels.length === 'number' ? pixels.length : 0;
+}
+
+/**
+ * RGBA 字节缓冲 → 32 位字视图（每像素一个字）。
+ *
+ * 接受：任意 1 字节 TypedArray、更宽的视图（Uint32Array 等，装着同一份字节）、
+ * 普通数组（测试里就是 `new Array(64).fill(0)`）。
+ * 宽视图按**字节**看待，并拷一份当字节缓冲（`new Uint8ClampedArray(u32)` 会按元素截断成 1/4）。
+ * 非 4 字节对齐的视图再对齐一次——Uint32Array 的 byteOffset 不合法会直接抛 RangeError。
+ */
+function wordsOf(pixels) {
+    let bytes;
+    if (ArrayBuffer.isView(pixels) && pixels.BYTES_PER_ELEMENT === 1) {
+        bytes = pixels;
+    } else if (ArrayBuffer.isView(pixels)) {
+        bytes = new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, pixels.byteLength).slice();
+    } else {
+        bytes = new Uint8ClampedArray(pixels);
+    }
+    if ((bytes.byteOffset & 3) === 0) {
+        return new Uint32Array(bytes.buffer, bytes.byteOffset, (bytes.length / 4) | 0);
+    }
+    const aligned = new Uint8ClampedArray(bytes.length);
+    aligned.set(bytes);
+    return new Uint32Array(aligned.buffer, 0, (aligned.length / 4) | 0);
+}
+
+/** 最外圈是否一个透明像素都没有（= 包围盒必然是整张）。O(2w+2h)。 */
+function edgeIsOpaque(words, w, h) {
+    const bottom = (h - 1) * w;
+    for (let x = 0; x < w; x += 1) {
+        if ((words[x] & ALPHA_MASK) === 0 || (words[bottom + x] & ALPHA_MASK) === 0) return false;
+    }
+    for (let y = 1; y < h - 1; y += 1) {
+        const row = y * w;
+        if ((words[row] & ALPHA_MASK) === 0 || (words[row + w - 1] & ALPHA_MASK) === 0) return false;
+    }
+    return true;
+}
+
+/**
  * 图层位图里「真正有内容」的包围盒。
  * PSD 的图层矩形经常等于整张画布（尤其整层填色/从背景层派生的层），
  * 直接按矩形导入会让每个对象都带一大圈透明留白——对象自己的“纸”被撑成整幅画布，
  * 之后缩放、看缩略图、在画板里编辑都会被空白带偏。这里先算 alpha 包围盒。
  *
- * @returns {{x:number,y:number,w:number,h:number}|null} 全透明返回 null
+ * 性能（8000×8000 = 6400 万像素，见 docs/导入裁剪-2026-10.md 的基准）：
+ *   满内容层  96.7ms → 0.098ms   边界全不透明，只读 2(w+h) 个像素就直接返回整张
+ *   有留白的层 96.2ms →  35ms     必须扫完才能定边界；整字读 + 整行短路 + 两端收缩
+ * 「满内容」覆盖了绝大多数真实图层（整层填色、从背景派生、画满的画布），
+ * 也是唯一能做到亚毫秒的形态——包围盒是全张这一点无法从局部推断，
+ * 所以有留白的层仍然是 O(n)，这里只把常数压下来，不假装能跳过扫描。
+ *
+ * 正确性上不投机：不做跳步采样（会漏掉 1 像素的细节，把包围盒算小）。
+ *
+ * @returns {{x:number,y:number,w:number,h:number}|null} 全透明 / 参数不成立返回 null
  */
 export function alphaBounds(pixels, width, height) {
     const w = intOr(width, 0);
     const h = intOr(height, 0);
-    if (!w || !h || !pixels || pixels.length < w * h * 4) return null;
+    if (!w || !h || !pixels) return null;
+    // 缓冲比 w*h*4 字节短 → 不猜，直接给 null（调用方据此保留原矩形）
+    if (byteSizeOf(pixels) < w * h * 4) return null;
+    const words = wordsOf(pixels);
+    if (words.length < w * h) return null;
+
+    if (edgeIsOpaque(words, w, h)) return { x: 0, y: 0, w, h };
+
     let x0 = w;
     let y0 = h;
     let x1 = -1;
     let y1 = -1;
     for (let y = 0; y < h; y += 1) {
-        let rowHit = false;
-        const row = y * w * 4;
-        for (let x = 0; x < w; x += 1) {
-            if (pixels[row + x * 4 + 3] > 0) {
-                if (x < x0) x0 = x;
-                if (x > x1) x1 = x;
-                rowHit = true;
-            }
-        }
-        if (rowHit) {
-            if (y < y0) y0 = y;
-            if (y > y1) y1 = y;
-        }
+        const base = y * w;
+        // 整行按位或：整行的 alpha 位全 0 就是整行透明，跳过列扫描
+        let acc = 0;
+        for (let x = 0; x < w; x += 1) acc |= words[base + x];
+        if ((acc & ALPHA_MASK) === 0) continue;
+        // 命中行只从两端收缩：真实留白层的内层宽度远小于 w
+        let lo = 0;
+        while (lo < w && (words[base + lo] & ALPHA_MASK) === 0) lo += 1;
+        if (lo >= w) continue;
+        let hi = w - 1;
+        while (hi > lo && (words[base + hi] & ALPHA_MASK) === 0) hi -= 1;
+        if (lo < x0) x0 = lo;
+        if (hi > x1) x1 = hi;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
     }
     if (x1 < x0 || y1 < y0) return null;
     return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
@@ -197,7 +276,21 @@ function cropPixels(pixels, width, box) {
     return out;
 }
 
-async function psdLayerImage(layer) {
+/**
+ * 图层位图里「真正有内容」的包围盒。
+ *
+ * 形状：`{ image, trim }`。返回容器而不是往 layer 上挂 `__trim`，
+ * 是因为 layer 是 psd.mjs 的产物、会流到调用方手里：私有字段一旦挂上去，
+ * 谁都能读到，而它的含义只有本文件知道。位图与偏移成对返回，调用方就不可能只拿一半。
+ *
+ * 注入点（opts.makeImage）若返回裸位图，由 splitLayerImage 归一成 `{image, trim:null}`，
+ * 老用法一个字节都不用改——trim 为 null 等价于「没有裁剪」。
+ *
+ * 导出面：仅供测试与 import 管线内部使用，不属于外壳调用面。
+ * 留成 export 是为了让 tests/import-file.test.mjs 能直接钉住「图层对象没被污染」，
+ * 这一点比 API 洁癖重要；外壳只该走 psdToObjects / imageToObject。
+ */
+export async function psdLayerImage(layer) {
     const w = intOr(layer.width, 0);
     const h = intOr(layer.height, 0);
     if (!w || !h) return null;
@@ -209,18 +302,15 @@ async function psdLayerImage(layer) {
     // 裁到非透明包围盒：留白不进入对象，偏移交给调用方补到 transform 上
     const box = alphaBounds(pixels, w, h) || { x: 0, y: 0, w, h };
     const trimmed = box.x !== 0 || box.y !== 0 || box.w !== w || box.h !== h;
-    if (trimmed) {
-        pixels = cropPixels(pixels, w, box);
-        layer.__trim = { dx: box.x, dy: box.y, srcW: w, srcH: h };
-    } else {
-        layer.__trim = { dx: 0, dy: 0, srcW: w, srcH: h };
-    }
+    if (trimmed) pixels = cropPixels(pixels, w, box);
+    // dx/dy 是「内容相对于图层矩形的偏移」，srcW/srcH 只留作排查用
+    const trim = { dx: box.x, dy: box.y, srcW: w, srcH: h, trimmed };
     const tw = box.w;
     const th = box.h;
 
     if (typeof ImageData === 'function' && typeof createImageBitmap === 'function') {
         try {
-            return await createImageBitmap(new ImageData(pixels, tw, th));
+            return { image: await createImageBitmap(new ImageData(pixels, tw, th)), trim };
         } catch (err) {
             // 某些环境里 createImageBitmap(ImageData) 会被拒，掉到 canvas 路径
         }
@@ -233,14 +323,29 @@ async function psdLayerImage(layer) {
             const g = canvas.getContext('2d');
             if (g) {
                 g.putImageData(new ImageData(pixels, tw, th), 0, 0);
-                return canvas;
+                return { image: canvas, trim };
             }
         } catch (err) {
             // 继续掉到裸像素
         }
     }
     // node / 无 DOM：返回足够画图的数据描述，psdToObjects 仍可用于测试与预检
-    return { width: tw, height: th, data: pixels, psd: true };
+    return { image: { width: tw, height: th, data: pixels, psd: true }, trim };
+}
+
+/**
+ * 把 makeImage 的返回值归一成 `{image, trim}`。
+ * 判据是「同时带 image 与 trim 两个自有键」：裸位图（ImageBitmap / canvas）、
+ * 裸像素描述（`{width,height,data}`）都不带 trim，因此老用法原样通过。
+ */
+function splitLayerImage(raw) {
+    if (!raw) return { image: null, trim: null };
+    if (typeof raw === 'object'
+        && Object.prototype.hasOwnProperty.call(raw, 'image')
+        && Object.prototype.hasOwnProperty.call(raw, 'trim')) {
+        return { image: raw.image || null, trim: raw.trim || null };
+    }
+    return { image: raw, trim: null };
 }
 
 /** 位图文件（PNG/JPEG/WebP）→ ImageBitmap；o.decode 可注入（测试用）。 */
@@ -261,6 +366,104 @@ async function decodeBitmap(bytes, name, decoder) {
     }
 }
 
+/* ───────────── 位图文件（PNG/JPEG/WebP）的同一套裁剪规则 ───────────── */
+
+/**
+ * 位图能读到像素吗？读得到就返回 `{data, width, height}`，读不到返回 null。
+ *
+ * 两条来源：
+ *   ① ImageData / 裸像素描述：`.data` 本身就是字节，直接用；
+ *   ② ImageBitmap / HTMLCanvasElement / HTMLImageElement：只能借 canvas 的
+ *      getImageData 读回来（会多一次整图拷贝，见 IMAGE_TRIM_MAX_PIXELS 的取舍）。
+ * 读不到不是错误：跨域图、无 DOM 的 node、不支持 willReadFrequently 的环境都返回 null，
+ * 调用方据此保持原图——「裁不了」绝不能变成「导入失败」。
+ */
+function bitmapPixels(bitmap) {
+    if (!bitmap) return null;
+    const w = intOr(bitmap.width, 0);
+    const h = intOr(bitmap.height, 0);
+    if (!(w > 0) || !(h > 0)) return null;
+    const data = bitmap.data;
+    if (data && ArrayBuffer.isView(data) && data.BYTES_PER_ELEMENT === 1 && data.length >= w * h * 4) {
+        return { data, width: w, height: h };
+    }
+    if (typeof document === 'undefined' || !document.createElement) return null;
+    try {
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const g = canvas.getContext('2d', { willReadFrequently: true });
+        if (!g) return null;
+        g.drawImage(bitmap, 0, 0);
+        return { data: g.getImageData(0, 0, w, h).data, width: w, height: h };
+    } catch (err) {
+        return null;
+    }
+}
+
+/**
+ * 把位图裁到 box，返回新的可绘制位图；做不到返回 null。
+ * 有 DOM 时走 putImageData（整数偏移、无重采样，像素原样搬运）；
+ * 没有 DOM 时造一个新的裸像素描述，形状与 psdLayerImage 的兜底一致。
+ */
+function cropBitmap(bitmap, box, pixels) {
+    if (typeof document !== 'undefined' && document.createElement) {
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = box.w;
+            canvas.height = box.h;
+            const g = canvas.getContext('2d');
+            if (g) {
+                if (typeof ImageData === 'function' && pixels) {
+                    g.putImageData(new ImageData(cropPixels(pixels.data, pixels.width, box), box.w, box.h), 0, 0);
+                } else {
+                    g.drawImage(bitmap, -box.x, -box.y);
+                }
+                return canvas;
+            }
+        } catch (err) {
+            // 掉到位图不可读的路径：交给调用方保持原图
+        }
+    }
+    if (pixels) {
+        return {
+            width: box.w,
+            height: box.h,
+            data: cropPixels(pixels.data, pixels.width, box),
+        };
+    }
+    return null;
+}
+
+/**
+ * 位图导入的裁剪：返回 `{image, box}`，没裁则 null。
+ * 与 PSD 路径同一套规则（alpha>0 的包围盒），区别是这里拿不到原始通道缓冲，
+ * 得先读像素。所以加了两道上限：
+ *   - 关闭开关（opts.trim === false）：调用方明确不要动图
+ *   - IMAGE_TRIM_MAX_PIXELS：读像素要再拷一份图，超大图会让内存翻倍，
+ *     宁可保持原样也不把一次导入变成几百 MB 的峰值（报告里会写明 skipped）
+ */
+const IMAGE_TRIM_MAX_PIXELS = 4096 * 4096;
+
+function trimBitmap(bitmap, opts) {
+    const o = opts || {};
+    if (o.trim === false) return { skipped: 'off' };
+    const w = intOr(bitmap && bitmap.width, 0);
+    const h = intOr(bitmap && bitmap.height, 0);
+    if (w * h > IMAGE_TRIM_MAX_PIXELS) return { skipped: 'big' };
+    const pixels = bitmapPixels(bitmap);
+    if (!pixels) return { skipped: 'nopixels' };
+    const box = alphaBounds(pixels.data, pixels.width, pixels.height);
+    // null = 全透明；等于整张 = 没有留白。两种情况都不动图（全透明层也照原样导入）
+    if (!box) return { skipped: 'clear' };
+    if (box.x === 0 && box.y === 0 && box.w === pixels.width && box.h === pixels.height) {
+        return { skipped: 'full' };
+    }
+    const image = cropBitmap(bitmap, box, pixels);
+    if (!image) return { skipped: 'nobitmap' };
+    return { image, box };
+}
+
 /* ─────────────────── PSD 图层 → 文档对象（映射规则的核心） ─────────────────── */
 
 /**
@@ -274,11 +477,16 @@ async function decodeBitmap(bytes, name, decoder) {
  * @param {object} layer psd.mjs 的图层
  * @param {*} image 已解码位图
  * @param {{id:string,x:number,y:number,visible:boolean}|null} parent 所属组对象（根图层为 null）
- * @param {{grouped:number}} report 统计口径
+ * @param {{grouped:number,trimmed:number}} report 统计口径
+ * @param {{dx:number,dy:number}|null} [trim] 位图被裁掉的左上留白（null = 没裁）
  */
-function psdObject(layer, image, parent, report) {
+function psdObject(layer, image, parent, report, trim) {
     const name = String(layer.name == null ? '' : layer.name).trim() || '图层';
     if (parent) report.grouped += 1;
+    // 裁剪偏移只加到原点：位图左上角现在是「内容左上角」，世界坐标必须跟着补 dx/dy，
+    // 否则对象会整块往左上滑 dx/dy。注入的 makeImage 返回裸位图时 trim 为 null → 补 0。
+    const dx = trim ? intOr(trim.dx, 0) : 0;
+    const dy = trim ? intOr(trim.dy, 0) : 0;
 
     return makeObject({
         name,
@@ -294,8 +502,8 @@ function psdObject(layer, image, parent, report) {
         transform: {
             keys: [createKey(0, {
                 // 位图被裁到内容包围盒后，原点要跟着偏移，位置才不会跑
-                x: intOr(layer.left, 0) + (layer.__trim ? layer.__trim.dx : 0) - (parent ? parent.x : 0),
-                y: intOr(layer.top, 0) + (layer.__trim ? layer.__trim.dy : 0) - (parent ? parent.y : 0),
+                x: intOr(layer.left, 0) + dx - (parent ? parent.x : 0),
+                y: intOr(layer.top, 0) + dy - (parent ? parent.y : 0),
             })],
         },
     });
@@ -564,17 +772,19 @@ async function emitLayer(index, parent, ctx) {
         ctx.report.empty += 1;
         return null;
     }
-    let image = null;
+    let raw = null;
     try {
-        image = await ctx.makeImage(layer);
+        raw = await ctx.makeImage(layer);
     } catch (err) {
-        image = null;
+        raw = null;
     }
-    if (!image) {
+    const shot = splitLayerImage(raw);
+    if (!shot.image) {
         ctx.report.empty += 1;
         return null;
     }
-    return psdObject(layer, image, parent, ctx.report);
+    if (shot.trim && shot.trim.trimmed) ctx.report.trimmed += 1;
+    return psdObject(layer, shot.image, parent, ctx.report, shot.trim);
 }
 
 /**
@@ -654,6 +864,8 @@ export async function psdToObjects(buffer, opts) {
         empty: 0,
         grouped: 0,
         groups: 0,
+        // 被裁到内容包围盒的层数（0 = 这批图层本来就贴合内容）
+        trimmed: 0,
         order: o.order === 'array' ? 'array' : 'top-first',
     };
 
@@ -687,8 +899,12 @@ export async function psdToObjects(buffer, opts) {
  * PNG/JPG/WebP 字节 → 一个 kind:'image' 的对象并进文档。
  * 只加对象，不动 doc.width/height —— 位图比画布大就溢出，用户自己缩放。
  *
+ * 与 PSD 路径同一条规则：先裁到非透明包围盒，再把 dx/dy 补进原点。
+ * 居中是按**原图尺寸**算的 —— 裁掉的只是透明的“纸”，画面位置不动；
+ * 若按裁后尺寸重新居中，内容会在导入瞬间平移（与 PSD 路径的约定相反），不做。
+ *
  * @param {ArrayBuffer|Uint8Array} buffer
- * @param {object} [opts] {doc, name, x, y, decode}
+ * @param {object} [opts] {doc, name, x, y, decode, trim}
  * @returns {Promise<{ok:boolean, doc?:object, report?:object, activeId?:string, error?:string}>}
  */
 export async function imageToObject(buffer, opts) {
@@ -697,17 +913,26 @@ export async function imageToObject(buffer, opts) {
     if (!bytes || !bytes.byteLength) return { ok: false, error: '没有读到图片内容' };
 
     const name = String(o.name || '');
-    const bitmap = await decodeBitmap(bytes, name, o.decode);
-    if (!bitmap) return { ok: false, error: '图片解码失败（扩展名和真实格式可能不符）' };
+    const decoded = await decodeBitmap(bytes, name, o.decode);
+    if (!decoded) return { ok: false, error: '图片解码失败（扩展名和真实格式可能不符）' };
 
-    const w = Math.max(1, intOr(bitmap.width, 0));
-    const h = Math.max(1, intOr(bitmap.height, 0));
+    const w = Math.max(1, intOr(decoded.width, 0));
+    const h = Math.max(1, intOr(decoded.height, 0));
     const base = o.doc && typeof o.doc === 'object' ? o.doc : null;
     const canvasW = base ? Math.max(1, intOr(base.width, w)) : w;
     const canvasH = base ? Math.max(1, intOr(base.height, h)) : h;
     // 位图自己没有坐标：居中放入画布。贴 (0,0) 会让大图只剩右下角，看着像导入失败。
-    const x = o.x !== undefined && Number.isFinite(Number(o.x)) ? Math.round(Number(o.x)) : Math.round((canvasW - w) / 2);
-    const y = o.y !== undefined && Number.isFinite(Number(o.y)) ? Math.round(Number(o.y)) : Math.round((canvasH - h) / 2);
+    const cx = o.x !== undefined && Number.isFinite(Number(o.x)) ? Math.round(Number(o.x)) : Math.round((canvasW - w) / 2);
+    const cy = o.y !== undefined && Number.isFinite(Number(o.y)) ? Math.round(Number(o.y)) : Math.round((canvasH - h) / 2);
+
+    // 裁不了（读不到像素 / 太大 / 关掉了）就保持原样：这里的失败绝不能让导入失败
+    const cut = trimBitmap(decoded, o);
+    const bitmap = cut && cut.image ? cut.image : decoded;
+    const box = cut && cut.image ? cut.box : null;
+    const dx = box ? box.x : 0;
+    const dy = box ? box.y : 0;
+    const x = cx + dx;
+    const y = cy + dy;
 
     const obj = makeObject({
         name: stripExt(name) || '导入的图片',
@@ -722,7 +947,20 @@ export async function imageToObject(buffer, opts) {
         ok: true,
         doc,
         activeId: obj.id,
-        report: { kind: 'image', width: w, height: h, x, y, imported: 1 },
+        report: {
+            kind: 'image',
+            // width/height 是**原图**尺寸（既有语义不改）；裁剪后的尺寸另给两个字段
+            width: w,
+            height: h,
+            x,
+            y,
+            imported: 1,
+            trimmed: !!box,
+            contentWidth: box ? box.w : w,
+            contentHeight: box ? box.h : h,
+            // cut.skipped 只在没裁时出现：off / big / nopixels / clear / full / nobitmap
+            trimSkipped: box ? '' : String((cut && cut.skipped) || ''),
+        },
     };
 }
 
@@ -779,5 +1017,6 @@ export async function pickAndImport(opts) {
         duration: o.duration,
         makeImage: o.makeImage,
         decode: o.decode,
+        trim: o.trim,
     });
 }

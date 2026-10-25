@@ -358,16 +358,29 @@ export function mount(el, ctx) {
             g.fill();
         }
 
-        // 锚点十字
-        const a = toScreen(applyMatrix(elementWorldMatrix(el, time, hp.quad.size, parentM), anchorPoint(el, hp.quad.size)));
+        // 锚点十字：拖动中读 input 的预览态——那时文档还没写，只是十字跟手。
+        // 预览态用虚线画出「即将落点」，松手才真正 setAnchor（见 canvas-input.mjs）。
+        const pvAnchor = typeof input.previewAnchor === 'function' ? input.previewAnchor() : null;
+        const pv = pvAnchor && pvAnchor.elId === el.id ? pvAnchor : null;
+        const anchorLocal = pv
+            ? { x: hp.quad.size.w * pv.u, y: hp.quad.size.h * pv.v }
+            : anchorPoint(el, hp.quad.size);
+        const a = toScreen(applyMatrix(elementWorldMatrix(el, time, hp.quad.size, parentM), anchorLocal));
         g.strokeStyle = '#f0c674';
         g.lineWidth = 1;
+        g.setLineDash(pv ? [3, 3] : []);
         g.beginPath();
         g.moveTo(a.x - 6, a.y);
         g.lineTo(a.x + 6, a.y);
         g.moveTo(a.x, a.y - 6);
         g.lineTo(a.x, a.y + 6);
         g.stroke();
+        // 中心小圆点：锚点落在角上时与 nw 手柄重叠，靠这个点区分「这次拖的是原点」
+        g.setLineDash([]);
+        g.fillStyle = pv ? 'rgba(240,198,116,0.75)' : '#f0c674';
+        g.beginPath();
+        g.arc(a.x, a.y, 2, 0, Math.PI * 2);
+        g.fill();
     }
 
     /* ── 每帧的工作 ── */

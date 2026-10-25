@@ -9,9 +9,9 @@
 import { layerById } from '../core/cel.mjs';
 import {
     elementLattice, handlePoints, elementWorldMatrix, elementSize, elementState,
-    applyMatrix, worldToLocal, anchorPoint,
+    applyMatrix, localUv, anchorPoint, invertMatrix,
 } from '../core/element.mjs';
-import { HIT_PX, pickHandle, dragPatch } from '../core/gizmo.mjs';
+import { HIT_PX, pickHandle, pickAnchor, anchorUvFromMatrix, dragPatch } from '../core/gizmo.mjs';
 
 /**
  * @param {object} deps
@@ -52,14 +52,21 @@ export function createInput(deps) {
         }
         // 旋转原点（锚点十字）：半径 HIT_PX 内直接命中。它常落在选框里面，
         // 必须排在泛型手柄之前，否则永远拖不到。
+        // 注意 applyMatrix 返回的是 {x,y} 对象（不是 [x,y] 数组），这里必须用 toScreen 而不是 toScreenArr——
+        // 传错会让坐标变成 NaN，命中判定恒为 false，锚点于是永远拖不动、只能命中同位置的 nw 手柄。
         const size0 = elementSize(doc, el, time);
-        const aScr = toScreenArr(applyMatrix(elementWorldMatrix(el, time, size0, parentM), anchorPoint(el, size0)));
-        if (aScr && Math.hypot(p.sx - aScr[0], p.sy - aScr[1]) <= HIT_PX) return { kind: 'anchor', name: 'anchor' };
-        // 内部 → 移动：需要 doc 空间反解，放进 core 的 inside 谓词里做
+        const aScr = toScreen(applyMatrix(elementWorldMatrix(el, time, size0, parentM), anchorPoint(el, size0)));
+        const onAnchor = pickAnchor(aScr, { x: p.sx, y: p.sy }, HIT_PX);
+        if (onAnchor) return onAnchor;
+        // 内部 → 移动：需要 doc 空间反解，放进 core 的 inside 谓词里做。
+        // 用 localUv（不夹取）而不是 worldToLocal：后者会把越界点夹成 0 / 1，
+        // 于是「对象左边外 1-2px」也算在内部，点空白处反而能选中对象。
         opts.inside = allowMove
             ? () => {
-                const uv = worldToLocal(doc, el, time, { x: p.x, y: p.y }, parentM);
-                return !!(uv && uv.u >= 0 && uv.u <= 1 && uv.v >= 0 && uv.v <= 1);
+                const loc = localUv(doc, el, time, { x: p.x, y: p.y }, parentM, 0);
+                if (!loc) return false;
+                const s = elementSize(doc, el, time);
+                return loc.x >= 0 && loc.x <= s.w && loc.y >= 0 && loc.y <= s.h;
             }
             : false;
         return pickHandle(toScreenQuad(handlePoints(doc, el, time, parentM).quad), { x: p.sx, y: p.sy }, opts);
@@ -70,6 +77,9 @@ export function createInput(deps) {
     let drag = null;
     let dragRaf = 0;
     let pendingPointer = null;
+    /** 拖锚点期间的预览态：{ elId, u, v }。只画十字，不动文档。 */
+    let preview = null;
+    let dragCanceled = false;
 
     function startDrag(e, onHandle) {
         const info = selectionInfo();
@@ -88,6 +98,8 @@ export function createInput(deps) {
             size,
             parentM,
         };
+        preview = null;
+        dragCanceled = false;
         try {
             host.setPointerCapture(e.pointerId);
         } catch (err) {
@@ -96,6 +108,15 @@ export function createInput(deps) {
         window.addEventListener('pointermove', onDragMove, true);
         window.addEventListener('pointerup', onDragEnd, true);
         window.addEventListener('pointercancel', onDragEnd, true);
+        window.addEventListener('keydown', onDragKeyDown, true);
+    }
+
+    /** 拖动中按 Esc = 放弃这次拖动（锚点回到按下前的样子，不写文档） */
+    function onDragKeyDown(e) {
+        if (e.key !== 'Escape' && e.key !== 'Esc') return;
+        if (!drag) return;
+        dragCanceled = true;
+        onDragEnd();
     }
 
     function onDragMove(e) {
@@ -137,13 +158,19 @@ export function createInput(deps) {
         const el = layerById(doc, drag.elId);
         if (!el) return;
         const t = ctx.time();
-        // 拖锚点：把指针位置反解成对象本地 uv，写回 anchor（keepPlace 会补偿 x/y，
-        // 所以对象不会跳，只是旋转/缩放的轴换了地方）。
+        // 拖锚点：把指针位置反解成对象本地 uv。**拖动中只记预览**（见 previewAnchor），
+        // 松手时才 setAnchor 落一次文档——每帧写文档会把一次拖动拆成多条撤销记录，
+        // 而且 keepPlace 的补偿每帧都算一遍，中途按 Esc 也退不回去。
         if (drag.pick && drag.pick.kind === 'anchor') {
-            const uv = worldToLocal(doc, el, t, toDocPoint(e), drag.parentM);
-            if (uv && typeof ctx.setAnchor === 'function') {
-                ctx.setAnchor(el.id, { x: Math.max(0, Math.min(1, uv.u)), y: Math.max(0, Math.min(1, uv.v)) }, { keepPlace: true });
-            }
+            // 故意不用 worldToLocal：它带 1e-3 的严格容差、超出网格就返回 null，
+            // 而锚点默认就在对象角上——起步时指针正好压在边界（v≈0），
+            // 用它会出现「拖了半天不动、走远才跟手」。这里直接用世界矩阵的逆投影，
+            // 算出基准尺寸下的 uv 再夹到 [0,1]，语义与 anchorPoint 的 size*a 完全对齐。
+            const inv = invertMatrix(elementWorldMatrix(el, t, drag.size, drag.parentM));
+            const uv = anchorUvFromMatrix(inv, drag.size, toDocPoint(e));
+            if (!uv) return;
+            preview = { elId: el.id, u: uv.u, v: uv.v };
+            if (typeof ctx.requestRender === 'function') ctx.requestRender();
             return;
         }
         const patch = dragPatch({
@@ -166,6 +193,7 @@ export function createInput(deps) {
         window.removeEventListener('pointermove', onDragMove, true);
         window.removeEventListener('pointerup', onDragEnd, true);
         window.removeEventListener('pointercancel', onDragEnd, true);
+        window.removeEventListener('keydown', onDragKeyDown, true);
         if (dragRaf) {
             cancelAnimationFrame(dragRaf);
             dragRaf = 0;
@@ -182,8 +210,30 @@ export function createInput(deps) {
             applyDrag(ev);
         }
         const before = drag.before;
-        const after = ctx.doc();
+        const pv = preview;
+        const elId = drag.elId;
         drag = null;
+        preview = null;
+
+        /* 拖锚点：整段拖动只在松手时写一次文档。Esc 取消就什么都不写。
+           撤销记录由 ctx.setAnchor 内部那次 setDoc 生成（label「改旋转原点」），
+           这里不再 push 第二条，否则一次拖动要按两下撤销才退得回去。 */
+        if (pv) {
+            if (dragCanceled) {
+                dragCanceled = false;
+                if (typeof ctx.requestRender === 'function') ctx.requestRender();
+                if (ctx.notify) ctx.notify('已取消');
+                return;
+            }
+            if (typeof ctx.setAnchor === 'function') {
+                ctx.setAnchor(elId, { x: pv.u, y: pv.v }, { keepPlace: true });
+                if (ctx.notify) ctx.notify('已移动旋转原点');
+            }
+            return;
+        }
+        dragCanceled = false;
+
+        const after = ctx.doc();
         if (before && after && before !== after) {
             // 一次拖动 = 一条撤销记录
             ctx.engine.history.push({
@@ -193,6 +243,11 @@ export function createInput(deps) {
             });
         }
         if (ctx.notify) ctx.notify('已更新关键帧');
+    }
+
+    /** 叠加层画「预览十字」用：拖动中返回 { u, v, elId }，其余时候 null */
+    function previewAnchor() {
+        return preview ? { elId: preview.elId, u: preview.u, v: preview.v } : null;
     }
 
     /* ── 指针入口（宿主捕获阶段，抢在引擎之前） ── */
@@ -249,11 +304,14 @@ export function createInput(deps) {
         window.removeEventListener('pointermove', onDragMove, true);
         window.removeEventListener('pointerup', onDragEnd, true);
         window.removeEventListener('pointercancel', onDragEnd, true);
+        window.removeEventListener('keydown', onDragKeyDown, true);
         if (dragRaf) cancelAnimationFrame(dragRaf);
         dragRaf = 0;
         pendingPointer = null;
         drag = null;
+        preview = null;
+        dragCanceled = false;
     }
 
-    return { onDown, dispose };
+    return { onDown, dispose, previewAnchor };
 }

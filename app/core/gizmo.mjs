@@ -152,6 +152,55 @@ export function pickHandle(quad, point, opts) {
 }
 
 /**
+ * 旋转原点（锚点十字）的命中判定。
+ *
+ * 单独成函数是为了让「锚点优先于 8 个缩放手柄」这条规则可测：
+ * 锚点默认落在对象左上角 (0,0)，与 nw 手柄重合，若交给 pickHandle 一并判，
+ * 同距时手柄先返回，用户就永远拖不到锚点（只会把对象缩小/翻转）。
+ *
+ * @param {{x:number,y:number}|{0:number,1:number}|null} anchorScreen 锚点屏幕坐标
+ *        （对象 `{x,y}` 形式；历史上这里误传过 `[x,y]` 数组风格的取值，那会得到 NaN）
+ * @param {{x:number,y:number}} point 指针屏幕坐标
+ * @param {number} [threshold] 命中半径，默认 HIT_PX
+ * @returns {{kind:'anchor', name:'anchor'}|null}
+ */
+export function pickAnchor(anchorScreen, point, threshold) {
+    if (!anchorScreen || !point) return null;
+    const ax = anchorScreen.x;
+    const ay = anchorScreen.y;
+    if (!Number.isFinite(ax) || !Number.isFinite(ay)) return null;
+    const th = Number.isFinite(threshold) ? threshold : HIT_PX;
+    return Math.hypot(ax - point.x, ay - point.y) <= th ? { kind: 'anchor', name: 'anchor' } : null;
+}
+
+/**
+ * 指针 doc 坐标 → 锚点归一化 uv（拖锚点用）。
+ *
+ * 刻意不复用 core/element.worldToLocal：那条路径带 1e-3 的严格容差、且经过网格反解，
+ * 锚点默认落在对象角上，起步时指针正好压在边界（v≈0），用它会出现
+ * 「拖了半天不动、走远了才跟手」。这里直接在世界矩阵的逆空间里除基准尺寸，
+ * 与 anchorPoint(el, size) 的 `size * a` 严格互逆，越界统一夹到 [0,1]。
+ *
+ * @param {{a,b,c,d,e,f}|null} inv 世界矩阵的逆
+ * @param {{w:number,h:number}} size 对象基准尺寸
+ * @param {{x:number,y:number}} p doc 空间点
+ * @returns {{u:number,v:number}|null} 矩阵不可逆或尺寸退化时 null
+ */
+export function anchorUvFromMatrix(inv, size, p) {
+    if (!inv || !size || !p) return null;
+    const w = size.w;
+    const h = size.h;
+    if (!(w > 0) || !(h > 0)) return null;
+    const x = inv.a * p.x + inv.c * p.y + inv.e;
+    const y = inv.b * p.x + inv.d * p.y + inv.f;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return {
+        u: Math.max(0, Math.min(1, x / w)),
+        v: Math.max(0, Math.min(1, y / h)),
+    };
+}
+
+/**
  * 内部判定：调用方给了布尔/谓词就照用，否则按四边形双线性反解算（缺省行为）。
  */
 function isInsideQuad(quad, point, hint) {
