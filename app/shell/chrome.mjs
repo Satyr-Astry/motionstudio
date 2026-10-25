@@ -67,6 +67,15 @@ function fmt(n, d) {
     return (Number.isFinite(v) ? v : 0).toFixed(d);
 }
 
+/** 时间戳 → HH:MM:SS；拿不到有效值时返回空串（宁可整段不显示，也不显示一个假时间）。 */
+function fmtClock(ms) {
+    const v = Number(ms);
+    if (!Number.isFinite(v) || v <= 0) return '';
+    const d = new Date(v);
+    const p = (n) => String(n).padStart(2, '0');
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+
 /**
  * 构建顶栏。host 通常是 #topbar（可能已有其它内容，这里整体接管）。
  * @param {Element} host
@@ -99,7 +108,19 @@ export function buildTopbar(host, api) {
     }
 
     // 当前项目名：没保存过就是「未命名项目」，保存后带文件名。
-    const project = el('div', 'top-project', '未命名项目');
+    // ── 项目区：状态图标 + 名称 + 脏点 ────────────────────────────────
+    // 三段拆开是为了让「有未保存改动」能自己带 aria-label，
+    // 而不是变成名字末尾一个读屏软件念不出来、视觉上也看不出含义的字符。
+    const project = el('div', 'top-project', '');
+    const projectIcon = el('span', 'top-project-ico', '');
+    projectIcon.setAttribute('aria-hidden', 'true');   // 语义已由文字表达
+    const projectText = el('span', 'top-project-text', '');
+    const projectDot = el('span', 'top-project-dot', '•');
+    projectDot.setAttribute('role', 'img');
+    projectDot.setAttribute('aria-label', '有未保存的改动');
+    projectDot.title = '有未保存的改动';
+    projectDot.hidden = true;
+    project.append(projectIcon, projectText, projectDot);
 
     // 返回编排：画板 / 设置是从编排「进去」的子视图，必须有一条显眼的回路。
     const back = el('button', 'top-back ms-icon-label');
@@ -135,6 +156,34 @@ export function buildTopbar(host, api) {
     host.appendChild(ws);
     host.appendChild(hint);
 
+    // 保存反馈的寿命：长到能看见、短到不占位。任务书上限 800ms。
+    const SAVE_FLASH_MS = 800;
+    let flashTimer = 0;
+    let flashOn = false;
+    let prevDirty = null;
+
+    function armSaveFlash() {
+        flashOn = true;
+        clearTimeout(flashTimer);
+        flashTimer = setTimeout(() => {
+            flashOn = false;
+            update();
+        }, SAVE_FLASH_MS);
+    }
+
+    function projectTitle(f) {
+        const bits = [];
+        if (f.inLibrary) bits.push('当前项目：' + f.pname);
+        else bits.push('尚未保存到项目库（Ctrl+S 命名并入库）');
+        if (f.dirty) bits.push('有未保存改动');
+        // 这两项要存储层提供（app.mjs 的 api 里还没有），拿不到就整段省略，
+        // 不猜时间、也不猜介质 —— 缺字段时 title 依然每句为真。
+        const clock = fmtClock(f.savedAt);
+        if (clock) bits.push('上次保存 ' + clock);
+        if (f.storeKind) bits.push('存储：' + f.storeKind);
+        return bits.join(' · ');
+    }
+
     function update() {
         const cur = call(a.workspace, WS_IDS[0]);
         for (const [id, b] of tabs) b.classList.toggle('is-on', id === cur);
@@ -142,11 +191,27 @@ export function buildTopbar(host, api) {
         // 画板 / 设置里才需要「返回编排」；编排里它没有意义，直接隐藏。
         back.style.display = cur === 'animate' ? 'none' : '';
 
-        const pname = call(a.projectName, '');
+        const pname = String(call(a.projectName, '') || '').trim();
         const dirty = !!call(a.dirty, false);
-        project.textContent = (pname || '未命名项目') + (dirty ? ' •' : '');
-        project.title = pname ? '当前项目：' + pname + (dirty ? '（有未保存修改）' : '') : '尚未保存（Ctrl+S）';
+        const inLibrary = pname.length > 0;
+        // 「未命名且未入库」与「有名字但没保存」以前看起来一模一样，这里把前者说清。
+        const label = inLibrary ? pname : '未命名项目（未入库）';
+        const justSaved = prevDirty === true && dirty === false;
+        if (justSaved) armSaveFlash();
+
+        projectIcon.innerHTML = icon(inLibrary ? 'save' : 'folder-open', { size: 'sm' });
+        projectText.textContent = (justSaved || flashOn) ? label + ' · 已保存' : label;
+        projectDot.hidden = !dirty;
         project.classList.toggle('is-dirty', dirty);
+        project.classList.toggle('is-just-saved', justSaved || flashOn);
+        project.title = projectTitle({
+            inLibrary,
+            pname,
+            dirty,
+            savedAt: call(a.projectSavedAt, 0),
+            storeKind: call(a.projectStoreKind, ''),
+        });
+        prevDirty = dirty;
 
         // 提示位只显示临时消息：没有消息时腾出空间，不再常驻一行教程。
         const h = call(a.hint, '');

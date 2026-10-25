@@ -138,9 +138,12 @@ body {
     color: var(--ink-dim);
 }
 
-/* —— 项目名：可变长，超长省略，脏标记由 JS 写进文本 —— */
+/* —— 项目区：状态图标 + 名称 + 脏点，三段各带自己的语义 —— */
 
 .top-project {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-2);
     flex: 0 1 auto;
     min-width: 0;
     max-width: 220px;
@@ -148,16 +151,54 @@ body {
     color: var(--ink-dim);
     font-size: 11px;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     /* 与文件动作分开：撤销/重做属于文件段，项目名是新的一段 */
     margin-left: var(--sp-3);
     padding-left: var(--sp-3);
     border-left: 1px solid var(--line);
+    /* 「已保存」反馈的渐变：够察觉，不打断视线 */
+    transition: color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* 溢出时只让名字省略：状态图标与脏点永远完整 —— 它们是判断状态的唯一线索 */
+.top-project-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.top-project-ico,
+.top-project-dot {
+    flex: 0 0 auto;
+    display: inline-flex;
+    transition: color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.top-project-ico {
+    color: var(--ink-faint);
+}
+
+.top-project-dot {
+    color: var(--ink-dim);
+}
+
+/* [hidden] 的 display:none 来自 UA 样式表，会被上面的 display:inline-flex 盖掉，
+   所以这里显式收回来 —— 否则「没脏」时那个 • 依然占位可见。 */
+.top-project-dot[hidden] {
+    display: none;
 }
 
 .top-project.is-dirty {
     color: var(--ink);
+}
+
+.top-project.is-dirty .top-project-ico {
+    color: var(--ink-dim);
+}
+
+/* 保存成功的一次性反馈：颜色短暂落到 --ok，800ms 后由 JS 摘掉 class */
+.top-project.is-just-saved,
+.top-project.is-just-saved .top-project-ico {
+    color: var(--ok);
 }
 
 /* 画板/设置工作区才出现的「回到编排」出口 */

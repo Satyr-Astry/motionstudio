@@ -1,0 +1,400 @@
+/*
+ * MotionStudio —— 项目库浮层样式（app/styles/projects.css）
+ *
+ * 来源：这批规则原先以 `MODAL_CSS` 的形式内联在 app/shell/project-io.mjs（末态已随删除漂到
+ * :856-895），由 ensureModalCss() 在运行时 appendChild 一个 `<style id="ms-modal-css">`。
+ * 内联版本有三个问题，所以搬到独立文件：
+ *   1. 它是**运行时后插入 head** 的 `<style>`，与 <link> 同特异性时文档序在后 → 永远赢，
+ *      于是在 projects.css 上改任何 `.prj-*` 值都不生效（实测 `.prj-del` 一直显示 --ink 灰、
+ *      `.prj-sub` 停在 12px）。删块后回归脚本 `ms-view/w27-final-audit.mjs` 三尺寸抽查全中。
+ *   2. 每条规则都被 `.ms-modal` 前缀锁死，面板换容器就等于换皮；
+ *   3. `.prj-panel{font:12.5px/1.5 inherit}` 里 `inherit` 在 font shorthand 的非末尾位
+ *      是非法值 → 整条声明被 CSS 丢弃，想写的 12.5px 从未生效（真机实测是继承来的 12px）。
+ *
+ * 口径：字号只用 12 / 11 / 13 三档；尺寸只用 --sp-* / --h-* / --r-* / --icon*；
+ * 颜色只用 --ink* / --panel* / --line* / --accent* / --danger / --sel-bg*。
+ *
+ * §1 是等价搬迁（值与内联版逐条一致，删掉非法 shorthand），§2–§4 是本批新增的结构。
+ * 内联版已删除（属性级比对：34 条规则、缺口 0；`.ms-ask` 系列本就走内联 element.style，
+ * 从不依赖 MODAL_CSS），因此本文件从今往后是 `.prj-*` 的唯一来源 —— 改这里就生效。
+ */
+
+/* ─────────────────────────── §1 等价搬迁 ─────────────────────────── */
+
+.ms-modal .prj-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    /* 内联版是 `font:12.5px/1.5 inherit`（非法 shorthand 被丢弃）：
+       这里按真实意图拆成两条，字号归到 12px 一档。 */
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink);
+}
+
+.ms-modal .prj-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+}
+
+.ms-modal .prj-title { display: none; }
+.ms-modal .prj-empty { display: none; }
+.ms-modal .prj-count { color: var(--ink-dim); }
+.ms-modal .prj-gap { flex: 1 1 auto; }
+
+.ms-modal .prj-btn {
+    font: inherit;
+    color: var(--ink);
+    background: var(--panel-2);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-1);
+    padding: 3px 9px;
+    cursor: pointer;
+}
+
+.ms-modal .prj-btn:hover { background: var(--surface); }
+.ms-modal .prj-btn:active { background: var(--bg-2); }
+
+.ms-modal .prj-hint {
+    padding: 4px 12px;
+    color: var(--ink-faint);
+    font-size: 12px;
+    border-bottom: 1px solid var(--line);
+}
+
+/* 提示行没内容时不占高度（否则每次 say() 之后布局都会跳一下）。 */
+.ms-modal .prj-hint:empty { display: none; }
+
+.ms-modal .prj-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: 12px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 10px;
+    align-content: start;
+}
+
+.ms-modal .prj-card {
+    display: grid;
+    grid-template-columns: 104px minmax(0, 1fr);
+    grid-template-areas: "thumb meta" "thumb actions";
+    align-items: start;
+    gap: 6px 10px;
+    padding: 8px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-2);
+    background: var(--panel-2);
+    cursor: pointer;
+}
+
+.ms-modal .prj-card:hover { border-color: var(--ink-faint); }
+.ms-modal .prj-card.is-current { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* 键盘可达：卡片可聚焦（点击整卡即载入），焦点环与全站一致。 */
+.ms-modal .prj-card:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.ms-modal .prj-thumb {
+    grid-area: thumb;
+    width: 104px;
+    height: 74px;
+    border-radius: var(--r-1);
+    overflow: hidden;
+    background: var(--bg-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ms-modal .prj-thumb-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 缩略图占位：用 --ink-dim 而不是 --ink-faint —— 11px 的 --ink-faint 落在新面板底色上
+   过不了 4.5:1 的对比度下限（见 §0 口径）。居中由 .prj-thumb 的 flex 负责。 */
+.ms-modal .prj-thumb-empty { color: var(--ink-dim); font-size: 11px; }
+
+.ms-modal .prj-meta {
+    grid-area: meta;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.ms-modal .prj-name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+
+.ms-modal .prj-name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ms-modal .prj-badge {
+    flex: 0 0 auto;
+    font-size: 11px;
+    line-height: 1.6;
+    padding: 0 5px;
+    border-radius: var(--r-1);
+    background: var(--sel-bg-strong);
+    color: var(--ink);
+}
+
+.ms-modal .prj-sub,
+.ms-modal .prj-time {
+    color: var(--ink-dim);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ms-modal .prj-actions {
+    grid-area: actions;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+.ms-modal .prj-actions .prj-btn { padding: 2px 7px; font-size: 12px; }
+
+.ms-modal .prj-rename {
+    font: inherit;
+    color: var(--ink);
+    background: var(--bg-2);
+    border: 1px solid var(--accent);
+    border-radius: var(--r-1);
+    padding: 2px 6px;
+    width: 150px;
+    min-width: 0;
+}
+
+.ms-modal .prj-empty { padding: 24px 12px; text-align: center; color: var(--ink-faint); }
+.ms-modal .prj-off { opacity: .5; }
+
+/* 空库时的唯一主行动：放在列表区正中（grid 里跨满整行），而不是塞在工具栏上方当第二排按钮。 */
+.ms-modal .ms-modal-cta {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    padding: 46px 16px;
+    text-align: center;
+}
+
+.ms-modal .ms-modal-cta-icon { display: flex; color: var(--ink-faint); }
+
+/* 尺寸与线宽一律交给 icons.css 的 data-size="lg" 档（28px / 渲染 1.3px）：
+   这里曾经用 width/height 直接把盒子写成 28px 并写死 stroke-width:1.4，
+   结果是全站唯一一处 28px 用例反而比别的图标粗（1.4 × 28/24 = 1.63px）。 */
+.ms-modal .ms-modal-cta-tip { color: var(--ink-dim); font-size: 13px; }
+.ms-modal .ms-modal-cta-sub { color: var(--ink-faint); font-size: 12px; }
+
+.ms-modal .ms-modal-cta-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font: inherit;
+    font-size: 13px;
+    padding: 7px 16px;
+    border: 1px solid var(--accent);
+    border-radius: var(--r-2);
+    background: rgba(74, 125, 255, .16);
+    color: var(--ink);
+    cursor: pointer;
+    transition: background-color var(--t-fast);
+}
+
+.ms-modal .ms-modal-cta-btn:hover { background: rgba(74, 125, 255, .26); }
+.ms-modal .ms-modal-cta-btn:active { background: rgba(74, 125, 255, .34); }
+
+/* ─────────────────── §2 head：新建 + 搜索 + `…` 菜单 ─────────────────── */
+
+/* 为什么另起 .prj-top 而不复用 .prj-head：head 的层级从「五个平铺按钮」变成
+   「主行动 + 检索 + 低频菜单」，padding/换行策略都要变，与内联版同名规则会打架。 */
+.ms-modal .prj-top {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    border-bottom: 1px solid var(--line);
+}
+
+.ms-modal .prj-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: var(--h-btn);
+    padding: 0 var(--sp-3);
+    font-size: 12px;
+    border: 1px solid var(--accent);
+    border-radius: var(--r-1);
+    background: var(--sel-bg);
+    color: var(--ink);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.ms-modal .prj-primary:hover { background: var(--sel-bg-strong); }
+
+.ms-modal .prj-search {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: var(--h-btn);
+    padding: 0 7px;
+    min-width: 132px;
+    flex: 0 1 200px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-1);
+    background: var(--bg-2);
+    color: var(--ink-faint);
+}
+
+.ms-modal .prj-search:focus-within {
+    border-color: var(--accent);
+    color: var(--ink-dim);
+}
+
+.ms-modal .prj-search-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--ink);
+    font-size: 12px;
+    font-family: inherit;
+    outline: none;
+}
+
+.ms-modal .prj-search-input::placeholder { color: var(--ink-faint); }
+
+/* 图标盒子：尺寸统一由 icons.css 的 --icon-size 决定，不写字面量宽高。 */
+.ms-modal .prj-ico {
+    display: inline-flex;
+    flex: 0 0 auto;
+    --icon-size: var(--icon-sm);
+}
+
+.ms-modal .prj-more {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--h-btn);
+    height: var(--h-btn);
+    padding: 0;
+    flex: 0 0 auto;
+}
+
+.ms-modal .prj-more[aria-expanded="true"] {
+    background: var(--surface);
+    border-color: var(--ink-faint);
+}
+
+.ms-modal .prj-menu {
+    position: absolute;
+    z-index: 5;
+    top: calc(100% - 2px);
+    right: var(--sp-3);
+    min-width: 200px;
+    display: flex;
+    flex-direction: column;
+    padding: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-2);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .38);
+}
+
+.ms-modal .prj-menu[hidden] { display: none; }
+
+.ms-modal .prj-mi {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: var(--h-row);
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--r-1);
+    background: transparent;
+    color: var(--ink);
+    font-size: 12px;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.ms-modal .prj-mi:hover { background: var(--sel-bg); }
+.ms-modal .prj-mi:disabled { color: var(--ink-faint); cursor: default; }
+
+/* 菜单里的一项属于「当前文档编辑」而不是项目库，用分隔线标出层级差。 */
+.ms-modal .prj-mi-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: var(--line);
+}
+
+/* ─────────────────── §3 卡片区：网格 + 无匹配文案 ─────────────────── */
+
+.ms-modal .prj-grid {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    padding: var(--sp-3);
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(258px, 1fr));
+    gap: var(--sp-3);
+    align-content: start;
+}
+
+.ms-modal .prj-noresult {
+    grid-column: 1 / -1;
+    padding: 36px var(--sp-3);
+    text-align: center;
+    color: var(--ink-faint);
+    font-size: 12px;
+}
+
+/* ─────────────────── §4 卡片动作：重命名 / 存为文件 / 删除 ─────────────────── */
+
+/* 卡片整块可点（载入），所以动作区只留次级动作；删除走危险色，与其余两个明确分档。 */
+.ms-modal .prj-actions .prj-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 20px;
+}
+
+.ms-modal .prj-del {
+    color: var(--danger);
+    border-color: var(--line-2);
+}
+
+.ms-modal .prj-del:hover {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: var(--bg);
+}
+
+.ms-modal .prj-del:active {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: var(--bg);
+}
+
+/* 重命名进行中：卡片不再响应「点卡载入」，光标也跟着改，避免误触后才发现名字没改完。 */
+.ms-modal .prj-card.is-renaming { cursor: default; }

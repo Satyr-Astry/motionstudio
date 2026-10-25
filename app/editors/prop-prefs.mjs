@@ -8,7 +8,8 @@
  * 每项都尽量落到真实执行路径，落不进去的只做存储，并在界面上用一行小字
  * 说明缺什么 —— 宁可是「还没接上」，也不要一个点了没反应的假开关。
  * 生效现状（改代码时请同步这张表）：
- * - 自动保存间隔：生效，走 shell/project-io.mjs 的 autoSaveProject()；
+ * - 自动保存间隔：生效。拍子在 shell/project-io.mjs 的 installProjectSafety() 里
+ *   （1s 一拍、间隔读本面板写入的 autoSave），跟应用活，不跟本面板存亡；
  * - 撤销步数上限：只存储（paint/engine.mjs:79 的 createHistory(120) 写死，
  *   且没有 setHistoryLimit；这里会尽力调一次，有则生效、没有就静默）；
  * - 时间轴吸附网格：只存储（timeline-geo.mjs 的 SNAP_GRID 是常量导出，
@@ -22,8 +23,7 @@ import { makeGroup, makeRow, makeNum, makeSeg } from './prop-kit.mjs';
 // 键位表与图例的唯一数据源：设置里这份、时间轴「?」浮层、帮助面板读的是同一份常量
 import { SHORTCUT_GROUPS, LEGEND_ITEMS } from './help.mjs';
 import { icon } from '../core/icons.mjs';
-import { engine, project, setPrefs } from '../shell/doc-state.mjs';
-import { autoSaveProject } from '../shell/project-io.mjs';
+import { engine, setPrefs } from '../shell/doc-state.mjs';
 
 const KEY = 'ms.prefs';
 
@@ -331,37 +331,11 @@ export function mount(el, ctx) {
         if (document.activeElement !== hInput) hInput.value = String(prefs.sizeH);
     }
 
-    /* ─────────────────── 自动保存计时 ─────────────────── */
-
-    // 1s 一拍：最小间隔是 30s，没必要更密；拍子跟着面板存亡，面板被换掉就停，
-    // 免得留下一个用户看不见、却在后台写库的定时器。
-    const TICK = 1000;
-    let dirtyAt = 0;
-    let wasDirty = false;
-    let timer = 0;
-
-    function tick() {
-        const now = Date.now();
-        const dirty = !!(project && project.dirty);
-        if (dirty && !wasDirty) dirtyAt = now; // 由净转脏：从这一下开始算间隔
-        if (!dirty) dirtyAt = 0;
-        wasDirty = dirty;
-        const sec = Number(prefs.autoSave) || 0;
-        if (!sec || !dirty || !dirtyAt) return;
-        if (!String((project && project.name) || '').trim()) return; // 未命名项目跳过
-        if (now - dirtyAt < sec * 1000) return;
-        dirtyAt = now; // 先记账再存：保存期间的每一拍都不会重入
-        autoSaveProject();
-    }
-
     applyPrefs();
     paintControls();
-    timer = setInterval(tick, TICK);
     return {
         refresh: paintControls,
         destroy() {
-            if (timer) clearInterval(timer);
-            timer = 0;
             for (const body of groups) {
                 const group = body ? body.parentNode : null;
                 if (group && typeof group.remove === 'function') group.remove();

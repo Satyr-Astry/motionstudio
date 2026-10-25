@@ -99,3 +99,50 @@ test('help 表接住了原来手补的全局键位', () => {
         assert.ok(keys.includes(k), 'help 表缺键位：' + k);
     }
 });
+
+// ── task-28：顶栏保存态 + 文件组补录 ──────────────────────────────────────
+test('顶栏保存态：未入库文案、脏点语义、保存反馈都在', () => {
+    const chrome = read('../app/shell/chrome.mjs');
+    // 未入库与「已命名但未保存」以前视觉上一样，现在必须分开说
+    assert.ok(chrome.includes('未命名项目（未入库）'), '未入库要显式写出来');
+    assert.match(chrome, /aria-label', '有未保存的改动'\)/, '脏点必须带 aria-label');
+    // 反馈上限 800ms（任务书要求），且靠 dirty 的 true→false 跳变触发
+    assert.match(chrome, /const SAVE_FLASH_MS = 800;/, '保存反馈时长必须 ≤800ms');
+    assert.match(chrome, /prevDirty === true && dirty === false/, '反馈只能由「从脏变干净」触发');
+    // 图标：在库用 save、未入库用 folder-open，14px 走 sm 档
+    assert.match(chrome, /icon\(inLibrary \? 'save' : 'folder-open', \{ size: 'sm' \}\)/,
+        '项目区图标要跟着入库状态换');
+    assert.match(chrome, /projectIcon\.setAttribute\('aria-hidden', 'true'\)/, '图标是装饰，文字已表达语义');
+    // 时间与介质的「可选段」：拿不到就不显示，绝不编
+    assert.match(chrome, /if \(!Number\.isFinite\(v\) \|\| v <= 0\) return '';/, '拿不到时间戳要返回空串');
+    assert.match(chrome, /if \(clock\) bits\.push/, '没有时间就不写时间');
+    assert.match(chrome, /if \(f\.storeKind\) bits\.push/, '没有介质就不写介质');
+});
+
+test('顶栏保存态：样式钉子（脏点隐藏 / 已保存用 --ok / flex 布局）', () => {
+    const css = read('../app/styles/shell.css');
+    // [hidden] 的 display:none 来自 UA 样式表，会被 .top-project-dot 的 display 盖掉 ——
+    // 这条以前真的漏了：没脏的时候那个 • 照样可见。留着钉子防复发。
+    assert.match(css, /\.top-project-dot\[hidden\] \{\s*display: none;/, '必须显式收掉 [hidden] 的显示');
+    assert.match(css, /\.top-project\.is-just-saved[\s\S]{0,80}color: var\(--ok\)/, '保存反馈落 --ok');
+    assert.match(css, /\.top-project \{[^}]*display: inline-flex/, '项目区是三段横排');
+    assert.match(css, /\.top-project-text \{[^}]*text-overflow: ellipsis/,
+        '省略号只能落在名字上，图标与脏点不能被裁');
+});
+
+test('文件组：保存/打开写明「项目库」，并有一条不是快捷键的行为说明', () => {
+    const file = SHORTCUT_GROUPS.find((g) => g.id === 'file');
+    assert.ok(file, '缺少「文件」组');
+    const byName = (re) => file.items.find((i) => re.test(i.name));
+    const save = byName(/保存到项目库/);
+    assert.ok(save, 'Ctrl+S 的语义是入库，名字里要写「项目库」');
+    assert.ok(byName(/打开项目库/), 'Ctrl+O 要写「项目库」');
+    // Ctrl+S 的 hint 要说清「不是存成文件」—— 首版就是这点被误解
+    assert.match(save.hint || '', /不弹文件对话框|项目记录/, 'Ctrl+S 的 hint 要排除「存成文件」的误解');
+    // 行为说明：键位列写「自动」，免得被当成又一个组合键
+    const auto = file.items.find((i) => i.keys === '自动');
+    assert.ok(auto, '缺「载入前自动保存」这条行为说明');
+    assert.match(auto.hint || '', /未命名/, '行为说明要讲清未命名时会先问');
+    const keys = file.items.map((i) => i.keys);
+    assert.equal(new Set(keys).size, keys.length, '文件组键位重复');
+});

@@ -927,7 +927,8 @@ export async function listProjects() {
     }
     if (!rows.length) rows = Array.from(memory.values());
     return rows
-        .filter((r) => r && r.id)
+        // 未命名草稿与真实项目同库（键 __draft__），但它不是「一个项目」，列表里不能出现
+        .filter((r) => r && r.id && r.__draft !== true && r.id !== '__draft__')
         .map(stripRecord)
         .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
 }

@@ -40,8 +40,12 @@ export const SHORTCUT_GROUPS = [
         title: '文件',
         icon: 'save',
         items: [
-            { icon: 'save', name: '保存项目', keys: 'Ctrl+S', hint: '写入当前存档' },
+            // 这两条刻意写全「项目库」三个字：Ctrl+S 在这里是入库，
+            // 不是 Photoshop 那种「存成文件」—— 首版就是这点被误解。
+            { icon: 'save', name: '保存到项目库', keys: 'Ctrl+S', hint: '写进 IndexedDB 的项目记录，不弹文件对话框' },
             { icon: 'folder-open', name: '打开项目库', keys: 'Ctrl+O', hint: '最近项目 / 新建 / 导入' },
+            // 行为说明（不是快捷键）：键位列写「自动」，免得被当成又一个组合键。
+            { icon: 'save', name: '载入前自动保存', keys: '自动', hint: '载入 / 新建前把已命名的项目静默入库；未命名的会先问你要不要保存' },
             { icon: 'export', name: '导出帧序列', keys: 'Ctrl+Shift+E', hint: 'PNG 序列 + 帧清单' },
             { icon: 'undo', name: '撤销', keys: 'Ctrl+Z' },
             { icon: 'redo', name: '重做', keys: 'Ctrl+Shift+Z' },

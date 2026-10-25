@@ -122,7 +122,10 @@ import {
     openProjectsPanel,
     onFileAct,
     projectApi,
-    restoreLastProject, setCtx as setProjectIoCtx } from './project-io.mjs';
+    restoreLastProject,
+    restoreDraft,
+    installProjectSafety,
+    setCtx as setProjectIoCtx } from './project-io.mjs';
 
 // 顶层只拿 namespace。绑定推迟到 boot()：这台 Electron 上 doc-state 的求值时机
 // 不稳定，顶层解构会静默拿到 undefined（表现为整个 app 白屏）。
@@ -1196,6 +1199,10 @@ function expose() {
         importProjectFile,
         openProjectsPanel,
         project: projectApi,
+        // 顶栏「上次保存 HH:MM:SS · 存储：indexeddb」读这两个。
+        // 数据源是 project-io 的入库时刻与真实存储介质，取不到就退回 0 / ''（顶栏会整段省略）
+        projectSavedAt: () => Number(currentProject().savedAt) || 0,
+        projectStoreKind: () => String(currentProject().storeKind || ''),
         ctx,
     });
 }
@@ -1242,6 +1249,9 @@ function boot() {
         file: onFileAct,
         projectName: () => project.name,
         dirty: () => project.dirty,
+        // 顶栏「上次保存 HH:MM:SS · 存储：indexeddb」的数据源（chrome.mjs 里已经写好取到就用的分支）
+        projectSavedAt: () => Number(currentProject().savedAt) || 0,
+        projectStoreKind: () => String(currentProject().storeKind || ''),
     });
     shell.statusbar = buildStatusbar(dom.stb, {});
 
@@ -1272,8 +1282,13 @@ function boot() {
     syncCanvasToActive();
     // 编辑器模块可能在 mount 之后异步 attach，下一帧再收回一次
     scheduleAttachToActive();
-    // 上次打开过项目就恢复它（读库是异步的，不阻塞首屏）
-    restoreLastProject();
+    // 关窗口保护要在任何「可能丢掉改动」的操作之前装好
+    installProjectSafety();
+    // 上次打开过项目就恢复它（读库是异步的，不阻塞首屏）；
+    // 没有项目时才问要不要恢复未命名草稿 —— 两者同时恢复会互相覆盖。
+    Promise.resolve(restoreLastProject()).then((ok) => {
+        if (!ok) restoreDraft();
+    });
 }
 
 boot();
