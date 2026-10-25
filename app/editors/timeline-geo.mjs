@@ -86,6 +86,22 @@ export function xToTime(doc, x, zoomX = 1) {
     return v > 0 && p > 0 ? v / p : 0;
 }
 
+/**
+ * 适应全长：把整段时长（`docDuration`）恰好装进 `availPx` 需要的 zoomX，夹到
+ * [ZOOM_MIN, ZOOM_MAX]。双击刻度尺走这条；返回 null 表示无从计算（时长为 0、
+ * 可用宽度非正、或 doc 缺 fps 导致每秒像素为 0）。
+ *
+ * 注意 `availPx` 是「扣掉左侧对象名列之后」的内容宽度 —— 调用方负责换算，
+ * 这里只做算术，保持本模块零 DOM。
+ */
+export function fitZoom(doc, availPx) {
+    const total = docDuration(doc);
+    const avail = Number(availPx);
+    const base = pxPerSecond(doc, 1);
+    if (!(total > 0) || !(avail > 0) || !(base > 0)) return null;
+    return clampNum(avail / (total * base), ZOOM_MIN, ZOOM_MAX);
+}
+
 /** 吸附到网格（秒），默认 0.1s。 */
 export function snapGrid(t, grid = SNAP_GRID) {
     const v = Number(t);

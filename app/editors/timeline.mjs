@@ -15,7 +15,7 @@ import { celAt, celTimes, docDuration, objectById } from '../core/doc-model.mjs'
 import { setSegmentFps } from '../core/timebase.mjs';
 import {
     LABEL_W, SNAP_GRID, T_EPS, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP, celMarks,
-    clampNum, fmt2, pxPerSecond, snapFrame, snapGrid, structSignature, tickStep, timeToX, xToTime,
+    clampNum, fitZoom, fmt2, pxPerSecond, snapFrame, snapGrid, structSignature, tickStep, timeToX, xToTime,
 } from './timeline-geo.mjs';
 import {
     beginFpsEdit, buildRuler, buildSegments, createLegend, createView, paintPlayhead, paintRows, paintTracks,
@@ -444,6 +444,28 @@ export function mount(el, ctx) {
         syncRulerScroll(view);
     }
 
+    /**
+     * 双击刻度尺 = 适应全长：把整段时长装进可视宽度（左缘回到 t=0）。
+     * 与 `Ctrl+滚轮`（锚在指针那一刻）互补：那个是「我要看这一刻附近」，这个是「我要看全貌」。
+     * 右侧留 24px 与 `buildRuler` 的 contentW 一致，免得末端刻度贴着边。
+     */
+    function fitAll() {
+        const doc = docNow();
+        if (!doc) return;
+        const box = view.rows;
+        if (!box || typeof box.getBoundingClientRect !== 'function') return;
+        const avail = (Number(box.clientWidth) || 0) - LABEL_W - 24;
+        const z = fitZoom(doc, avail);
+        if (z == null) {
+            notify('时长或视口宽度为 0，没法适应全长');
+            return;
+        }
+        setZoom(z);
+        box.scrollLeft = 0;
+        syncRulerScroll(view);
+        notify('适应全长：' + zoomX.toFixed(2) + '×');
+    }
+
     /* ── 播放头移动：定义在文件头部的 seek / stepBy / seekFirst / seekLast ── */
 
     function goCel(dir) {
@@ -611,6 +633,16 @@ export function mount(el, ctx) {
     });
 
     /* ── 刻度尺 ── */
+
+    view.ruler.title = '拖动 = 擦洗时间 · 双击 = 适应全长（整段时长装进视口）';
+
+    // 双击适应全长。段条与时长手柄自己处理双击（改帧率 / 不做），先让它们优先。
+    view.ruler.addEventListener('dblclick', (e) => {
+        const target = e.target;
+        if (target && target.closest && (target.closest('.tline-fpsseg') || target.closest('.tline-durhandle'))) return;
+        if (e.preventDefault) e.preventDefault();
+        fitAll();
+    });
 
     view.ruler.addEventListener('pointerdown', (e) => {
         const doc = docNow();
