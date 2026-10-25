@@ -813,6 +813,9 @@ export function paintTracks(view, frame) {
             node.style.left = (x - KF_SIZE / 2).toFixed(2) + 'px';
             node.dataset.t = String(p.t);
             node.dataset.layer = ref.id;
+            // 通道标识（空格分隔的字段名，同刻多通道已合并成一条）。
+            // 点这颗菱形要把曲线焦点切到对应通道，没有它就只能猜。
+            node.dataset.ch = p.fields.join(' ');
             node.classList.toggle('is-sel',
                 !!selKey && selKey.layerId === ref.id && Math.abs(selKey.t - p.t) <= T_EPS);
             node.classList.toggle('is-sel2', false); // 通道键不参与多选集合，别残留上一帧的类

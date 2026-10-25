@@ -186,7 +186,8 @@ input.lyr-rename,
 }
 
 .tbar-tool.is-on {
-    background: var(--accent); border-color: var(--accent-2);
+    /* 选中填充用 accent-2：11px 白字压 #4a7dff 只有 3.70:1，压 #2f5fd0 是 5.73:1 */
+    background: var(--accent-2); border-color: var(--accent);
     color: #fff;
 }
 
@@ -196,7 +197,8 @@ input.lyr-rename,
 }
 
 .tbar-brush.is-on {
-    background: var(--accent); border-color: var(--accent-2);
+    /* 选中填充用 accent-2：11px 白字压 #4a7dff 只有 3.70:1，压 #2f5fd0 是 5.73:1 */
+    background: var(--accent-2); border-color: var(--accent);
     color: #fff;
 }
 
@@ -490,7 +492,9 @@ input.pal-hue:focus-visible::-webkit-slider-thumb {
 }
 
 .lyr-sub {
-    font-size: 10px; line-height: 1.2; color: var(--ink-faint);
+    /* 对象行的副标题是「手绘 · 0 画格 · 1 键」这种要读的信息，不是装饰：
+     * 用 ink-faint 时实测 4.12:1，退一档到 ink-dim 是 6.04:1 */
+    font-size: 10px; line-height: 1.2; color: var(--ink-dim);
     white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis;
 }
@@ -516,7 +520,8 @@ input.pal-hue:focus-visible::-webkit-slider-thumb {
 }
 
 .tline-btn.is-on {
-    background: var(--accent); border-color: var(--accent-2);
+    /* 选中填充用 accent-2：11px 白字压 #4a7dff 只有 3.70:1，压 #2f5fd0 是 5.73:1 */
+    background: var(--accent-2); border-color: var(--accent);
     color: #fff;
 }
 
@@ -615,7 +620,8 @@ button.prop-seg:hover {
 }
 
 button.prop-seg.is-on {
-    background: var(--accent); border-color: var(--accent-2);
+    /* 选中填充用 accent-2：11px 白字压 #4a7dff 只有 3.70:1，压 #2f5fd0 是 5.73:1 */
+    background: var(--accent-2); border-color: var(--accent);
     color: #fff;
 }
 
@@ -716,7 +722,8 @@ input.xf-num:focus { border-color: var(--accent); }
 }
 
 .xf-warp-btn.is-on {
-    background: var(--accent); border-color: var(--accent-2);
+    /* 选中填充用 accent-2：11px 白字压 #4a7dff 只有 3.70:1，压 #2f5fd0 是 5.73:1 */
+    background: var(--accent-2); border-color: var(--accent);
     color: #fff;
 }
 
@@ -760,7 +767,8 @@ input.xf-num:focus { border-color: var(--accent); }
 }
 
 .xf-div-btn.is-on {
-    background: var(--accent); border-color: var(--accent-2);
+    /* 选中填充用 accent-2：11px 白字压 #4a7dff 只有 3.70:1，压 #2f5fd0 是 5.73:1 */
+    background: var(--accent-2); border-color: var(--accent);
     color: #fff;
 }
 
@@ -798,7 +806,8 @@ input.xf-num:focus { border-color: var(--accent); }
 
 .xf-segbtn.is-on {
     position: relative; z-index: 2;
-    background: var(--accent); border-color: var(--accent-2);
+    /* 选中填充用 accent-2：11px 白字压 #4a7dff 只有 3.70:1，压 #2f5fd0 是 5.73:1 */
+    background: var(--accent-2); border-color: var(--accent);
     color: #fff;
 }
 
@@ -888,7 +897,7 @@ input.lyr-rename {
 }
 
 .prop-kf-count {
-    margin-left: 6px; color: var(--accent);
+    margin-left: 6px; color: var(--accent-ink);
     font-size: 11px;
 }
 
@@ -1054,7 +1063,8 @@ input.lyr-rename {
 }
 
 .tline-fpsseg.is-cur {
-    background: rgba(74, 125, 255, 0.2); color: var(--ink);
+    /* 10px 标签压 20% 透明强调色只有 3.02:1；改实心 accent-2 + 白字到 5.73:1 */
+    background: var(--accent-2); color: #fff;
 }
 
 /* ── 新挂件 ───────────────────────────────────────────────────── */
@@ -1114,7 +1124,7 @@ input.lyr-rename {
 /* 记号与名称不许被压成竖排（弹性尺寸不属于几何，允许写在 CSS 里） */
 .tline-legend-mark { flex: 0 0 auto; font-size: 10px; line-height: 1; }
 .tline-legend-mark.is-cel { color: var(--ok); }
-.tline-legend-mark.is-kf { color: var(--accent); }
+.tline-legend-mark.is-kf { color: var(--accent-ink); }
 
 .tline-legend-name { flex: 0 0 auto; white-space: nowrap; color: var(--ink); font-weight: 600; }
 
@@ -1281,7 +1291,8 @@ input.lyr-rename {
 }
 
 .cv-ob-btn.is-on {
-    background: var(--accent); border-color: var(--accent-2);
+    /* 选中填充用 accent-2：11px 白字压 #4a7dff 只有 3.70:1，压 #2f5fd0 是 5.73:1 */
+    background: var(--accent-2); border-color: var(--accent);
     color: #fff;
 }
 
@@ -1825,14 +1836,15 @@ input.tline-total {
 .tline-total { color: var(--ink-dim); }
 
 .tline-sep {
+    /* 与数值同亮度：单位和数字是一个读数，不该分成两级 */
     padding: 0 1px;
-    color: var(--ink-faint);
+    color: var(--ink-dim);
     font-size: 11px;
 }
 
 .tline-unit {
     padding-left: 3px;
-    color: var(--ink-faint);
+    color: var(--ink-dim);
     font-size: 10px;
 }
 
@@ -1886,7 +1898,7 @@ input.tline-total {
 
 .lyr-cels-count {
     min-width: 14px; text-align: center;
-    font-variant-numeric: tabular-nums; color: var(--ink-faint);
+    font-variant-numeric: tabular-nums; color: var(--ink-dim);
 }
 
 .lyr-cels-acts { display: flex; align-items: center; gap: 2px; margin-left: auto; }
@@ -2173,7 +2185,8 @@ body.is-dropping #ws-host::after {
     font-size: 11px; line-height: 1; cursor: pointer;
 }
 .bd .bd-brush:hover { background: var(--surface); color: var(--ink); }
-.bd .bd-brush.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* 选中态用 accent-2 而非 accent：11px 白字压 #4a7dff 只有 3.70:1，压 #2f5fd0 是 5.73:1（与属性面板分段按钮同一处理） */
+.bd .bd-brush.is-on { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
 .bd .bd-size { display: flex; align-items: center; gap: 5px; color: var(--ink-faint); font-size: 10px; }
 .bd .bd-size input[type="range"] { width: 74px; height: var(--h-btn); }
 .bd .bd-size-num { min-width: 22px; text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-dim); }

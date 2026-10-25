@@ -44,11 +44,15 @@
     /* —— 文字 —— */
     --ink: #e6e8ec;
     --ink-dim: #9aa1ac;
-    --ink-faint: #6b7280;
+    --ink-faint: #868e9c;
 
     /* —— 语义色 —— */
     --accent: #4a7dff;
     --accent-2: #2f5fd0;
+    /* 强调色当「文字」用时（小号数字、链接式标签）要提亮：
+     * #4a7dff 压在 --panel 上只有 4.24:1，这个值到 5.52:1。
+     * 填充仍用 --accent / --accent-2，别把两者混用。 */
+    --accent-ink: #6b95ff;
     --danger: #e05a5a;
     --ok: #3fa46a;
 
@@ -91,8 +95,11 @@
     --sp-3: 6px;
     --sp-4: 8px;
 
-    /* —— 过渡与焦点 —— */
-    --t-fast: 80ms linear;
+    /* —— 过渡与焦点 ——
+     * 曲线从 linear 换成先快后缓：linear 的悬停像是「亮一下」，
+     * 而控件要的是「按下去了」的手感。时长 120ms 是上限——
+     * 面板里的悬停多发生在连续扫视中，再长就跟不上鼠标了。 */
+    --t-fast: 120ms cubic-bezier(0.2, 0, 0, 1);
     --focus-ring: 1px solid var(--accent);
 
     /* 让原生控件（select 下拉、滚动条、光标）走深色，避免白底箭头 */
@@ -198,7 +205,7 @@ textarea {
     border: 1px solid var(--line);
     border-radius: var(--r-1);
     outline: none;
-    transition: background-color 80ms linear, border-color 80ms linear, color 80ms linear;
+    transition: background-color var(--t-fast), border-color var(--t-fast), color var(--t-fast);
 }
 
 /* select 保留原生的下拉箭头（color-scheme 已保证深色），只统一盒子 */
@@ -315,6 +322,19 @@ input::placeholder {
     color: var(--ink);
 }
 
+/* 按下态：86 个 :hover 里原本只有 3 个有 :active。
+ * 图标按钮不做按下反馈，连点两次时看不出「第一下到底发生了没有」。 */
+.area-btn:active,
+.top-tr-btn:active,
+.top-file-btn:active,
+.tbar-btn:active,
+.lyr-btn:active,
+.tline-btn:active,
+.cv-ob-btn:active {
+    background: var(--line);
+    border-color: var(--line-2);
+}
+
 /* ═══════════════ range 统一外观 ═══════════════ */
 
 input[type="range"] {
@@ -333,7 +353,7 @@ input[type="range"]::-webkit-slider-runnable-track {
     height: 4px;
     border-radius: var(--r-1);
     background-color: var(--line);
-    transition: background-color 80ms linear;
+    transition: background-color var(--t-fast);
 }
 
 input[type="range"]::-webkit-slider-thumb {
@@ -346,7 +366,7 @@ input[type="range"]::-webkit-slider-thumb {
     border: 0;
     border-radius: 50%;
     background-color: var(--ink-dim);
-    transition: background-color 80ms linear;
+    transition: background-color var(--t-fast);
 }
 
 input[type="range"]:hover::-webkit-slider-runnable-track {
@@ -400,4 +420,21 @@ output {
 .area-body {
     min-height: 0;
     overflow: hidden;
+}
+
+/* ═══════════════ 动效偏好 ═══════════════
+ * 全仓此前 0 条 prefers-reduced-motion。系统开了「减弱动态效果」的用户
+ * 不该被 120ms 的颜色过渡反复拉扯，也不必看正在播放的预览动画。
+ * 用 1ms 而不是 0：保留 transitionend 事件，别让依赖它收尾的逻辑（如
+ * 浮层关闭后的清理）永远等不到回调。
+ */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 1ms !important;
+        scroll-behavior: auto !important;
+    }
 }

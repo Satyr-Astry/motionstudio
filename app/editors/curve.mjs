@@ -29,6 +29,26 @@ import {
     channelKeysOf, ensureChannel, isChannelField, dragChannelKeyTo, dragChannelHandleTo, autoTangentsChannel,
 } from './curve-geo.mjs';
 import { resizeCanvas, beginFrame, paintCanvas } from './curve-draw.mjs';
+// 曲线里「拖出来/打出来的时刻」也要落在整帧上，否则时间轴帧带里对不上位置
+import { snapFrame } from './timeline-geo.mjs';
+
+/**
+ * `focusChannel` 的判定部分：只回答「这条通道 + 这个时刻能不能定位」，
+ * 不碰 DOM、不改状态。抽出来是为了能在 node 里单测守卫——未知通道不许猜。
+ *
+ * @param {string} chId 通道 id（`rotate` / `scaleX` / `warp.0.x` …）
+ * @param {number} t 时刻（对象局部秒）
+ * @returns {{ch: string, t: number}|null} 不认识的通道或非法时刻一律 null
+ */
+export function focusChannelTarget(chId, t) {
+    if (!chById(chId)) return null;
+    // `Number(null)` / `Number('')` 都是 0：不挡掉的话「没给时刻」会被静默当成 0 s，
+    // 播放头莫名跳到开头，比什么都不做还难查。
+    if (t === null || t === undefined || t === '') return null;
+    const at = Number(t);
+    if (!Number.isFinite(at)) return null;
+    return { ch: chId, t: at };
+}
 
 export function mount(el, ctx) {
     const root = document.createElement('div');
@@ -166,6 +186,41 @@ export function mount(el, ctx) {
         paint();
     }
 
+    /**
+     * 时间轴上点了一颗通道关键帧（外壳/时间轴派发的 `ms:channel-key-click`）：
+     * 把焦点切到那条通道、播放头挪到该刻。未知通道不猜，直接返回 false。
+     *
+     * 通道键不在 `track.keys` 里，时间轴那边不参与选择也不参与拖动，
+     * 所以「点了没反应」是这里之前唯一的结局——用户点它就是想看那条曲线。
+     */
+    function focusChannel(layerId, chId, t) {
+        const tgt = focusChannelTarget(chId, t);
+        if (!tgt) return false;
+        // 曲线画的是「选中对象」的轨道：点的是别的对象的键，先把它选上，
+        // 否则焦点切了、播放头也动了，画面还是那条曲线（看起来仍然像没反应）。
+        if (layerId && typeof ctx.setSelection === 'function') {
+            const cur = typeof ctx.selection === 'function' ? ctx.selection() : null;
+            if (!cur || cur.id !== layerId) ctx.setSelection({ id: layerId });
+        }
+        setFocus(tgt.ch); // 已经在焦点上时它提前返回，下面补一次 paint
+        if (typeof ctx.setTime === 'function') ctx.setTime(tgt.t);
+        paint();
+        return true;
+    }
+
+    function onChannelKeyClick(e) {
+        const d = e && e.detail ? e.detail : null;
+        if (!d || !el.isConnected) return;
+        // 三个工作区各有一个曲线实例：只让当前可见的那个响应，
+        // 否则隐藏面板会跟着把播放头抢过去。
+        if (typeof wrap.clientWidth === 'number' && wrap.clientWidth <= 0) return;
+        if (!focusChannel(d.layerId, d.ch, d.t)) return;
+        const ch = chById(d.ch);
+        const name = ch ? ch.short : String(d.ch || '通道');
+        notify('已定位到通道关键帧 · ' + name + ' · ' + fmt2(d.t) + ' s' +
+            (Number(d.count) > 1 ? '（该时刻有 ' + d.count + ' 个通道，已切到 ' + name + '）' : ''));
+    }
+
     function toggleRef(id) {
         if (!chById(id) || id === focus) return;
         if (refs.has(id)) refs.delete(id);
@@ -266,6 +321,8 @@ export function mount(el, ctx) {
         closePop();
     };
     document.addEventListener('pointerdown', onDocDown, true);
+    // 时间轴上那颗「通道关键帧」菱形点不动的时候，用户唯一的指望就是这里
+    document.addEventListener('ms:channel-key-click', onChannelKeyClick);
 
     /* ── 取数 ── */
     const notify = (m) => {
@@ -500,9 +557,13 @@ export function mount(el, ctx) {
 
     function snapTime(t, ev) {
         const doc = docOf();
-        if (!doc || !ev.shiftKey) return t;
+        if (!doc) return t;
+        // 时间轴的基本刻度是「帧」：曲线里拖出来的点先落整帧，再谈 Shift 的画格吸附，
+        // 否则同一个关键帧在帧带里会落在两帧之间（时间轴按帧定位，曲线按秒定位）。
+        const framed = snapFrame(doc, t);
+        if (!ev.shiftKey) return framed;
         // Shift：吸附到最近的画格切换点（0 秒起点也作为一个吸附点）
-        return geoSnapTime(t, celTimes(activeLayer(doc)));
+        return geoSnapTime(framed, celTimes(activeLayer(doc)));
     }
 
     /* ── 指针交互 ── */
@@ -681,7 +742,8 @@ export function mount(el, ctx) {
         if (hit) return;
         const { doc, layer, track } = keysNow();
         if (!doc || !layer) return;
-        const t = xToT(geo, x);
+        // 双击落点同样吸到整帧：曲线里新建的关键帧就是时间轴里的那一帧
+        const t = snapFrame(doc, xToT(geo, x));
         if (isChannelField(focus)) {
             // 省略 value = 取该时刻当前求值，所以加点不会让曲线跳一下
             writeTrack(layer.id, (old) => setChannelKey(ensureChannel(old, focus), focus, t, undefined, 'bezier'));
@@ -920,6 +982,7 @@ export function mount(el, ctx) {
         destroy() {
             document.removeEventListener('keydown', onKey);
             document.removeEventListener('pointerdown', onDocDown, true);
+            document.removeEventListener('ms:channel-key-click', onChannelKeyClick);
             ro.disconnect();
             if (typeof unsub === 'function') unsub();
             closeMenu();
@@ -932,5 +995,8 @@ export function mount(el, ctx) {
         focusFrame() {
             paint();
         },
+        // 时间轴点通道关键帧时外壳/时间轴派 ms:channel-key-click，本模块自己接住；
+        // 这个导出给测试与将来的「从别处定位某通道」用。
+        focusChannel,
     };
 }

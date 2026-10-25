@@ -76,13 +76,14 @@
     display: flex;
     align-items: center;
     gap: 3px;
-    color: var(--ink-faint);
+    /* 10px 的「大小 / 不透明」是这行的唯一说明，压 --ink-faint 只有 4.47:1 → 升到 --ink-dim */
+    color: var(--ink-dim);
     font-size: 10px;
     line-height: 1;
 }
 
 .bd .bd-field > .bd-lab {
-    color: var(--ink-faint);
+    color: var(--ink-dim);
     font-size: 10px;
     white-space: nowrap;
 }

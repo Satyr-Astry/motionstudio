@@ -118,6 +118,39 @@ export function createContextMenu() {
 /* ─────────────────────────── 关键帧交互 ─────────────────────────── */
 
 /**
+ * Del 键的归属判定（纯函数，两条删除路径的单测都从这里取判据）。
+ *
+ * 选中了关键帧 → `'keys'`：外壳必须**完全让路**（不设两段式确认、不提示、不删对象）。
+ * 否则一次按键会做两件事 —— 第一下删掉关键帧同时提示「再按一次 Del 删除对象」，
+ * 第二下把对象也删了（用户只是想把那颗多余的关键帧去掉）。
+ * 没有选中关键帧 → `'shell'`：走原来的纹理 / 对象删除，行为与历史一致。
+ *
+ * @param {number} selectedCount 选中集合里的处数
+ * @returns {'keys'|'shell'}
+ */
+export function deleteTarget(selectedCount) {
+    return Number(selectedCount) > 0 ? 'keys' : 'shell';
+}
+
+/**
+ * 通道关键帧节点的点击参数。
+ *
+ * `dataset.ch` 是空格分隔的字段名（`rotate` / `scaleX` …），因为同一个时刻的多条
+ * 通道关键帧在图上是**一颗**菱形（`timeline-paint.mjs` 的 `channelKeyTimes` 合并的）。
+ * 点它只能切到其中一条，所以约定「切第一个」并把总数带出去，让提示文案说清楚。
+ *
+ * 抽成纯函数是为了能单测「点这一颗会切到哪条通道」，不必造 DOM。
+ *
+ * @param {{dataset?: {ch?: string}}} node
+ * @returns {{ch: string, count: number}} 没有标识时 `{ ch: '', count: 0 }`
+ */
+export function channelClickOf(node) {
+    const raw = node && node.dataset && node.dataset.ch ? String(node.dataset.ch) : '';
+    const fields = raw.split(' ').filter(Boolean);
+    return { ch: fields.length ? fields[0] : '', count: fields.length };
+}
+
+/**
  * deps：{ notify, has, call, notWired, docNow, timeNow, setActive, keepTime, paint, zoomOf, menu, rowsEl }
  * rowsEl() 只在框选与整组预览时用（要量菱形节点的矩形、要拿滚动量）。
  * 关键帧的选择集合只活在本模块里，主文件通过 selection() / selectionAll() 取。
@@ -126,6 +159,15 @@ export function createKeys(deps) {
     let kfDrag = null;
     let selKeys = []; // Array<{ layerId, t }>：选中集合，末位是主键（右键菜单、复制、单选读数都用它）
     let selAnchor = null; // { layerId, t }：Shift 区间选择的锚点
+    /**
+     * 刚点过的那颗「通道关键帧」：{ layerId, t, ch }。
+     *
+     * 它**不进选中集合**（选择集合代表 track.keys，通道键不在里面，进去了 Del 会
+     * 删错东西），但也不能当作没点过——用户点完紧接着按 Del，如果落到「删对象」上，
+     * 一个想查看曲线的人会丢掉整个对象。所以这里记一个「软焦点」：下一次 Del 由时间轴
+     * 接管，什么都不删，只提示去曲线区编辑；任何别的点击都会把它清掉。
+     */
+    let channelClick = null;
     let marquee = null; // 框选进行中的状态；松手即清空
     let clip = null; // 复制过的关键帧组：{ from, t, keys: [{ state, ease }] }
 
@@ -163,6 +205,7 @@ export function createKeys(deps) {
 
     /** 清空：没有选中就别重绘，paint 会打断用户正在输入的框。 */
     function clearSelection() {
+        channelClick = null;
         if (!selKeys.length && selAnchor === null) return;
         selKeys = [];
         selAnchor = null;
@@ -413,6 +456,7 @@ export function createKeys(deps) {
 
     /** 删除当前选中集合（Delete 键 / 右键菜单）；一次 setDoc、一步撤销。 */
     function deleteSelection() {
+        channelClick = null;
         const pairs = selKeys.slice();
         if (!pairs.length) return 0;
         const removed = deleteKeys(pairs);
@@ -420,9 +464,63 @@ export function createKeys(deps) {
         selAnchor = null;
         // 集合里留着已不存在的时间（别处改过文档）时别静默失败，否则用户以为按键没生效
         if (!removed) deps.notify('选中的关键帧已不在文档里，可能已被别处改动');
-        else deps.notify(removed > 1 ? '已删除 ' + removed + ' 处选中关键帧' : '已删除选中的关键帧');
+        else deps.notify('已删除 ' + removed + ' 个关键帧');
         deps.paint();
         return removed;
+    }
+
+    /**
+     * 批量设置选中集合（外部同步 / 单测用）。传空数组等于清空。
+     * 内部所有选择路径最后都落到 selKeys + selAnchor 两个变量上，公开一个入口
+     * 是为了让「选了哪些、删了哪些」能被单测钉住，而不必去造 pointer 事件。
+     */
+    function selectKeys(pairs) {
+        channelClick = null;
+        const list = Array.isArray(pairs)
+            ? pairs.filter((p) => p && p.layerId && Number.isFinite(Number(p.t)))
+            : [];
+        selKeys = list.map((p) => ({ layerId: String(p.layerId), t: Number(p.t) }));
+        selAnchor = selKeys.length ? { layerId: selKeys[selKeys.length - 1].layerId, t: selKeys[selKeys.length - 1].t } : null;
+        return selKeys.length;
+    }
+
+    /**
+     * 外壳按 Del 时先问一句「这批归你吗」：派发 `ms:delete-keys`，由本模块
+     * 按 deleteTarget 的判据决定「删掉并接管」还是「什么都不做、让外壳走原逻辑」。
+     * 这样外壳不需要复制一份「选了什么」的状态（判据只有一处：selKeys）。
+     */
+    function onDeleteKeysEvent(e) {
+        const detail = e && e.detail;
+        if (!detail || typeof detail !== 'object') return;
+        // 焦点在输入框 / 按钮上时让路：外壳把 typing 判定一起送过来了。
+        // 这一道不能省 —— 外壳的 isTypingTarget 检查排在 onKeyDown 靠后，
+        // 没有它就能隔着「对象名字」输入框按 Del 删掉屏幕上看不见的关键帧。
+        if (detail.typing) {
+            detail.count = 0;
+            detail.handled = false;
+            return;
+        }
+        const asked = selKeys.length;
+        if (!asked) {
+            // 刚点过通道键：通道键不在 track.keys 里，删不动它；如果这时候让路，
+            // Del 就会落到「删纹理 / 删对象」上——一个只想看曲线的人会丢掉整个对象。
+            // 所以接管这一刻但什么都不删，把人指到曲线区。
+            if (channelClick) {
+                deps.notify('通道关键帧不在这里删 · ' + channelClick.ch + ' · 到曲线区编辑');
+                channelClick = null;
+                detail.count = 0;
+                detail.handled = true;
+                return;
+            }
+            detail.count = 0;
+            detail.handled = false;
+            return;
+        }
+        const removed = deleteSelection();
+        detail.count = removed;
+        // 归属按「问的时候有没有选中」定，不按删成功的数量：
+        // 选中的键已被别处改掉时删不出东西，但 Del 仍不该落到对象上。
+        detail.handled = deleteTarget(asked) === 'keys';
     }
 
     /** 对集合批量改缓动，一次 setDoc。返回命中的组数。 */
@@ -499,8 +597,22 @@ export function createKeys(deps) {
         const layerId = node.dataset.layer;
         if (!Number.isFinite(t) || !layerId) return;
         // 通道独立轨道的键：选中它也删不掉、改不了缓动（不在 track.keys 里），
-        // 选中了却什么都不能做比不选更让人困惑，所以直接不参与选择。
-        if (node.classList && node.classList.contains('is-ch')) return;
+        // 选中了却什么都不能做比不选更让人困惑，所以不参与选择、不参与拖动。
+        // 但「点了完全没反应」同样让人困惑：派一个事件，让曲线把焦点切到这颗键
+        // 对应的通道并跳到该刻（见 editors/curve.mjs 的 onChannelKeyClick）。
+        if (node.classList && node.classList.contains('is-ch')) {
+            if (typeof e.preventDefault === 'function') e.preventDefault();
+            if (typeof e.stopPropagation === 'function') e.stopPropagation();
+            const ch = channelClickOf(node);
+            channelClick = { layerId, t, ch: ch.ch };
+            const detail = { layerId, t, ch: ch.ch, count: ch.count };
+            // 没有监听者时什么都不发生（与 ms:copy-keys 同一约定）
+            if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+                document.dispatchEvent(new CustomEvent('ms:channel-key-click', { detail }));
+            }
+            return;
+        }
+        channelClick = null;
         if (typeof e.preventDefault === 'function') e.preventDefault();
         if (typeof e.stopPropagation === 'function') e.stopPropagation();
 
@@ -755,24 +867,6 @@ export function createKeys(deps) {
         ]);
     }
 
-    /* ── Delete / Backspace 删除选中关键帧 ── */
-
-    /**
-     * 全局快捷键，所以守卫要严：文本框里按 Delete 是删字，工具条按钮上按 Delete
-     * 什么也不该发生（旧版会把远处选中的关键帧一起删掉，用户完全没预料到）。
-     */
-    function onDeleteKey(e) {
-        if (!selKeys.length) return;
-        const target = e.target || null;
-        const tag = target && target.tagName ? target.tagName : '';
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'BUTTON') return;
-        if (target && target.isContentEditable) return;
-        // 只认 Del：Backspace 交给浏览器/输入框，避免误删关键帧
-    if (e.key !== 'Delete') return;
-        if (typeof e.preventDefault === 'function') e.preventDefault();
-        deleteSelection();
-    }
-
     /* ── 外壳派发的复制 / 粘贴（Ctrl+C / Ctrl+V）──
        没选中关键帧时 onCopyEvent 直接返回：让浏览器照常复制文本，
        否则用户在别处选字按 Ctrl+C 会被时间轴吞掉。 */
@@ -806,12 +900,13 @@ export function createKeys(deps) {
         pasteKeyAt,
         deleteKeyAt,
         deleteSelection,
+        selectKeys,
         applyEaseAt,
         applyEaseSelection,
         clearSelection,
         contextMenu,
         laneMenu,
-        onDeleteKey,
+        onDeleteKeysEvent,
         onCopyEvent,
         onPasteEvent,
         // 旧读数：只给「选中的那一颗」（集合末位），老调用点语义不变

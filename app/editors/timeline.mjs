@@ -518,7 +518,7 @@ export function mount(el, ctx) {
     }
 
     /** 工具条 ◆：在当前时间给活动对象打一个变换关键帧（值取当前求值，画面不跳）。 */
-    function addKeyNow() {
+    function addKeyNow(e) {
         const doc = docNow();
         if (!doc) return;
         const obj = objectById(doc, activeId());
@@ -526,7 +526,10 @@ export function mount(el, ctx) {
             notify('先选一个对象');
             return;
         }
-        keys.addKeyAt(obj.id, timeNow());
+        // 播放头可以停在两帧之间（按 ←/→ 是逐帧，但拖动播放头、点刻度尺、外接
+        // 程序 setTime 都能给出非整帧时刻）。打关键帧是「按帧定位」的动作，
+        // 跟拖关键帧、双击泳道一样过磁铁；Shift 反向，仍然可以故意停在两帧之间。
+        keys.addKeyAt(obj.id, snapFor(doc, timeNow(), e));
     }
 
     /* ── 时间读数：当前时间可输入跳转、总时长可直接改 ──
@@ -620,7 +623,7 @@ export function mount(el, ctx) {
         } else if (act === 'delcel') {
             deleteCelNow();
         } else if (act === 'addkey') {
-            addKeyNow();
+            addKeyNow(e);
         } else if (act === 'snap') {
             toggleSnap();
             return; // toggleSnap 自己会 paint（这里再画一次会让按钮闪）
@@ -717,7 +720,10 @@ export function mount(el, ctx) {
         const doc = docNow();
         if (!doc) return;
         const rect = typeof lane.getBoundingClientRect === 'function' ? lane.getBoundingClientRect() : { left: 0 };
-        keys.addKeyAt(lane.dataset.layer, xToTime(doc, e.clientX - rect.left, zoomX));
+        // 双击的位置是像素，换算出来的时刻必然落在帧线之间（实测 12fps 下能得
+        // 6.4643 帧这种值）。打关键帧是「按帧定位」的动作，所以跟拖动一样过磁铁；
+        // 按住 Shift 仍然可以故意停在两帧之间（magnetOf 的既有语义）。
+        keys.addKeyAt(lane.dataset.layer, snapFor(doc, xToTime(doc, e.clientX - rect.left, zoomX), e));
     });
 
     view.rows.addEventListener('contextmenu', (e) => {
@@ -775,9 +781,14 @@ export function mount(el, ctx) {
         legend.toggle();
     });
 
-    /* ── 事件：Delete / Backspace 删除选中关键帧 ── */
+    /* ── 事件：Delete 删除选中关键帧 ──
 
-    document.addEventListener('keydown', keys.onDeleteKey);
+       **不自绑 keydown**：Del 由外壳 onKeyDown 统一分派（外壳先派发
+       ms:delete-keys 问一句「有选中关键帧吗」，答有才让路）。
+       这里曾经也挂了 keys.onDeleteKey，结果是两个 document 级监听器
+       各自处理同一次按键：本面板先把关键帧删了并清空集合，外壳再问时
+       已经「没有选中」，于是照旧弹「再按一次 Del 删除对象」，第二下把
+       整个对象删掉 —— 一次按键做两件不相干的事。单一入口之后不会了。 */
 
     /* ── 事件：点到时间轴外面就清空关键帧选择 ──
        选择只活在本面板，但 Delete 是全局快捷键；不主动清，用户去画布或图层面板
@@ -799,6 +810,9 @@ export function mount(el, ctx) {
        所以顶层的快捷键只派发 CustomEvent，这里接住。 */
     document.addEventListener('ms:copy-keys', keys.onCopyEvent);
     document.addEventListener('ms:paste-keys', keys.onPasteEvent);
+    // Del 的归属也问一句：外壳在删对象/纹理之前派发 ms:delete-keys，
+    // 有选中关键帧就把事件接管掉（detail.handled = true），外壳整段让路。
+    document.addEventListener('ms:delete-keys', keys.onDeleteKeysEvent);
 
     /* ── 订阅外壳事件：优先 ctx.on，退回 ctx.subscribeDoc ── */
 
@@ -849,10 +863,11 @@ export function mount(el, ctx) {
         refresh: paint,
         focusFrame,
         destroy() {
-            document.removeEventListener('keydown', keys.onDeleteKey);
+            document.removeEventListener('ms:delete-keys', keys.onDeleteKeysEvent);
             document.removeEventListener('pointerdown', onOutsideDown, true);
             document.removeEventListener('ms:copy-keys', keys.onCopyEvent);
             document.removeEventListener('ms:paste-keys', keys.onPasteEvent);
+            document.removeEventListener('ms:delete-keys', keys.onDeleteKeysEvent);
             for (const off of offs) {
                 try {
                     off();

@@ -262,7 +262,8 @@ button.ms-icon-label:focus-visible {
 }
 
 .pref-help-mark.is-cel { color: var(--ok); }
-.pref-help-mark.is-kf { color: var(--accent); }
+/* 记号当文字用，所以走 --accent-ink（#4a7dff 压 --panel 只有 4.24:1，这个到 5.52） */
+.pref-help-mark.is-kf { color: var(--accent-ink); }
 
 /* ── 帮助面板（.hlp）键位行前的小图标 ───────────────────────────────
  * .hlp-item 的行布局由 panels.css 管，这里只负责图标的盒与色，不碰行高。

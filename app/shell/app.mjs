@@ -806,7 +806,33 @@ function installDropImport() {
  * 返回 true 表示这次按键已被吃掉（调用方不再走别的分支）。
  */
 let pendingDelete = null;
+
+/**
+ * 删选中的关键帧：判据（选了哪些、删掉几颗）只活时间轴里，外壳不复制这份状态。
+ * 派发 `ms:delete-keys`，由 editors/timeline-keys.mjs 的 deleteTarget 决定
+ * 「接管并删除」还是「让路」；返回被接管的处数（> 0 时外壳不许碰纹理/对象）。
+ */
+function deleteSelectedKeysNow(e) {
+    // typing 一起传过去：外壳的 isTypingTarget 检查在 onKeyDown 更靠后的位置，
+    // 焦点在输入框里按 Del 也会走到这儿。让时间轴自己判断要不要让路，
+    // 比在外壳复制一份「谁能接 Del」的名单更不容易走偏。
+    const detail = { handled: false, count: 0, typing: isTypingTarget(e && e.target) };
+    dispatchTimeEvent('ms:delete-keys', detail);
+    if (!detail.handled) return 0;
+    // handled 但一颗都没删掉（集合里的键已被别处改掉）也要算「已被接管」：
+    // 否则 Del 会顺延到对象上 —— 用户只想删关键帧，不该把对象删了。
+    return detail.count > 0 ? detail.count : 1;
+}
+
 function onDeleteKey(e) {
+    // 有选中关键帧时 Del 归时间轴，外壳整段让路（不设两段式确认、不提示、不删对象/纹理）。
+    // 历史缺陷：两条链路同时跑 —— 第一下删关键帧并提示「再按一次 Del 删除对象」，
+    // 第二下就把对象删了，一次按键做了两件事。
+    if (deleteSelectedKeysNow(e) > 0) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        updateChrome();
+        return true;
+    }
     const doc = state.doc;
     if (!doc) return false;
     const id = (state.selection && state.selection.id) || state.activeLayerId;
@@ -975,6 +1001,10 @@ function onKeyDown(e) {
     // 只有 Del（Delete）能删东西，并且两段式确认。Backspace 不接：
     // 它在很多键盘上就挨着编辑键（有的还印着「删除」），误触代价太大。
     if (e.key === 'Delete') {
+        // 焦点在输入框里时 Del 是「删这个字」，不许碰文档。这一道以前排在
+        // isTypingTarget 之后执行，于是属性面板里改对象名字按 Del 会先弹
+        // 「再按一次 Del 删除对象」——提示先出现，用户根本没打算删对象。
+        if (isTypingTarget(e.target)) return;
         if (onDeleteKey(e)) return;
     }
     // ? 打开快捷键一览（Shift+/ 在多数布局上就是 ?）
