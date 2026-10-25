@@ -97,12 +97,12 @@
     font-size: 11px;
 }
 
-/* ── 图标按钮：取色器 / 撤销 / 重做 / ⋯ ── */
+/* ── 图标按钮：取色器 / 撤销 / 重做 / 更多 / 稳定器 ── */
 
 .bd .bd-ico {
     min-width: var(--h-btn);
     height: var(--h-btn);
-    padding: 0 5px;
+    padding: 0;
     border: 1px solid transparent;
     border-radius: var(--r-1);
     background: transparent;
@@ -132,6 +132,40 @@
     background: transparent;
     border-color: transparent;
     color: var(--ink-dim);
+}
+
+/* 图标尺寸：图标按钮与带字动作按钮统一 14px（--icon-sm），命中区仍是 22×22。
+   尺寸走 CSS 变量而不是给每个 icon() 传值 —— 一处改全局生效，也不让内联 style 分散。 */
+.bd .bd-ico > .ms-icon,
+.bd .bd-act > .ms-icon {
+    --icon-size: var(--icon-sm);
+}
+
+/* 带字动作（纹理 / 独特化 / 适配）：中文标签不折行；图标与文字间距用 button 基础的 gap: 4px */
+.bd .bd-act > span {
+    white-space: nowrap;
+}
+
+/* ── 稳定器：图标 + 档位数字（档位 > 0 时由 JS 挂 .is-on） ── */
+
+.bd .bd-stab {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 6px;
+}
+
+.bd .bd-stab-n {
+    min-width: 7px;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    color: inherit;
+    opacity: 0.9;
+}
+
+.bd .bd-ico.is-on .bd-stab-n {
+    opacity: 1;
 }
 
 /* ── 镜像下拉 ── */
@@ -303,4 +337,27 @@
     height: 100%;
     display: block;
     pointer-events: none;
+}
+
+/* ── 窄窗口：带字动作收成纯图标 ──
+   实测方式要当心：`.bd-bar` 是 `overflow-x:auto` 的 flex，内容装得下时 `scrollWidth`
+   恒等于 `clientWidth`，「1440/1440」不代表余量为 0。要看真实余量得把子项宽度加总：
+   1680 下 11 个子项共 901px、容器 1440px（余 539）；1280 下容器 1040px、同样内容 901px
+   （余 139）。所以 1280 并不缺地方 —— 只有 1100 以下才真溢出，这里才收字。
+   与时间轴工具条 `@media (max-width:1279px)` 同源：宁可少个字，不许挤到要滚动。 */
+@media (max-width: 1100px) {
+    .bd .bd-act > span {
+        display: none;
+    }
+
+    .bd .bd-act {
+        padding: 0 var(--sp-1);
+        min-width: var(--h-btn);
+    }
+
+    /* 笔尖 / 不透明度的文字标签也收进 aria：1000×620（最小窗口）下 .bd-bar 只有 760px，
+       收掉「笔尖」「不透明度」两串字刚好回正（实测内容 782 → 距容器还差 22px）。 */
+    .bd .bd-field > .bd-lab {
+        display: none;
+    }
 }

@@ -17,14 +17,17 @@
  */
 
 import { BRUSH_PRESETS } from '../paint/brush.mjs';
+import { icon } from '../core/icons.mjs';
 
+// 工具的图标名直接是 core/icons.mjs 的键（不是字形）。六件工具都是纯图标按钮，
+// 所以 name + key 同时进 title 与 aria-label —— 图标本身 aria-hidden，读屏只念一次。
 const TOOL_DEFS = Object.freeze([
-    { id: 'select', icon: '⬚', name: '选择', key: 'V' },
-    { id: 'brush', icon: '✎', name: '画笔', key: 'B' },
-    { id: 'eraser', icon: '◻', name: '橡皮', key: 'E' },
-    { id: 'bucket', icon: '▣', name: '填充', key: 'G' },
-    { id: 'picker', icon: '⌖', name: '取色', key: 'I' },
-    { id: 'pan', icon: '✥', name: '平移', key: 'H' },
+    { id: 'select', icon: 'select', name: '选择', key: 'V' },
+    { id: 'brush', icon: 'brush', name: '画笔', key: 'B' },
+    { id: 'eraser', icon: 'eraser', name: '橡皮', key: 'E' },
+    { id: 'bucket', icon: 'bucket', name: '填充', key: 'G' },
+    { id: 'picker', icon: 'eyedropper', name: '取色', key: 'I' },
+    { id: 'pan', icon: 'move', name: '平移', key: 'H' },
 ]);
 
 const BRUSH_DEFS = Object.freeze([
@@ -79,6 +82,8 @@ function field(labelText, inputCls, outCls, min, max) {
     input.min = String(min);
     input.max = String(max);
     input.step = '1';
+    // 左边的 .tbar-lbl 是视觉标签，input 自身没有可读名 —— 审计与读屏都要这一份
+    input.setAttribute('aria-label', labelText);
     const out = document.createElement('output');
     out.className = outCls;
     wrap.append(lbl, input, out);
@@ -106,7 +111,7 @@ export function mount(el, ctx) {
         b.dataset.tool = t.id;
         b.title = `${t.name} (${t.key})`;
         b.setAttribute('aria-label', `${t.name} (${t.key})`);
-        b.textContent = t.icon;
+        b.innerHTML = icon(t.icon);
         toolBox.appendChild(b);
         toolBtns.set(t.id, b);
     }
@@ -137,13 +142,15 @@ export function mount(el, ctx) {
     undoBtn.className = 'tbar-btn';
     undoBtn.dataset.act = 'undo';
     undoBtn.title = '撤销 (Ctrl+Z)';
-    undoBtn.textContent = '↶';
+    undoBtn.setAttribute('aria-label', '撤销 (Ctrl+Z)');
+    undoBtn.innerHTML = icon('undo');
     const redoBtn = document.createElement('button');
     redoBtn.type = 'button';
     redoBtn.className = 'tbar-btn';
     redoBtn.dataset.act = 'redo';
     redoBtn.title = '重做 (Ctrl+Shift+Z)';
-    redoBtn.textContent = '↷';
+    redoBtn.setAttribute('aria-label', '重做 (Ctrl+Shift+Z)');
+    redoBtn.innerHTML = icon('redo');
     histBox.append(undoBtn, redoBtn);
 
     root.append(toolBox, sep(), brushBox, sep(), sizeF.wrap, alphaF.wrap, sep(), histBox);

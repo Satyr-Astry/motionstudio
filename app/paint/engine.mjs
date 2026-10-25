@@ -32,6 +32,45 @@ export const TOOLS = Object.freeze([
     { id: 'pan', name: '平移', key: 'H' },
 ]);
 
+/* ────────────────────── 取色：纯逻辑（不碰 DOM，可单测） ────────────────────── */
+
+/**
+ * 把 `getImageData(…, 1, 1).data` 变成 `'#rrggbb'`。
+ * alpha 低于阈值（默认 8）视为**取不到**：透明像素在这里没有「颜色」可言，
+ * 硬取出来会是 `#000000`，等于把画布背景当成黑色 —— 这是取色器最常见的错觉。
+ */
+export function pixelHex(d, alphaMin) {
+    const lo = Number.isFinite(alphaMin) ? alphaMin : 8;
+    if (!d || d.length < 4) return null;
+    if (!(Number(d[3]) >= lo)) return null;
+    const hx = (n) => {
+        const v = Number(n);
+        const c = Number.isFinite(v) ? Math.max(0, Math.min(255, Math.round(v))) : 0;
+        return c.toString(16).padStart(2, '0');
+    };
+    return '#' + hx(d[0]) + hx(d[1]) + hx(d[2]);
+}
+
+/**
+ * 指针按下时这一下要干什么 —— 引擎里唯一的「按键 → 动作」判据。
+ *
+ * 右键 = **取色**（对齐 Klecks 的 eyedropper：`tempTriggers = ['mouse-right','alt']`），
+ * 且优先级最高：即使当前是「平移」工具、或正按着空格，右键也只取色不平移。
+ * 左键仍走原来的工具语义，所以绘制路径一字未动。
+ */
+export function downIntent(button, tool, space, alt) {
+    if (button === 2) return 'pick';
+    // Alt + 左键 = 临时取色（Photoshop 与 Klecks 的通行约定：eyedropper 的
+    // `tempTriggers` 里就有 'alt'）。空格与平移工具优先 —— 免得「按住空格拖画布」
+    // 时顺手按了 Alt 就变成取色。
+    if (alt && button === 0 && !space && tool !== 'pan') return 'pick';
+    if (button === 1 || space || tool === 'pan') return 'pan';
+    if (tool === 'select') return 'select';
+    if (tool === 'picker') return 'pick';
+    if (tool === 'bucket') return 'bucket';
+    return 'stroke';
+}
+
 function fitCanvas(cv, w, h) {
     const W = Math.max(1, Math.round(w));
     const H = Math.max(1, Math.round(h));
@@ -139,6 +178,7 @@ export function createEngine(opts) {
     let timer = 0;
     let stroke = null;
     let panning = null;
+    let pickDrag = false;  // 右键按住拖取色（不改工具，松开即回原工具）
     let ro = null;
 
     if (scratch.buf) scratch.ctx = scratch.buf.getContext('2d');
@@ -624,25 +664,45 @@ export function createEngine(opts) {
         const sx = Math.floor(x);
         const sy = Math.floor(y);
         if (sx < 0 || sy < 0 || sx >= W || sy >= H) return null;
-        const d = g.getImageData(sx, sy, 1, 1).data;
-        if (d[3] < 8) return null;
-        const hx = (n) => n.toString(16).padStart(2, '0');
-        return '#' + hx(d[0]) + hx(d[1]) + hx(d[2]);
+        return pixelHex(g.getImageData(sx, sy, 1, 1).data);
+    }
+
+    /** 取色并同步界面：颜色真的变了才通知，免得拖动取色时把状态栏刷成跑马灯。 */
+    function pickAt(e) {
+        const p = toDoc(e);
+        const c = pickColor(p.x, p.y);
+        if (!c) return false;
+        if (c !== state.color) {
+            state.color = c;
+            onNotify('color');
+        }
+        return true;
     }
 
     /* ────────────────────────── 事件 ────────────────────────── */
 
     function onDown(e) {
         if (!view) return;
-        if (e.button === 2) {
+        const what = downIntent(e.button, state.tool, state.space, e.altKey);
+        if (what === 'pan') {
             panStart(e);
             return;
         }
-        if (state.tool === 'pan' || state.space || e.button === 1) {
-            panStart(e);
+        if (what === 'pick') {
+            // 右键 / 取色工具：只读操作，不受 canDraw 限制（播放中也能取色）。
+            // 右键取色不改 state.tool，按住还能连续取样 —— 松开就是原来的工具。
+            if (e.button === 2 || e.altKey) {
+                pickDrag = true;
+                try {
+                    view.setPointerCapture(e.pointerId);
+                } catch (err) {
+                    /* 合成事件 / 无捕获指针时忽略 */
+                }
+            }
+            pickAt(e);
             return;
         }
-        if (state.tool === 'select') {
+        if (what === 'select') {
             // 选择工具不落笔：选中框 / 手柄 / 拖动对象全部交给画布叠加层（editors/canvas.mjs）
             return;
         }
@@ -651,17 +711,9 @@ export function createEngine(opts) {
             onNotify('tool');
             return;
         }
-        const p = toDoc(e);
-        if (state.tool === 'picker') {
-            const c = pickColor(p.x, p.y);
-            if (c) {
-                state.color = c;
-                onNotify('color');
-            }
-            return;
-        }
-        if (state.tool === 'bucket') {
-            floodFill(p.x, p.y, state.color);
+        if (what === 'bucket') {
+            const b = toDoc(e);
+            floodFill(b.x, b.y, state.color);
             return;
         }
         view.setPointerCapture(e.pointerId);
@@ -671,6 +723,10 @@ export function createEngine(opts) {
     function onMove(e) {
         const p = toDoc(e);
         state.hover = p;
+        if (pickDrag) {
+            pickAt(e);
+            return;
+        }
         if (panning) {
             state.panX = panning.px + (e.clientX - panning.x);
             state.panY = panning.py + (e.clientY - panning.y);
@@ -684,6 +740,15 @@ export function createEngine(opts) {
     }
 
     function onUp(e) {
+        if (pickDrag) {
+            pickDrag = false;
+            try {
+                view.releasePointerCapture(e.pointerId);
+            } catch (err) {
+                /* 指针已经没了：无需释放 */
+            }
+            return;
+        }
         if (panning) {
             panning = null;
             return;
