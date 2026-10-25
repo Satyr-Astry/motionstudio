@@ -309,10 +309,12 @@ test('段帧率条：字号回到 10 档，窄段阈值与字号匹配', () => {
 });
 
 test('帮助表：分组顺序固定，键位与图例的图标名都真实存在', () => {
+    // 钉分组 id 而不是中文标题：标题是会改的文案（「画板」拆成「编排画布 / 画板工作区」），
+    // id 是契约。canvas 与 board 必须分开 —— E 键在两个语境语义不同（橡皮 vs 取色器）。
     assert.deepEqual(
-        SHORTCUT_GROUPS.map((g) => g.title),
-        ['文件', '时间', '关键帧', '画板', '视图'],
-        '分组顺序必须是 文件 / 时间 / 关键帧 / 画板 / 视图'
+        SHORTCUT_GROUPS.map((g) => g.id),
+        ['file', 'time', 'keyframe', 'canvas', 'board', 'view'],
+        '分组顺序必须是 file / time / keyframe / canvas / board / view'
     );
     let rows = 0;
     for (const g of SHORTCUT_GROUPS) {
@@ -366,4 +368,37 @@ test('关键帧菱形有兜底 title（paint 之前也不能空悬停）', () =>
     const tl = read('../app/editors/timeline-paint.mjs');
     assert.match(tl, /b\.title = '关键帧：变换在这里有一条关键帧/, 'makeKfNode 必须给兜底 title');
     assert.match(tl, /setAttribute\('aria-label', '关键帧'\)/, 'makeKfNode 必须给 aria-label');
+});
+
+test('帮助表：同一组内不许出现两条相同的键位', () => {
+    // 拆组的意义就在这条：编排（app.mjs 全局 keydown）与画板（board.mjs 捕获阶段 keydown）
+    // 是两个语境，同名键语义可以不同；但**同一组内**重复 = 表自己打架。
+    for (const g of SHORTCUT_GROUPS) {
+        const seen = new Map();
+        for (const it of g.items) {
+            const k = String(it.keys || '').trim();
+            assert.ok(k, g.id + ' 组里有条目缺键位：' + it.name);
+            assert.ok(
+                !seen.has(k),
+                g.id + ' 组里键位重复：' + k + '（' + seen.get(k) + ' 与 ' + it.name + '）'
+            );
+            seen.set(k, it.name);
+        }
+    }
+});
+
+test('E 键的语义分裂：编排是橡皮，画板是取色器', () => {
+    // W2 交付时指出的既有缺陷。两个语境各自成立（编排跟 Photoshop 惯例、画板跟 Klecks 的 eyedropper），
+    // 错的是以前把它们写在同一条「画板」组里。这条测试钉住「拆开且各自正确」。
+    const canvas = SHORTCUT_GROUPS.find((g) => g.id === 'canvas');
+    const board = SHORTCUT_GROUPS.find((g) => g.id === 'board');
+    assert.ok(canvas, '缺少「编排画布」组');
+    assert.ok(board, '缺少「画板工作区」组');
+    assert.equal(canvas.items.find((i) => i.keys === 'E').name, '橡皮', '编排画布的 E 必须是橡皮');
+    assert.match(board.items.find((i) => i.keys === 'E').name, /取色器/, '画板工作区的 E 必须是取色器');
+    // 共性键可以两组都有（同一行为、两处可用），但必须是不同语境各自的一行
+    for (const shared of ['[ / ]', '0']) {
+        assert.ok(canvas.items.some((i) => i.keys === shared), '编排缺共性键：' + shared);
+        assert.ok(board.items.some((i) => i.keys === shared), '画板缺共性键：' + shared);
+    }
 });

@@ -74,21 +74,40 @@ export const SHORTCUT_GROUPS = [
             { icon: 'copy', name: '复制 / 粘贴关键帧', keys: 'Ctrl+C / Ctrl+V', hint: '时间轴里选中的那些' },
         ],
     },
+    // 下面两组是**两个不同的键位语境**，不能合并：
+    //   编排画布 = app.mjs 的全局 keydown（`[`/`]` 1078-1087、`0` 1088-1094、工具键 1095-1101）
+    //              → TOOL_KEYS（shell/doc-state.mjs:80）→ engine.setTool，工具名来自 paint/engine.mjs:27-32 的 TOOLS；
+    //   画板工作区 = board.mjs 自己的捕获阶段 keydown（1320-1345），画板在捕获阶段先吃掉同名的键。
+    // 冲突实例：E 在编排是橡皮（engine.mjs:29），在画板是取色器（board.mjs:1331）。
+    // 以前两组挤在一组，表里就同时写着「橡皮 E」和「E 取色器」，自相矛盾。
     {
-        id: 'draw',
-        title: '画板',
-        icon: 'brush',
+        id: 'canvas',
+        title: '编排画布',
+        icon: 'center',
         items: [
             { icon: 'select', name: '选择工具', keys: 'V' },
             { icon: 'brush', name: '画笔', keys: 'B' },
             { icon: 'eraser', name: '橡皮', keys: 'E' },
-            { icon: 'bucket', name: '填充', keys: 'G', hint: '同色连通区一次填满（容差 24）；导入的位图纹理不支持' },
+            { icon: 'bucket', name: '填充', keys: 'G' },
             { icon: 'eyedropper', name: '取色器', keys: 'I' },
-            { icon: 'eyedropper', name: '直接取色（按住拖可连续取）', keys: '右键 / Alt+左键' },
             { icon: 'move', name: '平移画布', keys: 'H' },
             { icon: 'minus', name: '笔尖变小 / 变大', keys: '[ / ]' },
-            { icon: 'center', name: '适配画布', keys: '0' },
-            { icon: 'magnet', name: '稳定器档位（0–5，越高越稳）', keys: '工具条右端', hint: '画板里 Ctrl+滚轮 也能调档' },
+            { icon: 'fit', name: '适配视图（缩放到刚好铺满）', keys: '0' },
+        ],
+    },
+    {
+        id: 'board',
+        title: '画板工作区',
+        icon: 'brush',
+        items: [
+            { icon: 'brush', name: '切换笔刷预设', keys: '1 – 7', hint: '七支笔从左到右对应 1–7' },
+            { icon: 'eyedropper', name: '取色器（吸一次色，然后接着画）', keys: 'E' },
+            { icon: 'eyedropper', name: '直接取色（按住拖可连续取）', keys: '右键 / Alt+左键' },
+            { icon: 'bucket', name: '填充', keys: 'G', hint: '同色连通区一次填满（容差 24）；导入的位图纹理不支持' },
+            { icon: 'move', name: '按住平移画布', keys: '空格（按住）' },
+            { icon: 'minus', name: '笔尖变小 / 变大', keys: '[ / ]' },
+            { icon: 'fit', name: '适配画布', keys: '0' },
+            { icon: 'magnet', name: '笔迹稳定器档位 0–5（越高越稳）', keys: 'Ctrl+滚轮', hint: '工具条右端的磁铁按钮点按也能循环档位' },
         ],
     },
     {

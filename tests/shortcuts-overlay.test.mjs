@@ -60,7 +60,9 @@ test('groupsFromCommands：忽略脏条目', () => {
 
 test('overlayGroups：把 SHORTCUT_GROUPS 原样搬成浮层 spec', () => {
     const groups = overlayGroups();
-    assert.deepEqual(groups.map((g) => g.title), ['文件', '时间', '关键帧', '画板', '视图']);
+    // 标题跟着数据源走（拆组时会变），这里只钉「浮层与数据源逐组对应」；
+    // 顺序与 id 由 icons.test.mjs 的 id 序列断言负责，不重复钉中文文案。
+    assert.deepEqual(groups.map((g) => g.title), SHORTCUT_GROUPS.map((g) => g.title), '浮层分组标题要与数据源一致');
     assert.equal(groups.length, SHORTCUT_GROUPS.length);
     let rows = 0;
     for (const g of groups) {
