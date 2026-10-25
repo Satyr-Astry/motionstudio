@@ -261,6 +261,52 @@
     gap: 2px;
 }
 
+/* ── 纹理尺寸控件：裁到内容 / 宽 × 高 / 应用 / 对齐 ──
+ * 位置在动作段尾巴上，用一条 1px 竖线跟前面的动作分开（和段间分隔同一风格）。
+ * 1000×620 下这一组约 220px：动作段本来就被工具段挤到第二行，加完仍在第二行内
+ * （521 < 760），所以 .bd-bar 仍是两行、画布仍是 395px，没吃掉 360px 红线。
+ */
+
+.bd .bd-size-ctl {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
+    margin-left: var(--sp-1);
+    padding-left: 6px;
+    border-left: 1px solid var(--line);
+}
+
+/* 46px 是下限、不是随手写的：4 位数（1024 / 1920）在 10px tabular-nums 下约占 24px，
+   左右 padding 各 4px 之后已无余量，再窄就只能看见 3 位。
+   数字框刻意不显示 spinner：尺寸用键盘输更快，而 spinner 会吃掉 14px 宽度。 */
+.bd .bd-size-ctl input[type="number"] {
+    width: 46px;
+    height: var(--h-btn);
+    padding: 0 4px;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.bd .bd-size-ctl input[type="number"]::-webkit-outer-spin-button,
+.bd .bd-size-ctl input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.bd .bd-size-x {
+    color: var(--ink-faint);
+    font-size: 10px;
+    line-height: 1;
+}
+
+.bd .bd-align {
+    height: var(--h-btn);
+    padding: 0 2px;
+    border-radius: var(--r-1);
+    font-size: 11px;
+}
+
 /* ── 浮层基座：色板 ──
  * position:absolute 挂在 .bd 上（根元素是 relative），由 JS 算 left/top；
  * 注意必须显式处理 [hidden]：下面 display:flex 会盖掉浏览器默认的 display:none。

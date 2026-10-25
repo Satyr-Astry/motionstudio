@@ -39,6 +39,7 @@ import {
     patchObject,
     removeCelAt as removeCelAtDoc,
     reorderObject,
+    setImageAt,
     setObjectSize as setObjectSizeDoc,
     drawingsOf,
     addDrawing,
@@ -50,7 +51,7 @@ import {
     drawingIdAt,
     totalSeconds,
 } from '../core/doc-model.mjs';
-import { createTrack, matrixOf, stateAt } from '../core/transform.mjs';
+import { addKey, createTrack, matrixOf, setKeyState, stateAt } from '../core/transform.mjs';
 import {
     describeTime,
     isIdentityTime,
@@ -62,6 +63,7 @@ import {
     subtreeSize,
 } from '../core/timegraph.mjs';
 import { createSurface, cloneSurface } from '../paint/surface.mjs';
+import { alignOffset, clampTextureSize, contentBounds, cropRgba, placeRgba } from '../paint/trim.mjs';
 import { ONION_DEFAULTS } from '../paint/onion.mjs';
 import {
     normalizeSegments as normSegments,
@@ -190,6 +192,78 @@ function blankSurfaceOf(w, h) {
     cv.width = Math.max(1, Math.round(w));
     cv.height = Math.max(1, Math.round(h));
     return cv;
+}
+
+/**
+ * 读出一张位图的像素。canvas / OffscreenCanvas 有 `getContext`，直接读；
+ * `ImageBitmap` 与 `<img>` 没有 —— 画一次到临时画布再读。
+ * （alpha.4 的 `pixelAlpha` 就是因为假设有 `getContext`，导入的位图永远读成 alpha 0。）
+ */
+function readRgba(image) {
+    if (!image) return null;
+    const w = Math.floor(Number(image.width) || 0);
+    const h = Math.floor(Number(image.height) || 0);
+    if (!(w > 0) || !(h > 0)) return null;
+    if (typeof image.getContext === 'function') {
+        try {
+            const g = image.getContext('2d', { willReadFrequently: true });
+            if (g && typeof g.getImageData === 'function') {
+                const d = g.getImageData(0, 0, w, h);
+                if (d && d.data && d.data.length >= w * h * 4) return { w, h, data: d.data };
+            }
+        } catch (err) {
+            // 落到下面的通用路径
+        }
+    }
+    let cv = null;
+    try {
+        cv = createSurface(w, h);
+    } catch (err) {
+        return null;
+    }
+    const g2 = cv && cv.getContext ? cv.getContext('2d', { willReadFrequently: true }) : null;
+    if (!g2) return null;
+    try {
+        g2.drawImage(image, 0, 0);
+        const d = g2.getImageData(0, 0, w, h);
+        if (d && d.data && d.data.length >= w * h * 4) return { w, h, data: d.data };
+    } catch (err) {
+        return null;
+    }
+    return null;
+}
+
+/** 把一段紧凑 RGBA 写进新画布（`createSurface` 决定用 OffscreenCanvas 还是 <canvas>）。 */
+function surfaceFromRgba(w, h, data) {
+    const W = Math.max(1, Math.round(Number(w)) || 1);
+    const H = Math.max(1, Math.round(Number(h)) || 1);
+    if (!data || data.length < W * H * 4) return null;
+    let cv = null;
+    try {
+        cv = createSurface(W, H);
+    } catch (err) {
+        return null;
+    }
+    const g = cv && cv.getContext ? cv.getContext('2d', { willReadFrequently: true }) : null;
+    if (!g) return null;
+    try {
+        g.putImageData(new ImageData(data, W, H), 0, 0);
+        return cv;
+    } catch (err) {
+        return null;
+    }
+}
+
+/** 当前时刻生效的关键帧下标（最后一个 `t <= time`）；轨道为空返回 -1。 */
+function activeKeyIndex(track, time) {
+    const keys = track && Array.isArray(track.keys) ? track.keys : [];
+    let idx = -1;
+    for (let i = 0; i < keys.length; i += 1) {
+        if (!keys[i]) continue;
+        if (Number(keys[i].t) <= time + 1e-9) idx = i;
+        else break;
+    }
+    return idx;
 }
 
 function blankSurface(doc) {
@@ -716,6 +790,125 @@ function buildCtx() {
             changed = true;
             return replaceObject(d, id, next);
         }, { label: '删除画格' });
+        return changed;
+    },
+
+    /**
+     * 纹理尺寸：裁到内容（`trim`）或重排到新画布（`resize`）。
+     *
+     * 「适配」（画板那个 0 键）动的是视图相机，不改像素尺寸；这里改的是像素本身。
+     * 两条模式都要求**像素内容在世界坐标里不动**，所以图与 transform 必须在
+     * 同一个 setDoc 里落地 —— 分两次写会留下「图已裁、位置还是旧」的中间态，
+     * 而且撤销一次只回一半。
+     *
+     *   - trim：新图原点 = 旧图被裁掉的左上角，所以对象坐标要 **加** 上它（x += box.x）。
+     *   - resize：内容按九宫格放进新画布，整体平移了 (ox, oy)，所以对象坐标要 **减** 回去。
+     *
+     * 只替换当前时刻那一张画格；其它画格（同一对象别的图）不动。
+     *
+     * @param {string|{id:string}} objId
+     * @param {{mode:'trim'}|{mode:'resize',width:number,height:number,align?:string}} opts
+     * @returns {boolean} 是否真的改了文档
+     */
+    resizeTexture(objId, opts) {
+        const doc = state.doc;
+        const id = celTargetId(objId);
+        if (!doc || id == null) return false;
+        const o = opts || {};
+        const mode = o.mode === 'trim' ? 'trim' : (o.mode === 'resize' ? 'resize' : '');
+        if (!mode) {
+            flash('未知的纹理尺寸操作');
+            updateChrome();
+            return false;
+        }
+        const obj = objectById(doc, id);
+        if (!obj) return false;
+        const time = state.time;
+        const src = readRgba(imageAt(obj, time));
+        if (!src) {
+            flash('这张纹理没有可读取的像素');
+            updateChrome();
+            return false;
+        }
+
+        let next = null;
+        let label = '';
+        if (mode === 'trim') {
+            const box = contentBounds(src.data, src.w, src.h);
+            if (!box) {
+                flash('这张纹理是全透明的，没有内容可裁');
+                updateChrome();
+                return false;
+            }
+            if (box.x === 0 && box.y === 0 && box.w === src.w && box.h === src.h) {
+                flash('这张纹理四周没有多余的透明区域');
+                updateChrome();
+                return false;
+            }
+            next = {
+                image: surfaceFromRgba(box.w, box.h, cropRgba(src.data, src.w, src.h, box)),
+                dx: box.x,
+                dy: box.y,
+            };
+            label = '裁剪纹理';
+        } else {
+            const w = clampTextureSize(o.width);
+            const h = clampTextureSize(o.height);
+            if (w == null || h == null) {
+                flash('尺寸必须是 1–4096 之间的数字');
+                updateChrome();
+                return false;
+            }
+            if (w === src.w && h === src.h) {
+                flash('尺寸没有变化');
+                updateChrome();
+                return false;
+            }
+            const off = alignOffset(src.w, src.h, w, h, o.align || 'c');
+            next = {
+                image: surfaceFromRgba(w, h, placeRgba(src.data, src.w, src.h, w, h, off.ox, off.oy)),
+                dx: -off.ox,
+                dy: -off.oy,
+            };
+            label = '重设纹理尺寸';
+        }
+        if (!next || !next.image) {
+            flash('无法创建新纹理');
+            updateChrome();
+            return false;
+        }
+
+        let changed = false;
+        setDoc((d) => {
+            const cur = objectById(d, id);
+            if (!cur) return d;
+            // 画格：只换当前时刻这一张
+            let obj2 = setImageAt(cur, time, next.image);
+            // 变换：把「图动了多少」补回对象坐标，画面不跳
+            const track = obj2.transform || createTrack();
+            const idx = activeKeyIndex(track, time);
+            let track2 = track;
+            if (idx >= 0) {
+                const st = (track.keys[idx] && track.keys[idx].state) || {};
+                track2 = setKeyState(track, idx, {
+                    x: (Number(st.x) || 0) + next.dx,
+                    y: (Number(st.y) || 0) + next.dy,
+                });
+            } else {
+                // 轨道是空的（理论上不会，createTrack 保证有一帧）：补一个关键帧而不是让位移丢掉
+                track2 = addKey(track, time, { x: next.dx, y: next.dy });
+            }
+            obj2 = Object.assign({}, obj2, { transform: track2 });
+            changed = true;
+            return patchObject(d, id, () => obj2);
+        }, { label });
+
+        if (changed) {
+            flash(mode === 'trim'
+                ? '已裁到内容：' + next.image.width + ' × ' + next.image.height
+                : '纹理尺寸改为 ' + next.image.width + ' × ' + next.image.height);
+            updateChrome();
+        }
         return changed;
     },
 

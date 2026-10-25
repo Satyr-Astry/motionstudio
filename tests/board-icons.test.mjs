@@ -10,6 +10,7 @@ import { ICON_NAMES } from '../app/core/icons.mjs';
 const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 const board = read('../app/editors/board.mjs');
 const toolbar = read('../app/editors/toolbar.mjs');
+const topbar = read('../app/shell/chrome.mjs');
 const known = new Set(ICON_NAMES);
 
 // 曾经被当成「图标」用的单字符字形。任何一个出现在按钮内容里都算回退。
@@ -22,7 +23,7 @@ test('画板与工具表引用的图标名都在 icons.mjs 里', () => {
     // board.mjs: 直接调用 icon('name')
     for (const m of board.matchAll(/icon\('([a-z][a-z0-9-]*)'/g)) used.add(m[1]);
     // board.mjs: .bd-act 表里的图标列（iconName 变量，静态扫不到调用点）
-    for (const m of board.matchAll(/\['(?:prev|next|new|unique|fit)',\s*'([a-z][a-z0-9-]*)'/g)) used.add(m[1]);
+    for (const m of board.matchAll(/\['(?:prev|next|new-tex|unique|fit)',\s*'([a-z][a-z0-9-]*)'/g)) used.add(m[1]);
 
     assert.ok(used.size >= 10, `应至少抽到 10 个图标引用，实际 ${used.size}: ${[...used].join(',')}`);
     for (const name of used) {
@@ -50,11 +51,27 @@ test('六件工具的图标名互不相同且都是图标（不是文字）', ()
 
 test('带字动作保留中文标签，图标在前', () => {
     // 图标 + 中文（＋ 号由 plus 图标承担，文字只剩「纹理」）
-    assert.match(board, /\['new', 'plus', '纹理'/);
+    assert.match(board, /\['new-tex', 'plus', '纹理'/);
     assert.match(board, /\['unique', 'sparkle', '独特化'/);
     assert.match(board, /\['fit', 'fit', '适配'/);
     // 图标在前、文字在后的拼装方式
     assert.match(board, /icon\(iconName\) \+ \(text \? `<span>/);
+});
+
+test('动作名跨面板唯一：顶栏「新建项目」与画板「＋纹理」不许同名', () => {
+    // 事故：两者都叫 data-act="new"，跨面板的 [data-act="new"] 查询会命中顶栏那个，
+    // 于是「点纹理」的自动化脚本实际新建了一个空项目、画板毫无反应。
+    // 单个面板内不必让路，跨面板必须唯一，所以这里把两张表的动作名抽出来求交集。
+    const boardActs = new Set(
+        [...board.matchAll(/\['([a-z][a-z0-9-]*)', '[a-z][a-z0-9-]*', '[^']*'/g)].map((m) => m[1]),
+    );
+    const topActs = new Set(
+        [...topbar.matchAll(/\['([a-z][a-z0-9-]*)', '[a-z][a-z0-9-]*', (?:null|'[^']*'), '[^']*'\]/g)].map((m) => m[1]),
+    );
+    assert.ok(boardActs.size >= 5, `画板动作表解析失败，只抽到 ${boardActs.size} 个`);
+    assert.ok(topActs.size >= 5, `顶栏动作表解析失败，只抽到 ${topActs.size} 个`);
+    const both = [...boardActs].filter((a) => topActs.has(a));
+    assert.deepEqual(both, [], `动作名跨面板重复（跨面板选择器会取错按钮）: ${both.join(', ')}`);
 });
 
 test('图标尺寸统一走 board.css 的 --icon-sm，不在 JS 里逐个传 size', () => {
@@ -160,5 +177,45 @@ test('窄窗口不靠 display:none 藏字（这是「文字不显示完全」的
 test('工具表按钮的 title / aria-label 同时带名称与快捷键', () => {
     assert.match(toolbar, /b\.title = `\$\{t\.name\} \(\$\{t\.key\}\)`/);
     assert.match(toolbar, /b\.setAttribute\('aria-label', `\$\{t\.name\} \(\$\{t\.key\}\)`\)/);
+});
+
+// ── task-30：纹理尺寸控件（裁到内容 / 宽×高 / 应用 / 对齐） ──────────────────
+
+test('纹理尺寸控件引用的两枚图标都在 icons.mjs 里，且只追加不改既有键', () => {
+    for (const name of ['crop-content', 'canvas-resize']) {
+        assert.ok(known.has(name), `画板尺寸控件引用了不存在的图标: ${name}`);
+        assert.match(board, new RegExp(`icon\\('${name}'\\)`), `board.mjs 没有用 icon('${name}')`);
+    }
+    // 这两枚只允许以「追加」的形式存在：不许给旧键起别名（如 fit2 / resize）
+    for (const alias of ['fit2', 'crop', 'resize', 'trim']) {
+        assert.ok(!known.has(alias), `不要用别名 ${alias} 代替已追加的图标键`);
+    }
+});
+
+test('尺寸控件两个按钮都有 title + aria-label，且命令未接线时禁用并写明原因', () => {
+    // 纯图标按钮必须同时写 title 与 aria-label（与既有 .bd-ico 同规矩）
+    assert.match(board, /cropBtn\.title = cropTitle/, '裁到内容按钮的 title 没走统一变量');
+    assert.match(board, /cropBtn\.setAttribute\('aria-label', cropTitle\)/);
+    assert.match(board, /applySizeBtn\.title = applyTitle/, '应用按钮的 title 没走统一变量');
+    assert.match(board, /applySizeBtn\.setAttribute\('aria-label', applyTitle\)/);
+    // 「点了没反应」是本轮投诉的同类问题：命令缺失时必须禁用 + title 说明
+    assert.match(board, /cropBtn\.disabled = !!why/);
+    assert.match(board, /applySizeBtn\.disabled = !!why/);
+    assert.match(board, /尺寸命令尚未接线/, '命令缺失时没有写明原因');
+    assert.match(board, /typeof c\.resizeTexture === 'function'/, '守卫没有检测命令是否接线');
+});
+
+test('尺寸输入不许在 input 事件里直接改文档：只有应用按钮 / 回车才执行', () => {
+    // 只允许 keydown Enter 与 data-act=resize 两条路径触发 runSize
+    assert.match(board, /function applySizeFromInputs\(\)/);
+    assert.match(board, /if \(e\.key !== 'Enter'\) return;/);
+    assert.match(board, /case 'resize':\s*\n\s*applySizeFromInputs\(\);/, "click 分派里没有 case 'resize'");
+    assert.match(board, /case 'crop':\s*\n\s*runSize\(\{ mode: 'trim' \}\);/, "click 分派里没有 case 'crop'");
+    // 不许出现对 sizeW/sizeH 的 input 事件监听（那会在打字过程中就改文档）
+    assert.ok(!/size[WH]\.addEventListener\('input'/.test(board), '尺寸框上挂了 input 监听——会在打字中途改文档');
+    // 不许用隐藏修饰键切语义（Alt/Shift 那套已在 keepPlace 上被否掉）：
+    // 对齐必须是显式三档，而不是「按住某键 = 另一种对齐」
+    assert.match(board, /\['nw', '左上'\], \['c', '居中'\], \['se', '右下'\]/, '对齐三档没有显式列出');
+    assert.ok(!/alignSel\.dataset|alignKeyDown/.test(board), '对齐不该藏在键盘修饰里');
 });
 

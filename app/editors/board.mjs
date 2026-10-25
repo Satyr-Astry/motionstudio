@@ -393,7 +393,9 @@ export function mount(el, ctx) {
     for (const [act, iconName, text, title] of [
         ['prev', 'chevron-left', '', '上一张纹理'],
         ['next', 'chevron-right', '', '下一张纹理'],
-        ['new', 'plus', '纹理', '新建一张空白纹理并绑定到当前时刻'],
+        // 动作名带 -tex 后缀：顶栏「新建项目」也叫 new，跨面板的 [data-act="new"]
+        // 查询会命中错的那个（W20 的端到端脚本就踩过），一个面板内不必让路，跨面板必须唯一。
+        ['new-tex', 'plus', '纹理', '新建一张空白纹理并绑定到当前时刻'],
         ['unique', 'sparkle', '独特化', '把当前纹理拷一份，之后改它不影响别处'],
         ['fit', 'fit', '适配', '缩放到刚好放下这张纹理（0 键）'],
     ]) {
@@ -406,13 +408,59 @@ export function mount(el, ctx) {
         acts.appendChild(btn);
     }
 
+    /* ── 纹理尺寸控件（动作段尾部）：裁到内容 / 宽×高 / 应用 / 对齐 ──
+       用户原话「擦除冗余部分后点适配，无法把透明通道裁到合适尺寸，也不能扩大画布」。
+       「适配」是视图相机（fit()，0 键），不是裁剪 —— 尺寸能力原先整个缺失，所以补的是
+       入口不是语义。真正的像素搬运在 shell 侧 `ctx.resizeTexture(objId, {...})`（W19 的
+       task-29），这里只做入口与守卫：命令没接线时一律禁用并在 title 里写明，
+       绝不出现「点了没反应」——那正是这轮投诉的同类问题。 */
+    const sizeCtl = mk('div', 'bd-size-ctl');
+
+    const cropBtn = mk('button', 'bd-ico');
+    cropBtn.type = 'button';
+    cropBtn.dataset.act = 'crop';
+    cropBtn.innerHTML = icon('crop-content');
+
+    const sizeW = mk('input', 'bd-size-w');
+    sizeW.type = 'number';
+    sizeW.min = '1';
+    sizeW.max = '8192';
+    sizeW.step = '1';
+    sizeW.setAttribute('aria-label', '纹理宽度（像素）');
+
+    const sizeX = mk('span', 'bd-size-x', '×');
+
+    const sizeH = mk('input', 'bd-size-h');
+    sizeH.type = 'number';
+    sizeH.min = '1';
+    sizeH.max = '8192';
+    sizeH.step = '1';
+    sizeH.setAttribute('aria-label', '纹理高度（像素）');
+
+    const applySizeBtn = mk('button', 'bd-ico');
+    applySizeBtn.type = 'button';
+    applySizeBtn.dataset.act = 'resize';
+    applySizeBtn.innerHTML = icon('canvas-resize');
+
+    // 对齐：显式三档，不用 Shift/Alt 这种隐藏修饰键切语义（keepPlace 那轮已经否掉这套）
+    const alignSel = mk('select', 'bd-align');
+    for (const [value, text] of [['nw', '左上'], ['c', '居中'], ['se', '右下']]) {
+        const opt = document.createElement('option');
+        opt.value = value;
+        opt.textContent = text;
+        alignSel.appendChild(opt);
+    }
+    alignSel.value = 'c';
+
+    sizeCtl.append(cropBtn, sizeW, sizeX, sizeH, applySizeBtn, alignSel);
+
     /* 三段分区（计划 §4）：①工具 ②画板动作 —— 两段同处 .bd-bar，靠 1px --line 竖线分隔；
        ③参数在下一行 .bd-params。分组而不是靠 gap 猜，是这次重排的主线之一。 */
     const segTools = mk('div', 'bd-seg bd-seg-tools');
     segTools.append(brushes, swatch, pickBtn, bucketBtn, mirrorSel);
 
     const segActs = mk('div', 'bd-seg bd-seg-acts');
-    segActs.append(undoBtn, redoBtn, stabBtn, acts);
+    segActs.append(undoBtn, redoBtn, stabBtn, acts, sizeCtl);
 
     bar.append(segTools, segActs);
 
@@ -1121,7 +1169,78 @@ export function mount(el, ctx) {
         fittedFor = '';
         ensureFit();
         draw();
+        // 纹理可能换了（新建 / 翻页 / 独特化 / 重设尺寸）—— 尺寸控件必须跟着刷新，
+        // 否则按钮停留在上一张纹理的可用性上，就是「点了没反应」的另一种形态。
+        syncSizeCtl();
     }
+
+    /* ── 纹理尺寸：守卫 + 执行 ──
+       命令契约（W19 task-29）：`ctx.resizeTexture(objId, { mode:'trim' })` 或
+       `{ mode:'resize', width, height, align }`（align: 'nw'|'c'|'se'），返回 boolean。
+       返回 false 时对方已经 notify 过原因，这里不重复弹 —— 只负责不要出现「点了没反应」。 */
+
+    const SIZE_LIMIT = 8192;
+
+    function sizeCmdReady() {
+        return typeof c.resizeTexture === 'function';
+    }
+
+    function runSize(payload) {
+        if (!sizeCmdReady()) return false;
+        const id = activeId();
+        if (id == null) return false;
+        if (c.resizeTexture(id, payload) !== true) return false;
+        // 尺寸变了 → 相机要重新适配一次（旧 zoom 是按旧尺寸算的），并重绘
+        afterDocChange();
+        syncSizeCtl();
+        return true;
+    }
+
+    function applySizeFromInputs() {
+        const w = Math.round(Number(sizeW.value));
+        const h = Math.round(Number(sizeH.value));
+        if (!Number.isFinite(w) || !Number.isFinite(h)) return false;
+        if (w < 1 || h < 1 || w > SIZE_LIMIT || h > SIZE_LIMIT) return false;
+        return runSize({ mode: 'resize', width: w, height: h, align: alignSel.value || 'c' });
+    }
+
+    /** 把两个按钮的可点性与 title 拉到真实状态：命令缺失 / 没有纹理都是明确原因，不装死。 */
+    function syncSizeCtl() {
+        const img = texture();
+        const ready = sizeCmdReady();
+        const why = !ready
+            ? '尺寸命令尚未接线（W19 task-29 落地后可用）'
+            : !img
+                ? '当前时刻还没有纹理：先点「纹理」新建一张'
+                : '';
+        const cropTitle = why || '把纹理裁到内容包围盒（去掉四周透明）';
+        cropBtn.disabled = !!why;
+        cropBtn.title = cropTitle;
+        cropBtn.setAttribute('aria-label', cropTitle);
+        const applyTitle = why || '按当前尺寸重设纹理画布';
+        applySizeBtn.disabled = !!why;
+        applySizeBtn.title = applyTitle;
+        applySizeBtn.setAttribute('aria-label', applyTitle);
+        alignSel.disabled = !ready;
+        alignSel.title = ready
+            ? '重设尺寸时旧内容放在新画布的位置'
+            : '尺寸命令尚未接线（W19 task-29 落地后可用）';
+        alignSel.setAttribute('aria-label', alignSel.title);
+        sizeW.disabled = !!why;
+        sizeH.disabled = !!why;
+        // 正在输入的框不抢值 —— 否则打到一半就被写回旧尺寸
+        if (document.activeElement !== sizeW) sizeW.value = img ? String(img.width) : '';
+        if (document.activeElement !== sizeH) sizeH.value = img ? String(img.height) : '';
+    }
+
+    /* 尺寸输入框里回车 = 应用（不必先把焦点挪到按钮上）。
+       绑在 root 而不是 window：只在画板内部生效，不往全局键盘上加东西。 */
+    root.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        if (e.target !== sizeW && e.target !== sizeH) return;
+        e.preventDefault();
+        applySizeFromInputs();
+    });
 
     root.addEventListener('click', (e) => {
         const t = e.target && e.target.closest ? e.target : null;
@@ -1167,15 +1286,23 @@ export function mount(el, ctx) {
             case 'undo':
                 if (typeof c.undo === 'function') c.undo();
                 draw();
+                syncSizeCtl();
                 if (typeof c.requestRender === 'function') c.requestRender();
                 return;
             case 'redo':
                 if (typeof c.redo === 'function') c.redo();
                 draw();
+                syncSizeCtl();
                 if (typeof c.requestRender === 'function') c.requestRender();
                 return;
             case 'fit':
                 fit();
+                return;
+            case 'crop':
+                runSize({ mode: 'trim' });
+                return;
+            case 'resize':
+                applySizeFromInputs();
                 return;
             case 'prev':
                 if (typeof c.goPrevCel === 'function') c.goPrevCel();
@@ -1185,7 +1312,7 @@ export function mount(el, ctx) {
                 if (typeof c.goNextCel === 'function') c.goNextCel();
                 afterDocChange();
                 return;
-            case 'new': {
+            case 'new-tex': {
                 const made = typeof c.newDrawing === 'function' ? c.newDrawing(null) : null;
                 // newDrawing 只把图画进「画格库」，**不在时间轴上占位**（画格 ≠ 曝光）。
                 // 不落位就等于「点纹理没反应」，所以这里补一次 placeDrawing，把它放到当前时刻。
@@ -1409,6 +1536,7 @@ export function mount(el, ctx) {
         mirrorSel.value = mirror;
         if (engine && typeof engine.canUndo === 'function') undoBtn.disabled = !engine.canUndo();
         if (engine && typeof engine.canRedo === 'function') redoBtn.disabled = !engine.canRedo();
+        syncSizeCtl();
     }
 
     /* ── 生命周期 ── */
