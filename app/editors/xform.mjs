@@ -19,7 +19,7 @@ import { layerById, objectsOf } from '../core/cel.mjs';
 import { icon } from '../core/icons.mjs';
 
 // 关键帧时间比对容差：1e-6 s ≈ 0.001px。比 core 的 1e-9 宽松一点，
-// 免得「拖到画格切换点后再输数值」因为末位浮点误差又生成一个几乎重合的关键帧。
+// 免得「拖到纹理切换点后再输数值」因为末位浮点误差又生成一个几乎重合的关键帧。
 const T_EPS = 1e-6;
 
 // 标量字段定义：[字段, 显示名, step, min, max]
@@ -387,7 +387,7 @@ export function createXformPanel(ctx) {
         writeKey(null, ease);
     }
 
-    // 关键帧时间现在是任意浮点秒，直接用 setTime 落到那一刻（画格与播放头由外壳按时间派生）
+    // 关键帧时间现在是任意浮点秒，直接用 setTime 落到那一刻（纹理与播放头由外壳按时间派生）
     function jumpToTime(t) {
         if (typeof ctx.setTime === 'function') ctx.setTime(t);
     }

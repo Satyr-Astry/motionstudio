@@ -131,7 +131,7 @@ input.lyr-rename,
 }
 
 /* 时间轴工具条在窄窗里会宽过面板（1000×620 —— 也就是 main.js 声明的最小窗口 —— 实测
-   内容 695px 塞进 432px，末尾的「删画格 / 曲线 / 缩放 / ?」被直接切掉，鼠标也没法到达）。
+   内容 695px 塞进 432px，末尾的「删纹理 / 曲线 / 缩放 / ?」被直接切掉，鼠标也没法到达）。
    与 .tbar 同一口径：宁可滚动，也不要静默切掉半行控件。滚动条隐藏，滚轮/触控板照常工作。 */
 .tline-bar {
     min-width: 0;
@@ -505,7 +505,7 @@ input.pal-hue:focus-visible::-webkit-slider-thumb {
 }
 
 .lyr-sub {
-    /* 对象行的副标题是「手绘 · 0 画格 · 1 键」这种要读的信息，不是装饰：
+    /* 对象行的副标题是「手绘 · 0 纹理 · 1 键」这种要读的信息，不是装饰：
      * 用 ink-faint 时实测 4.12:1，退一档到 ink-dim 是 6.04:1 */
     font-size: 10px; line-height: 1.2; color: var(--ink-dim);
     white-space: nowrap; overflow: hidden;
@@ -517,6 +517,59 @@ input.pal-hue:focus-visible::-webkit-slider-thumb {
     padding: 0 8px; background: var(--panel-2); border-top: 1px solid var(--line);
     color: var(--ink-dim); font-size: 11px; white-space: nowrap; overflow: hidden;
 }
+
+/* ═══════════════ 父子树 tree ═══════════════
+ * 与 .lyr 的分工见 docs/层级与叠放-2026-10.md §5：那边是扁平叠放（谁盖谁），
+ * 这边是树（跟谁动）。竖排 flex + 列表吃余量，与 .lyr 同构，上下叠放时高度分配才一致。
+ */
+.tree {
+    display: flex; flex-direction: column; height: 100%; overflow: hidden;
+}
+
+.tree-list {
+    flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto;
+}
+
+.tree-row {
+    display: flex; align-items: center; gap: 4px; height: var(--h-row);
+    padding-right: 6px; border-bottom: 1px solid var(--line);
+    cursor: pointer; -webkit-user-select: none; user-select: none;
+}
+
+.tree-row:hover { background: var(--panel-2); }
+
+.tree-row.is-active {
+    background: var(--sel-bg-strong); box-shadow: inset 2px 0 0 var(--sel-bar);
+}
+
+/* 拖到行上 = 成为它的子对象；这个面板没有行间落点，叠放顺序不归它管 */
+.tree-row.is-drop { background: var(--sel-bg-strong); outline: 1px dashed var(--accent); outline-offset: -1px; }
+.tree-list.is-drop-blank { box-shadow: inset 0 0 0 1px var(--accent); }
+
+/* 折叠箭头：没有子对象的行用等宽占位，保证同级名字左边对齐 */
+.tree-caret { flex: 0 0 auto; width: 18px; min-width: 18px; padding: 0; color: var(--ink-faint); }
+.tree-row:hover .tree-caret { color: var(--ink-dim); }
+.tree-caret-pad { flex: 0 0 auto; width: 18px; }
+
+.tree-name {
+    flex: 1 1 auto; min-width: 0; font-size: 11px; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.tree-kids {
+    flex: 0 0 auto; font-size: 10px; line-height: 1; padding: 2px 5px;
+    border-radius: var(--r-pill); background: var(--surface); color: var(--ink-dim);
+    font-variant-numeric: tabular-nums;
+}
+
+.tree-empty {
+    flex: 1 1 auto; display: flex; align-items: center; justify-content: center;
+    color: var(--ink-faint); font-size: 11px;
+}
+
+/* display:flex 会盖掉 [hidden] 自带的 display:none —— 本项目踩过的老坑，显式兜底 */
+.tree-empty[hidden] { display: none; }
+.tree-list[hidden] { display: none; }
 
 /* ═══════════════ 时间轴 timeline ═══════════════ */
 
@@ -1055,7 +1108,7 @@ input.lyr-rename {
 }
 
 /* ── 轨道区 (.tline-lane) ────────────────────────────────────────
- * 一条横向细线把画格点与关键帧串在同一条时间轴上。
+ * 一条横向细线把纹理点与关键帧串在同一条时间轴上。
  */
 
 .tline-lane { cursor: crosshair; }
@@ -1100,7 +1153,7 @@ input.lyr-rename {
     color: var(--ink-faint); font-variant-numeric: tabular-nums;
 }
 
-/* ── 图例 (.tline-legend)：画格 / 关键帧是两种东西 ─────────────────
+/* ── 图例 (.tline-legend)：纹理 / 关键帧是两种东西 ─────────────────
  * 按钮刻意不带 .tline-btn：工具条的 act 列表被测试逐项钉死。
  * 卡片挂在 body 上（不进 .tline 骨架），并且 pointer-events:none ——
  * 它只是说明文字，绝不能挡住时间轴上的操作。
@@ -1876,7 +1929,7 @@ body.pref-bg .cv-host { background: var(--pref-cv-bg, var(--bg)); }
     gap: 6px;
 }
 
-/* ── 时间轴工具条 v8：五组（播放 / 读数 / 画格 / 关键帧 / 缩放）─────
+/* ── 时间轴工具条 v8：五组（播放 / 读数 / 纹理 / 关键帧 / 缩放）─────
  * 播放控制从顶栏搬到这里：位置即语义（AE / Aseprite / Animate 的 transport
  * 都在时间轴侧）。分组只靠 1px 竖线切分，不做胶囊、不做阴影；
  * 圆角沿用全站的 2–3px，避免「到处都是圆角」的廉价感。
@@ -1957,73 +2010,7 @@ input.tline-total {
     cursor: grabbing;
 }
 
-/* ═══════════════ v9：对象面板的画格库 ═══════════════
-   对象栈（.lyr-list）与画格库（.lyr-cels）是同一个面板的上下两截：
-   上面「有哪些对象」，下面「当前对象有哪些画格」。画格是可以复用的图，
-   时间轴上的只是「某段时刻显示哪张」的曝光；所以这里一行 = 一张画格，
-   行的副标题写它被几个时刻用到（×M 处），当前时刻在用的那张加 .is-cur。
-   两截之间只用一条边线分开，不加圆角（--r-0）。 */
-
-.lyr-cels {
-    flex: 0 0 auto;
-    display: flex; flex-direction: column;
-    min-height: 0;
-    max-height: 46%;
-    border-top: 1px solid var(--line);
-    background: var(--panel);
-}
-
-.lyr-cels-head {
-    flex: 0 0 var(--h-head); height: var(--h-head);
-    display: flex; align-items: center; gap: 6px;
-    padding: 0 6px;
-    background: var(--panel-2);
-    border-bottom: 1px solid var(--line);
-    font-size: 11px; color: var(--ink-dim);
-    white-space: nowrap; overflow: hidden;
-}
-
-.lyr-cels-title { color: var(--ink-dim); }
-
-.lyr-cels-count {
-    min-width: 14px; text-align: center;
-    font-variant-numeric: tabular-nums; color: var(--ink-dim);
-}
-
-.lyr-cels-acts { display: flex; align-items: center; gap: 2px; margin-left: auto; }
-
-.lyr-cels-btn {
-    flex: 0 0 auto; height: var(--h-btn); min-width: var(--h-btn); padding: 0 4px;
-    border: 1px solid transparent; border-radius: var(--r-1);
-    background: transparent; color: var(--ink-dim);
-    font-size: 11px; line-height: 1; cursor: pointer;
-}
-.lyr-cels-btn:hover { background: var(--surface); color: var(--ink); }
-.lyr-cels-btn:active { background: var(--line-2); }
-
-.lyr-cel-list { flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto; }
-
-.lyr-cel {
-    display: flex; align-items: center; gap: 6px;
-    height: var(--h-row); padding: 0 6px;
-    border-bottom: 1px solid var(--line);
-    cursor: pointer; -webkit-user-select: none; user-select: none;
-}
-.lyr-cel:hover { background: var(--panel-2); }
-.lyr-cel.is-cur { background: var(--sel-bg-strong); box-shadow: inset 2px 0 0 var(--sel-bar); }
-
-/* 画格缩略图：canvas 位图就是 34×22（layers.mjs 的 CEL_THUMB_W/H），与 CSS 尺寸 1:1，不缩放 */
-.lyr-cel-thumb {
-    flex: 0 0 34px; width: 34px; height: 22px;
-    border: 1px solid var(--line); border-radius: var(--r-1); background: var(--bg);
-    image-rendering: pixelated;
-}
-
-.lyr-cel-meta { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; }
-.lyr-cel-at { font-size: 11px; color: var(--ink); font-variant-numeric: tabular-nums; }
-.lyr-cel-sub { font-size: 10px; color: var(--ink-faint); }
-.lyr-cel.is-cur .lyr-cel-sub { color: var(--ink-dim); }
-
+/* v10：纹理库（.lyr-cels / .lyr-cel*）随纹理搬家一起下线 —— 纹理编辑在属性面板「纹理」组（prop-textures.mjs + textures.css）。 */
 /* ═══════════════ v8：时间轴多选与框选 ═══════════════
    多选里的主键用原 .is-sel（白心+光晕），次级键用 .is-sel2（半透蓝），
    一眼能看出「整组拖」会以谁为锚。框选矩形只在这里给颜色，
@@ -2069,26 +2056,8 @@ body.is-dropping #ws-host::after {
     pointer-events: none;
 }
 
-/* ── v8：对象树的折叠箭头（只影响面板显示） ───────────────────────── */
-.lyr-row > .lyr-caret {
-    /* 图标本身 12px，盒子撑到 20×20 让箭头好点中（验收要求可点区 ≥20×20） */
-    flex: 0 0 20px;
-    width: 20px;
-    height: 20px;
-    margin-right: 1px;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--ink-faint);
-    font-size: 10px;
-    line-height: 18px;
-    cursor: pointer;
-}
-.lyr-row > .lyr-caret:hover {
-    color: var(--ink);
-}
-
-/* ── v9：画格库的行不参与拖动重排（时刻由曝光决定，交换时刻没有意义） ── */
+/* v10：折叠箭头（.lyr-caret）随「叠放列表扁平化」下线 —— 层级与折叠归「父子」面板（.tree-*）。 */
+/* ── v9：纹理库的行不参与拖动重排（时刻由曝光决定，交换时刻没有意义） ── */
 
 /* ═══════════════ v8：快捷键一览浮层（? 打开） ═══════════════ */
 .keys-overlay {
@@ -2261,8 +2230,8 @@ body.is-dropping #ws-host::after {
     overflow: hidden;
 }
 
-/* v8：画格属于关键帧 —— 带画格的键在菱形里点一个实心方块（空白键点空心方块），
-   一眼能看出「这一帧换了画格」和「只是改了位置/缩放」。 */
+/* v8：纹理属于关键帧 —— 带纹理的键在菱形里点一个实心方块（空白键点空心方块），
+   一眼能看出「这一帧换了纹理」和「只是改了位置/缩放」。 */
 .tline-kf.has-drawing::after,
 .tline-kf.is-blank::after {
     content: '';

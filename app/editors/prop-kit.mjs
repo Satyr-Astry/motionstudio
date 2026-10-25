@@ -155,7 +155,7 @@ export function activeObj(ctx, doc) {
     return (id && objectById(doc, id)) || objectsOf(doc)[0] || null;
 }
 
-/** 全文档画格数（所有对象的画格之和）。 */
+/** 全文档纹理数（所有对象的纹理之和）。 */
 export function totalCels(doc) {
     let n = 0;
     for (const o of objectsOf(doc)) n += celTimes(o).length;

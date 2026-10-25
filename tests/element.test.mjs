@@ -2,8 +2,8 @@
  * element.mjs 单测（时间模型 v6）。
  *
  * 契约变化：几何 API 的第 3 / 4 个参数统一是 `time`（秒），不再有 frameIndex；
- * 文档里也没有 `doc.frames` 了 —— 对象的画格是 `obj.cels = [{ at, image }]`，
- * 取某一时刻的位图用 doc-model 的 `imageAt(obj, t)`（画格一直沿用到下一个画格）。
+ * 文档里也没有 `doc.frames` 了 —— 对象的纹理是 `obj.cels = [{ at, image }]`，
+ * 取某一时刻的位图用 doc-model 的 `imageAt(obj, t)`（纹理一直沿用到下一个纹理）。
  */
 
 import test from 'node:test';
@@ -42,7 +42,7 @@ function fakeImage(w, h, alphaAt) {
 
 /**
  * 100x80 文档，唯一对象的左 40% 不透明、其余为 0（留出边界余量，便于旋转测试）。
- * 画格是 `{at: 0, image}` —— 从 0 秒起一直有效。
+ * 纹理是 `{at: 0, image}` —— 从 0 秒起一直有效。
  */
 function makeDoc(withPixel) {
     const base = createDoc({ width: 100, height: 80, fps: 10 });
@@ -97,15 +97,15 @@ test('elementState：无轨道时给出默认状态', () => {
     assert.equal(st.rotate, 0);
 });
 
-test('elementSize：有画格位图时用位图尺寸', () => {
+test('elementSize：有纹理位图时用位图尺寸', () => {
     const { doc, el } = makeDoc(true);
     const size = elementSize(doc, el, 0);
     assert.deepEqual(size, { w: 100, h: 80 });
-    // 画格沿用：t=3.7 仍取 at=0 那张图
+    // 纹理沿用：t=3.7 仍取 at=0 那张图
     assert.equal(imageAt(el, 3.7), imageAt(el, 0));
 });
 
-test('elementSize：画格没有位图时回退文档尺寸', () => {
+test('elementSize：纹理没有位图时回退文档尺寸', () => {
     const { doc, el } = makeDoc(false);
     assert.equal(imageAt(el, 0), null);
     assert.deepEqual(elementSize(doc, el, 0), { w: 100, h: 80 });
@@ -277,7 +277,7 @@ test('hitTest：旋转 90° 后命中区域跟着转', () => {
 
 test('hitTest：多层时取最上层', () => {
     const { doc, el } = makeDoc(true);
-    // objects[0] 是最上层；两层共用同一个画格位图
+    // objects[0] 是最上层；两层共用同一个纹理位图
     const extra = Object.assign({}, el, { id: 'top', transform: { keys: [] } });
     const two = Object.assign({}, doc, { objects: [extra, el] });
     const r = hitTest(two, 0, 20, 40);

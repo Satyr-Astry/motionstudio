@@ -1,10 +1,10 @@
 /**
  * 项目格式单测（时间模型 v6）。
  *
- * 断言的都是「时间模型」口径：文档里没有 `doc.frames` 了，对象的画格是
- * `obj.cels = [{ at, image }]`（`at` 单位是秒，画格一直沿用到下一个画格），
+ * 断言的都是「时间模型」口径：文档里没有 `doc.frames` 了，对象的纹理是
+ * `obj.cels = [{ at, image }]`（`at` 单位是秒，纹理一直沿用到下一个纹理），
  * 总时长由 `docDuration(doc)` 推。v4 序列化（project-store）只把位图写成 dataURL，
- * 同一张位图被多个画格共用时只存一份（assets 的键是对象 id，第 2 张起 `id#2`）。
+ * 同一张位图被多个纹理共用时只存一份（assets 的键是对象 id，第 2 张起 `id#2`）。
  *
  * 依赖 project-store 的部分走 `__setCodec` 注入替身画布 / 解码器，不碰真实 DOM。
  * 注意 project-store 正在被并行改造，所以这里用命名空间导入：少一个导出只会让相关
@@ -97,13 +97,13 @@ function useCodec() {
 useCodec();
 test.after(() => { store.__resetCodec(); });
 
-/** 画格时间点统一收敛到 1e-6：帧累加得来的秒会有 0.30000000000000004 这类尾巴 */
+/** 纹理时间点统一收敛到 1e-6：帧累加得来的秒会有 0.30000000000000004 这类尾巴 */
 const timesOf = (obj) => celTimes(obj).map((t) => Math.round(t * 1e6) / 1e6);
 const near = (actual, expected) => Math.abs(Number(actual) - Number(expected)) < 1e-9;
 
 /* ─────────────────────────── 造文档 ─────────────────────────── */
 
-/** 40x30、fps 10：唯一对象在 0/1/2 秒各有一个画格，三格共用同一张位图 A */
+/** 40x30、fps 10：唯一对象在 0/1/2 秒各有一个纹理，三格共用同一张位图 A */
 function richDoc() {
     BITMAPS.set('A', { w: 40, h: 30 });
     const a = fakeBitmap(40, 30, 'A');
@@ -135,7 +135,7 @@ function countOf(haystack, needle) {
 
 /* ─────────────────────── v4 序列化（doc-model → JSON） ─────────────────────── */
 
-test('v4 序列化：没有 frames 键，画格是 {at,image}，at 是秒', () => {
+test('v4 序列化：没有 frames 键，纹理是 {at,image}，at 是秒', () => {
     const { doc, elementId } = richDoc();
     const node = store.docToJSON(doc);
     assert.ok(node);
@@ -149,8 +149,8 @@ test('v4 序列化：没有 frames 键，画格是 {at,image}，at 是秒', () =
     assert.equal(el.opacity, 0.8);
     assert.equal(el.mixMode, 'multiply');
     assert.deepEqual(el.anchor, { x: 0.5, y: 0.5 });
-    // v8：画格挂在关键帧上，所以写盘时「带画格的关键帧」与「纯位移关键帧」在同一个 keys 数组里；
-    // cels 是投影（供旧版读取），时间点与带画格的关键帧一致。
+    // v8：纹理挂在关键帧上，所以写盘时「带纹理的关键帧」与「纯位移关键帧」在同一个 keys 数组里；
+    // cels 是投影（供旧版读取），时间点与带纹理的关键帧一致。
     assert.deepEqual(el.transform.keys.map((k) => k.t), [0, 0.5, 1, 2], '关键帧时间是秒');
     assert.deepEqual(el.cels.map((c) => c.at), [0, 1, 2]);
     assert.deepEqual(el.cels[0].image, { ref: elementId, w: 40, h: 30 });
@@ -177,7 +177,7 @@ test('v4 序列化：duration 取 docDuration（显式时长或内容末端）',
     assert.equal(store.docToJSON(derived).duration, 1.25);
 });
 
-test('assets 去重：同一张位图被 3 个画格共用，只编码一次', () => {
+test('assets 去重：同一张位图被 3 个纹理共用，只编码一次', () => {
     const { doc, elementId } = richDoc();
     const node = store.docToJSON(doc);
     assert.deepEqual(Object.keys(node.assets), [elementId]);
@@ -204,7 +204,7 @@ test('assets 去重：第 2 张不同的图才用 id#2', () => {
     assert.deepEqual(node.elements[0].cels.map((c) => c.image.ref), ['p1', 'p1#2', 'p1']);
 });
 
-test('空画格：image 写 null，不产生 assets、不内联位图', () => {
+test('空纹理：image 写 null，不产生 assets、不内联位图', () => {
     const doc = createDoc({ width: 64, height: 48, fps: 8 });
     const node = store.docToJSON(doc);
     assert.deepEqual(node.elements[0].cels, [{ at: 0, image: null }]);
@@ -234,7 +234,7 @@ test('docToFile：信封带 format/version，节点里没有 frames', () => {
 
 /* ─────────────────────── 旧帧模型迁移 ─────────────────────── */
 
-test('migrateFromFrames：hold 的旧帧不重复建画格，只给「有图变化」的时间点建格', () => {
+test('migrateFromFrames：hold 的旧帧不重复建纹理，只给「有图变化」的时间点建格', () => {
     const a = fakeBitmap(40, 30, 'A');
     const b = fakeBitmap(40, 30, 'B');
     const legacy = {
@@ -257,11 +257,11 @@ test('migrateFromFrames：hold 的旧帧不重复建画格，只给「有图变�
     assert.deepEqual(timesOf(obj), [0, 0.3, 0.4], '5 帧只留下 3 个时间点');
     assert.equal(imageAt(obj, 0), a, '位图不复制，仍是同一个对象');
     assert.equal(imageAt(obj, 0.35), b, 'hold 段沿用上一张图');
-    assert.equal(imageAt(obj, 0.4), null, '显式断开继承留空画格');
+    assert.equal(imageAt(obj, 0.4), null, '显式断开继承留空纹理');
     assert.ok(near(docDuration(doc), 0.5));
 });
 
-test('v3 帧节点 → jsonToDoc：相邻帧同一张位图只建一条画格', async () => {
+test('v3 帧节点 → jsonToDoc：相邻帧同一张位图只建一条纹理', async () => {
     useCodec();
     BITMAPS.set('A', { w: 40, h: 30 });
     BITMAPS.set('B', { w: 40, h: 30 });
@@ -284,14 +284,14 @@ test('v3 帧节点 → jsonToDoc：相邻帧同一张位图只建一条画格', 
     assert.ok(doc);
     assert.equal('frames' in doc, false);
     const obj = doc.objects[0];
-    assert.deepEqual(timesOf(obj), [0, 0.2], '第 2 帧内容没变，不建画格');
+    assert.deepEqual(timesOf(obj), [0, 0.2], '第 2 帧内容没变，不建纹理');
     assert.equal(imageAt(obj, 0).__tag, 'A');
     assert.equal(imageAt(obj, 0.1).__tag, 'A', '第 2 帧沿用第 1 格');
     assert.equal(imageAt(obj, 0.25).__tag, 'B');
     assert.ok(near(docDuration(doc), 0.3));
 });
 
-test('v4 往返：docToFile → jsonToDoc，画格时间点与位图逐点还原', async () => {
+test('v4 往返：docToFile → jsonToDoc，纹理时间点与位图逐点还原', async () => {
     useCodec();
     const { doc, elementId } = richDoc();
     const back = await store.jsonToDoc(store.docToFile(doc, { name: '往返' }));
@@ -302,8 +302,8 @@ test('v4 往返：docToFile → jsonToDoc，画格时间点与位图逐点还原
     assert.equal('frames' in back, false);
     const obj = back.objects[0];
     assert.equal(obj.id, elementId);
-    // v8：画格是关键帧属性（key.drawing），所以画格时间点就是「带画格的关键帧」，
-    // 纯位移关键帧（0.5）不产生画格切换点。
+    // v8：纹理是关键帧属性（key.drawing），所以纹理时间点就是「带纹理的关键帧」，
+    // 纯位移关键帧（0.5）不产生纹理切换点。
     assert.deepEqual(celTimes(obj), [0, 1, 2]);
     assert.deepEqual(celTimes(obj).map((x) => imageAt(obj, x).__tag), ['A', 'A', 'A']);
     assert.deepEqual(obj.transform.keys.map((k) => k.t), [0, 0.5, 1, 2]);
@@ -382,7 +382,7 @@ test('精灵图：background 铺底一次，底色不覆盖合成内容', () => 
 
 /* ─────────────────────── 导入图片 → 挂进文档 ─────────────────────── */
 
-test('导入图片：t=0 建一个画格，序列化后只有一条 asset', async () => {
+test('导入图片：t=0 建一个纹理，序列化后只有一条 asset', async () => {
     useCodec();
     BITMAPS.set('P', { w: 20, h: 10 });
     const doc = createDoc({ width: 100, height: 80, fps: 10 });
@@ -397,7 +397,7 @@ test('导入图片：t=0 建一个画格，序列化后只有一条 asset', asyn
     assert.equal(obj.id, added.element.id);
     assert.deepEqual(celTimes(obj), [0]);
     assert.equal(obj.cels[0].image.__tag, 'P');
-    assert.equal(imageAt(obj, 3).__tag, 'P', '画格从 at 起一直有效');
+    assert.equal(imageAt(obj, 3).__tag, 'P', '纹理从 at 起一直有效');
 
     const node = store.docToJSON(added.doc);
     assert.equal(node.elements.length, 2);

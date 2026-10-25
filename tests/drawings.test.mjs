@@ -19,7 +19,7 @@ function fakeImage(w, h, fill) {
     };
 }
 
-test('drawingsOf：同一张图出现在多个时刻 → 只有一条画格记录', () => {
+test('drawingsOf：同一张图出现在多个时刻 → 只有一条纹理记录', () => {
     const a = fakeImage(10, 10, 'a');
     const obj = makeObject({ cels: [{ at: 0, image: a }, { at: 1, image: a }, { at: 2, image: fakeImage(10, 10, 'b') }] });
     const list = drawingsOf(obj);
@@ -29,14 +29,14 @@ test('drawingsOf：同一张图出现在多个时刻 → 只有一条画格记�
     assert.equal(list[0].id, drawingIdOf(a));
 });
 
-test('drawingsOf：空画格（image=null）不进库；非对象安全返回空数组', () => {
+test('drawingsOf：空纹理（image=null）不进库；非对象安全返回空数组', () => {
     const obj = makeObject({ cels: [{ at: 0, image: null }, { at: 1, image: fakeImage(4, 4) }] });
     assert.equal(drawingsOf(obj).length, 1);
     assert.deepEqual(drawingsOf(null), []);
     assert.deepEqual(drawingsOf({}), []);
 });
 
-test('placeDrawing：把已有画格放到新时刻 → 共享同一个位图引用', () => {
+test('placeDrawing：把已有纹理放到新时刻 → 共享同一个位图引用', () => {
     const a = fakeImage(10, 10, 'a');
     const b = fakeImage(10, 10, 'b');
     const obj = makeObject({ cels: [{ at: 0, image: a }, { at: 1, image: b }] });
@@ -48,7 +48,7 @@ test('placeDrawing：把已有画格放到新时刻 → 共享同一个位图引
     assert.equal(obj.cels.length, 2);
 });
 
-test('placeDrawing：目标时刻已有画格 → 替换它的图，不新增时刻', () => {
+test('placeDrawing：目标时刻已有纹理 → 替换它的图，不新增时刻', () => {
     const a = fakeImage(10, 10, 'a');
     const b = fakeImage(10, 10, 'b');
     const obj = makeObject({ cels: [{ at: 0, image: a }, { at: 1, image: b }] });
@@ -57,7 +57,7 @@ test('placeDrawing：目标时刻已有画格 → 替换它的图，不新增时
     assert.equal(celAt(next, 1).image, a);
 });
 
-test('placeDrawing：画格 id 不存在 → 原样返回', () => {
+test('placeDrawing：纹理 id 不存在 → 原样返回', () => {
     const obj = makeObject({ cels: [{ at: 0, image: fakeImage(2, 2) }] });
     assert.equal(placeDrawing(obj, 1, 'nope'), obj);
 });
@@ -83,7 +83,7 @@ test('makeUnique：没有位图 / 没有 makeImage → 原样返回', () => {
     assert.equal(makeUnique(obj2, 0, null), obj2);
 });
 
-test('removeDrawing：删掉一张画格会移除它所有的曝光时刻', () => {
+test('removeDrawing：删掉一张纹理会移除它所有的曝光时刻', () => {
     const a = fakeImage(4, 4, 'a');
     const b = fakeImage(4, 4, 'b');
     const obj = makeObject({ cels: [{ at: 0, image: a }, { at: 1, image: a }, { at: 2, image: b }] });
@@ -99,7 +99,7 @@ test('removeDrawing：会删光时拒绝（至少留一格）；id 不存在也�
     assert.equal(removeDrawing(obj, 'nope'), obj);
 });
 
-test('drawingIdAt：取某时刻正在曝光的画格 id（沿用「上一格一直生效」）', () => {
+test('drawingIdAt：取某时刻正在曝光的纹理 id（沿用「上一格一直生效」）', () => {
     const a = fakeImage(4, 4, 'a');
     const b = fakeImage(4, 4, 'b');
     const obj = makeObject({ cels: [{ at: 0, image: a }, { at: 2, image: b }] });

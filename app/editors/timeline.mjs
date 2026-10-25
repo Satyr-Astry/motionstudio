@@ -1,14 +1,14 @@
-// 时间轴（v6：没有帧，只有时间）—— 主文件：外壳通信 / 状态机 / 事件分发 / 画格增删改 / 缩放。
+// 时间轴（v6：没有帧，只有时间）—— 主文件：外壳通信 / 状态机 / 事件分发 / 纹理增删改 / 缩放。
 //
 // 拆分后的分工：
 //   ./timeline-geo.mjs    纯几何 + 纯数据（零 DOM，可在 Node 里直接 import）
-//   ./timeline-paint.mjs  只把 DOM 画出来（刻度尺 / 画格块 / 菱形 / 播放头 / 工具条）
+//   ./timeline-paint.mjs  只把 DOM 画出来（刻度尺 / 纹理块 / 菱形 / 播放头 / 工具条）
 //   ./timeline-keys.mjs   关键帧交互（选中 / 拖动 / 删除 / 右键缓动菜单）
-//   ./timeline.mjs        本文件：mount / 事件分发 / 画格操作 / 缩放 / 生命周期
+//   ./timeline.mjs        本文件：mount / 事件分发 / 纹理操作 / 缩放 / 生命周期
 //
 // 契约：docs/CONTRACT-v6-时间模型.md
-//   · 内容属于「某一秒」：obj.cels = [{ at, image }]，画格开启后一直沿用到下一个画格。
-//   · 时间轴上只有两种东西：画格切换点（方块）与变换关键帧（菱形）。
+//   · 内容属于「某一秒」：obj.cels = [{ at, image }]，纹理开启后一直沿用到下一个纹理。
+//   · 时间轴上只有两种东西：纹理切换点（方块）与变换关键帧（菱形）。
 // 外壳只保证 mount(el, ctx) → { destroy, refresh, focusFrame }。
 
 import { celAt, celTimes, docDuration, objectById } from '../core/doc-model.mjs';
@@ -268,7 +268,7 @@ export function mount(el, ctx) {
         notWired('setSegmentFps');
     }
 
-    /* ── 画格操作（统一走外壳方法，缺失只提示） ── */
+    /* ── 纹理操作（统一走外壳方法，缺失只提示） ── */
 
     function celOp(name, objId, t) {
         if (!has(name)) {
@@ -480,7 +480,7 @@ export function mount(el, ctx) {
             call(name, []);
             return;
         }
-        // 本地兜底：在活动对象的画格点之间跳
+        // 本地兜底：在活动对象的纹理点之间跳
         const obj = objectById(doc, activeId());
         if (!obj) {
             notify('先选一个对象');
@@ -494,7 +494,7 @@ export function mount(el, ctx) {
         } else {
             const fwd = times.find((t) => t > now + T_EPS);
             if (fwd == null) {
-                notify('已经是最后一个画格');
+                notify('已经是最后一个纹理');
                 return;
             }
             setTime(fwd);
@@ -510,12 +510,12 @@ export function mount(el, ctx) {
             return;
         }
         if (celMarks(obj).length <= 1) {
-            notify('每个对象至少保留一个画格');
+            notify('每个对象至少保留一个纹理');
             return;
         }
         const cel = celAt(obj, timeNow());
         if (!cel) {
-            notify('该时间没有生效的画格');
+            notify('该时间没有生效的纹理');
             return;
         }
         celOp('removeCelAt', obj.id, cel.at);
@@ -630,7 +630,7 @@ export function mount(el, ctx) {
         } else if (act === 'nextcel') {
             goCel(1);
         } else if (act === 'addcel') {
-            // 加的是「曝光」：把当前画格在下一个空帧再曝光一次，不新建图
+            // 加的是「曝光」：把当前纹理在下一个空帧再曝光一次，不新建图
             if (!has('addExposure')) {
                 notWired('addExposure');
             } else if (!activeId()) {
@@ -684,7 +684,7 @@ export function mount(el, ctx) {
         document.addEventListener('pointercancel', onScrubUp);
     });
 
-    /* ── 行区：画格点 / 菱形 / 空白 / 名称 ── */
+    /* ── 行区：纹理点 / 菱形 / 空白 / 名称 ── */
 
     view.rows.addEventListener('pointerdown', (e) => {
         const doc = docNow();
@@ -732,7 +732,7 @@ export function mount(el, ctx) {
         }
 
         // 空白泳道双击 = 在这一刻给该对象打一个变换关键帧。
-        // 这里必须排除画格块与菱形（上面两个分支已经吃掉），否则会误加关键帧。
+        // 这里必须排除纹理块与菱形（上面两个分支已经吃掉），否则会误加关键帧。
         const lane = target.closest('.tline-lane');
         if (!lane || !lane.dataset || !lane.dataset.layer) return;
         if (typeof e.preventDefault === 'function') e.preventDefault();
@@ -793,7 +793,7 @@ export function mount(el, ctx) {
     view.rows.addEventListener('wheel', onWheelZoom, { passive: false });
     view.ruler.addEventListener('wheel', onWheelZoom, { passive: false });
 
-    /* ── 图例：点开两行说明（画格是开关式换图，关键帧是连续插值） ── */
+    /* ── 图例：点开两行说明（纹理是开关式换图，关键帧是连续插值） ── */
 
     legend.el.addEventListener('click', (e) => {
         if (typeof e.stopPropagation === 'function') e.stopPropagation();

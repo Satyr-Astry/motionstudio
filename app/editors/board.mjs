@@ -1,7 +1,7 @@
 /**
  * 画板编辑器 —— **只编辑一张纹理（texture）**，与编排器完全分离。
  *
- * 术语：以前叫「画格」，现在统一叫**纹理**。一个对象的每条关键帧可以绑定一张纹理；
+ * 术语：以前叫「纹理」，现在统一叫**纹理**。一个对象的每条关键帧可以绑定一张纹理；
  * 画板就是「编辑某一张纹理」的那块地：它不认识舞台、不认识对象变换、不共享相机。
  *
  * 三条硬约束（改动前先读）：
@@ -1111,7 +1111,7 @@ export function mount(el, ctx) {
      * 时序安全的关键：第 1 步拿到 img 之后，2–5 全在同一个同步块里 —— 没有 await、没有 rAF、
      * 没有再调一次 texture()/timeNow()。setDoc 触发的重渲染只能在 pointerdown 返回后跑，
      * 所以不存在「算出 A 的填充、写进 B」的调度窗口。撤销命令绑的是 img 这个引用（与落笔
-     * 同一套 makeRegionCommand），事后切画格/换纹理/删对象都不会写错图。
+     * 同一套 makeRegionCommand），事后切纹理/换纹理/删对象都不会写错图。
      *
      * @param {PointerEvent} e
      * @returns {boolean} 是否真的填了（false 时一定没产生撤销命令）
@@ -1389,7 +1389,7 @@ export function mount(el, ctx) {
                 return;
             case 'new-tex': {
                 const made = typeof c.newDrawing === 'function' ? c.newDrawing(null) : null;
-                // newDrawing 只把图画进「画格库」，**不在时间轴上占位**（画格 ≠ 曝光）。
+                // newDrawing 只把图画进「纹理库」，**不在时间轴上占位**（纹理 ≠ 曝光）。
                 // 不落位就等于「点纹理没反应」，所以这里补一次 placeDrawing，把它放到当前时刻。
                 const obj = targetObject();
                 const placed = made && obj && typeof c.placeDrawing === 'function'
@@ -1397,7 +1397,7 @@ export function mount(el, ctx) {
                     : false;
                 if (!made) notify('新建纹理失败');
                 else if (placed) notify('已新建纹理并绑定到当前时刻');
-                else notify('已新建纹理（进了画格库，这个时刻还没放上去）');
+                else notify('已新建纹理（进了纹理库，这个时刻还没放上去）');
                 afterDocChange();
                 return;
             }

@@ -8,7 +8,7 @@
  *
  * v6：帧对象已删除，时间的唯一单位是**秒**。
  * - `state.time` 就是播放头；`state.frameIndex` 不再存在。
- * - 内容单位是「画格」：`obj.cels = [{ at, image }]`，画格从 at 起生效到下一个画格。
+ * - 内容单位是「纹理」：`obj.cels = [{ at, image }]`，纹理从 at 起生效到下一个纹理。
  * - 文档长度由 `doc.duration`（秒）表达，`docDuration()` 会与内容长度取大。
  *
  * 依赖方向：
@@ -84,7 +84,7 @@ const DEFAULT_FPS = 12;
 const DEFAULT_FRAMES = 12;
 const NOTE_MS = 1600;
 const TOOL_KEYS = { v: 'select', b: 'brush', e: 'eraser', g: 'bucket', i: 'picker', h: 'pan' };
-const NOTE_TEXT = { paint: '已绘制', color: '已取色', undo: '撤销', redo: '重做', cel: '新建画格' };
+const NOTE_TEXT = { paint: '已绘制', color: '已取色', undo: '撤销', redo: '重做', cel: '新建纹理' };
 const FALLBACK_EDITOR = 'timeline';
 
 /* ─────────────────────────── 状态 ─────────────────────────── */
@@ -150,7 +150,7 @@ function activeView() {
     return state.views[state.workspace] || null;
 }
 
-/** 当前作用的画格对象：活动对象 > 第一个对象。 */
+/** 当前作用的纹理对象：活动对象 > 第一个对象。 */
 function activeObject() {
     const doc = state.doc;
     if (!doc) return null;
@@ -161,22 +161,22 @@ function activeObject() {
 
 const engine = createEngine({
     getDoc: () => state.doc,
-    // v6：一切都是秒，引擎按 getTime() 找画格
+    // v6：一切都是秒，引擎按 getTime() 找纹理
     getTime: () => state.time,
     // v3：动画工作区锁画笔（绘画只用于创建对象，动画只做编排）
     canDraw: () => !state.drawLocked,
     getLayerId: () => state.activeLayerId,
     getActiveObject: () => activeObject(),
-    // 引擎新建画格后要把新对象交回文档，否则这一格无处安放
+    // 引擎新建纹理后要把新对象交回文档，否则这一格无处安放
     replaceObject(obj) {
         if (!obj || !obj.id) return;
-        // 引擎自建画格时的回填：位图那一步已经由笔触命令覆盖，
+        // 引擎自建纹理时的回填：位图那一步已经由笔触命令覆盖，
         // 这里再压一条文档命令会让一次落笔变成两步撤销，所以是 silent（但合并进上一步的像素命令）。
-        setDoc((d) => patchObject(d, obj.id, () => obj), { label: '新建画格', silent: true });
+        setDoc((d) => patchObject(d, obj.id, () => obj), { label: '新建纹理', silent: true });
     },
     // 效果器：把对象的 effects 数组转成 canvas filter 字符串（见 paint/effects.mjs）
         isPlaying: () => state.playing,
-        // 绘图工作区默认「画格画布」模式：当前画格当独立画布，笔与像素 1:1；
+        // 绘图工作区默认「纹理画布」模式：当前纹理当独立画布，笔与像素 1:1；
         // 编排区看合成结果（对象变换 / 父子 / 效果都在这一步生效）。
         isDrawingBoard: () => state.workspace === 'draw' && state.drawBoard !== false,
         filterFor(layer, t) {
@@ -366,7 +366,7 @@ function commitDoc(next) {
  * 唯一的文档修改入口：算新 doc → 赋值 → 重绘 + 刷新 + 广播。
  * opts.label     撤销栈里显示的动作名（缺省「编辑」）
  * opts.coalesce  合并键：同一个键在 DOC_MERGE_MS 内连续调用只记一步
- * opts.silent    true = 不进撤销栈（内部派生写回，例如引擎自建画格时的回填）
+ * opts.silent    true = 不进撤销栈（内部派生写回，例如引擎自建纹理时的回填）
  */
 function setDoc(updater, opts) {
     const prev = state.doc;
@@ -434,15 +434,15 @@ function subscribeDoc(fn) {
     return () => docListeners.delete(fn);
 }
 
-/* ─────────────────────────── 时间 / 画格 ─────────────────────────── */
+/* ─────────────────────────── 时间 / 纹理 ─────────────────────────── */
 
-/** 当前文档里画格切换点的秒数组（活动对象优先，没有就用第一个对象）。 */
+/** 当前文档里纹理切换点的秒数组（活动对象优先，没有就用第一个对象）。 */
 function currentCelTimes() {
     const obj = activeObject();
     return obj ? celTimes(obj) : [];
 }
 
-/** 播放头落在第几个画格区间（-1 表示第一个画格之前）。 */
+/** 播放头落在第几个纹理区间（-1 表示第一个纹理之前）。 */
 function celIndexOf(t) {
     const times = currentCelTimes();
     const v = Number(t);
@@ -454,9 +454,9 @@ function celIndexOf(t) {
 }
 
 /**
- * 跳到第 i 个画格边界。
- * 帧数组已经不存在，所以这里只是「按画格切换点跳时间」的便捷函数；
- * 时间本身可以停在任意浮点秒（关键帧不吸附画格）。
+ * 跳到第 i 个纹理边界。
+ * 帧数组已经不存在，所以这里只是「按纹理切换点跳时间」的便捷函数；
+ * 时间本身可以停在任意浮点秒（关键帧不吸附纹理）。
  */
 function goToCel(i) {
     const doc = state.doc;
@@ -576,7 +576,7 @@ function activeKeyTimes() {
 
 /**
  * 跳到上（dir<0）/ 下（dir>0）一个关键帧。
- * 契约 v5 把 `,` `.` 定义成「跳上下关键帧」，实现却接到了画格上；
+ * 契约 v5 把 `,` `.` 定义成「跳上下关键帧」，实现却接到了纹理上；
  * 这里补上真正的关键帧跳转，到头了要提示，不能静默不动。
  */
 function goToKey(dir) {
@@ -689,7 +689,7 @@ function playLoop(ts) {
 
 let wantFullRefresh = false;
 let refreshTimer = 0;
-// 上一次刷新时的「当前生效画格」签名：变了才说明缩略图/画格行需要重画
+// 上一次刷新时的「当前生效纹理」签名：变了才说明缩略图/纹理行需要重画
 let lastCelSig = '';
 // 上一次排刷新的时刻：用来识别「rAF 被吞掉」的悬挂句柄（见 scheduleRefresh）
 let refreshAskedAt = 0;
@@ -761,7 +761,7 @@ function scheduleRefresh(opts) {
 function refreshPanels(withFocus, full) {
     const all = full !== false;
     const active = state.workspace;
-    // 画格签名：只有跨过画格边界时，缩略图/画格行才需要重画（见 refresh-plan.mjs）。
+    // 纹理签名：只有跨过纹理边界时，缩略图/纹理行才需要重画（见 refresh-plan.mjs）。
     const sig = celSignature(objectsOf(state.doc), state.time);
     const celChanged = sig !== lastCelSig;
     lastCelSig = sig;

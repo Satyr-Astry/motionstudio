@@ -1,7 +1,7 @@
 // 文档模型适配层（v6）：时间是一等公民，「帧」这个容器已经整体删除。
 //
-// 权威实现在 core/doc-model.mjs —— 画格（cel）是按秒索引的开关事件：
-//     obj.cels = [{ at, image }, ...]        // at 升序；画格开启后一直生效到下一个画格
+// 权威实现在 core/doc-model.mjs —— 纹理（cel）是按秒索引的开关事件：
+//     obj.cels = [{ at, image }, ...]        // at 升序；纹理开启后一直生效到下一个纹理
 // 本模块只剩三件事：
 //   1) 把外壳仍在使用的老名字转发给 doc-model（createDocument / totalSeconds / layerById …）；
 //   2) 保留少量同样纯函数、且不属于文档模型的辅助（循环折叠 wrapTime、分段帧率 fpsAtTime、
@@ -107,7 +107,7 @@ export function moveLayer(doc, layerId, toIndex) {
  *
  * 与 addLayer 的区别：addLayer 插到最前，连续调用会把顺序反转 ——
  * 拿外部列表逐个 addLayer 去对齐时顺序会颠倒，于是面板顺序与画布叠放顺序相反。
- * 这里一次性重建：同 id 保留原字段（含 transform 轨道与全部画格），缺的字段用 defs 覆盖。
+ * 这里一次性重建：同 id 保留原字段（含 transform 轨道与全部纹理），缺的字段用 defs 覆盖。
  */
 export function replaceLayers(doc, defs) {
     if (!doc) return doc;
@@ -140,7 +140,7 @@ export const ONION_DEFAULTS = Object.freeze({
 
 /**
  * 洋葱皮配置 → 完整、已夹取的配置对象。
- * before/after 是「前后各几个画格切换点」，0~12；opacity 0~1；mode 只认 tint / fade。
+ * before/after 是「前后各几个纹理切换点」，0~12；opacity 0~1；mode 只认 tint / fade。
  */
 export function normalizeOnion(input) {
     const src = input && typeof input === 'object' ? input : {};
@@ -166,7 +166,7 @@ export function normalizeOnion(input) {
 
 // ── 时间辅助 ──────────────────────────────────────────────────────────────
 
-// 可变帧率（v4 遗留）：每段自己有 fps，只影响「导出取哪些采样点」，不影响画格归属。
+// 可变帧率（v4 遗留）：每段自己有 fps，只影响「导出取哪些采样点」，不影响纹理归属。
 // 这里内联一份极简段表解析，避免 core/cel 与 core/timebase 互相 import。
 function segmentsOf(doc) {
     const raw = doc && doc.timebase && Array.isArray(doc.timebase.segments) ? doc.timebase.segments : null;
@@ -200,7 +200,7 @@ export function fpsAtTime(doc, t) {
 // 把任意 t 折叠进 [0, total) 的有效时间轴（按 doc.loopMode）。
 // 返回 null 表示「该循环模式下 t 超出范围」（LOOP_NONE 的越界）。
 // 注意：不能用 ((t % total) + total) % total —— 那会把 0.1 变成 0.09999999999999998，
-// 让恰好落在画格切换点上的时间掉回上一个画格。这里只在结果越界时才加减一个周期。
+// 让恰好落在纹理切换点上的时间掉回上一个纹理。这里只在结果越界时才加减一个周期。
 export function wrapTime(doc, t) {
     const total = docDuration(doc);
     if (!(total > 0)) return 0;

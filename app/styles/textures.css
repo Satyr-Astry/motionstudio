@@ -1,0 +1,68 @@
+/**
+ * 纹理属性组的样式（app/editors/prop-textures.mjs）
+ *
+ * 只放这一组自己的类，前缀 ptx-；行/标签/输入框/分段按钮全部复用 panels.css 的
+ * .prop-row / .prop-label / input.prop-num / button.prop-seg，这里不重定义它们
+ * （面板骨架属于 panels.css，那一份归 Lead，改颜色或行高应该一次改到全站）。
+ * 加载顺序在 index.html：projects.css 之后、icons.css 之前。
+ */
+
+/* ── ① 缩略图：40×40 固定盒 ────────────────────────────────────────
+   棋盘格垫在 canvas 底下：纹理的透明区域若与面板同色，缩略图边界会看不出来。
+   8px 方格 + 错位 4px 是图层缩略图那套观感，保持两个面板对「透明」的表示一致。 */
+.prop-body[data-k="textures"] .ptx-thumb {
+    display: block;
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-1);
+    background-color: var(--panel-2);
+    background-image:
+        linear-gradient(45deg, var(--line) 25%, transparent 25%, transparent 75%, var(--line) 75%),
+        linear-gradient(45deg, var(--line) 25%, transparent 25%, transparent 75%, var(--line) 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 4px 4px;
+    cursor: pointer;
+}
+
+.prop-body[data-k="textures"] .ptx-thumb:hover {
+    border-color: var(--line-2);
+}
+
+/* 空态用虚线边：与「有图但全透明」区分开，双击进画板仍然可用 */
+.prop-body[data-k="textures"] .ptx-thumb.is-empty {
+    border-style: dashed;
+}
+
+/* ── ② 数量行：「共 N 张 · 当前第 k 张 · 曝光 M 处」 ─────────────────
+   292px 面板里这句话要换行，所以是 block（inline 元素的 scrollWidth/clientWidth
+   恒为 0，审计的裁字检查会误判）。tabular-nums 让数字换行后仍对齐。 */
+.prop-body[data-k="textures"] .ptx-summary {
+    display: block;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--ink-dim);
+    font-variant-numeric: tabular-nums;
+    word-break: break-word;
+}
+
+/* ── ③ 四个动作 ──────────────────────────────────────────────────
+   盒子/图标尺寸来自 icons.css 的 button.ms-icon-btn（22×22 + 图标居中），
+   这里只管「不可用时的视觉置灰」。刻意不写 pointer-events: none：
+   置灰只是提示，点下去要走守卫并在状态栏说明原因（layers.mjs:879 的原则）。 */
+.prop-body[data-k="textures"] .ptx-act.is-off {
+    opacity: 0.45;
+}
+
+/* ── ④⑤ 尺寸与对齐 ───────────────────────────────────────────────
+   input.prop-num 的宽度由 prop-kit.makeNumPair 内联等分（panels.css 钉了 68px），
+   分段按钮沿用 button.prop-seg / .is-on。只给「重设」加一点点左内边距，
+   免得它和紧跟的对齐档黏成一串。 */
+.prop-body[data-k="textures"] .ptx-apply {
+    margin-right: 2px;
+}
+
+.prop-body[data-k="textures"] .ptx-align {
+    font-variant-numeric: tabular-nums;
+}

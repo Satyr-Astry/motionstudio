@@ -123,9 +123,9 @@ test('tickLabel：步长小于 1 秒保留一位小数', () => {
     assert.equal(tickLabel(10, 10), '10s');
 });
 
-/* ───────────────── 画格定位 ───────────────── */
+/* ───────────────── 纹理定位 ───────────────── */
 
-test('currentCelIndex：定位当前时间生效的画格（画格一直沿用到下一个）', () => {
+test('currentCelIndex：定位当前时间生效的纹理（纹理一直沿用到下一个）', () => {
     const obj = objAt([
         { at: 0, image: img('a') },
         { at: 1, image: img('b') },
@@ -138,7 +138,7 @@ test('currentCelIndex：定位当前时间生效的画格（画格一直沿用�
     assert.equal(currentCelIndex(obj, 2.5), 2);
     assert.equal(currentCelIndex(obj, 99), 2);
 
-    // 第一个画格之前没有生效画格
+    // 第一个纹理之前没有生效纹理
     const late = objAt([{ at: 1, image: img('x') }]);
     assert.equal(currentCelIndex(late, 0.5), -1);
     assert.equal(currentCelIndex(late, 1), 0);
@@ -342,9 +342,9 @@ function fakeDocument() {
     return { createElement: make, body, addEventListener() {}, removeEventListener() {} };
 }
 
-test('mount 能用最小 ctx 挂起来：结构、画格点、菱形、段条都对', () => {
+test('mount 能用最小 ctx 挂起来：结构、纹理点、菱形、段条都对', () => {
     const doc0 = createDoc({ fps: 12, duration: 3 });
-    // v8：画格挂在关键帧上 —— 0 s 有图、1 s 显式空白、2 s 只改位移（沿用上一张）
+    // v8：纹理挂在关键帧上 —— 0 s 有图、1 s 显式空白、2 s 只改位移（沿用上一张）
     const obj = makeObject({
         id: doc0.objects[0].id,
         cels: [{ at: 0, image: { tag: 'a', width: 4, height: 4 } }, { at: 1, image: null }],
@@ -396,10 +396,10 @@ test('mount 能用最小 ctx 挂起来：结构、画格点、菱形、段条都
         const rowsEl = root.childNodes[2];
         assert.match(rowsEl.className, /\btline-rows\b/);
 
-        // v8：画格挂在关键帧上，时间轴只画一行菱形（画格块那一行已经删掉）
-        assert.equal(rowsEl.querySelectorAll('.tline-cel').length, 0, '不再有画格块');
+        // v8：纹理挂在关键帧上，时间轴只画一行菱形（纹理块那一行已经删掉）
+        assert.equal(rowsEl.querySelectorAll('.tline-cel').length, 0, '不再有纹理块');
         const kfNodes = rowsEl.querySelectorAll('.tline-kf');
-        assert.equal(kfNodes.length, 3, '0（有图）/ 1（空白画格）/ 2（只改位移）');
+        assert.equal(kfNodes.length, 3, '0（有图）/ 1（空白纹理）/ 2（只改位移）');
         assert.equal(kfNodes[0].dataset.t, '0');
         assert.equal(kfNodes[1].dataset.t, '1');
         assert.equal(kfNodes[2].dataset.t, '2');
@@ -407,9 +407,9 @@ test('mount 能用最小 ctx 挂起来：结构、画格点、菱形、段条都
         assert.equal(kfNodes[0].style.left, Math.max(0, kfLeft(doc0, 0, 1)).toFixed(2) + 'px');
         assert.equal(kfNodes[1].style.left, kfLeft(doc0, 1, 1).toFixed(2) + 'px');
         assert.equal(kfNodes[0].style.width, KF_SIZE + 'px');
-        // 带画格 / 显式空白 各有标记；只改位移的那条两个标记都没有
-        assert.ok(kfNodes[0].classList.contains('has-drawing'), '0 s 换了画格');
-        assert.ok(kfNodes[1].classList.contains('is-blank'), '1 s 是空白画格');
+        // 带纹理 / 显式空白 各有标记；只改位移的那条两个标记都没有
+        assert.ok(kfNodes[0].classList.contains('has-drawing'), '0 s 换了纹理');
+        assert.ok(kfNodes[1].classList.contains('is-blank'), '1 s 是空白纹理');
         assert.ok(!kfNodes[2].classList.contains('has-drawing'));
         assert.equal(kfNodes[0].dataset.layer, obj.id);
 
@@ -420,7 +420,7 @@ test('mount 能用最小 ctx 挂起来：结构、画格点、菱形、段条都
 
         // 工具条按钮齐全，且都接线到了 ctx
         // v8：播放控制（⏮ ‹ ▶ › ⏭ + 时间读数）搬进了时间轴，顺序即语义：
-        // 播放控制 → 画格 → 关键帧 → 缩放。改这里必须同步改 timeline-paint。
+        // 播放控制 → 纹理 → 关键帧 → 缩放。改这里必须同步改 timeline-paint。
         const btns = root.childNodes[0].querySelectorAll('.tline-btn');
         assert.deepEqual(btns.map((b) => b.dataset.act), [
             'first', 'prev', 'play', 'next', 'last',

@@ -38,7 +38,7 @@ test('曲线落点：吸附结果不含浮点毛刺（写回文档的 t 要能�
     assert.equal(snapFrame(d, t), t, '吸附必须幂等');
 });
 
-// 判定变更记录（0.1.2-alpha.9）：曲线曾经自己写一套「无条件吸帧、Shift 吸画格」，
+// 判定变更记录（0.1.2-alpha.9）：曲线曾经自己写一套「无条件吸帧、Shift 吸纹理」，
 // 与时间轴的「磁铁开=吸帧 / Shift=关磁铁（可落两帧之间）/ 磁铁关=自由 / Shift=吸 0.1s 网格」不一致 ——
 // 同一个关键帧在两个面板拖到同一像素位置会落到不同时刻。现在两边共用
 // `snapForDrag(doc, t, e, snapOn)`（`app/editors/timeline-geo.mjs`），这三条接线断言随之改口径。
@@ -52,7 +52,7 @@ test('curve.mjs 接线：双击加点也过 snapTime（与时间轴双击泳道�
 test('curve.mjs 接线：本地 snapTime 委托给 timeline-geo 的 snapForDrag', () => {
     const body = src.slice(src.indexOf('function snapTime(t, ev)'), src.indexOf('/* ── 指针交互 ──'));
     assert.match(body, /snapForDrag\(doc, t, ev, snapOnNow\(\)\)/, '必须走共用的吸附判据');
-    assert.ok(!/geoSnapTime/.test(src), '旧的「Shift 吸画格」口径要彻底消失，别再留第二条吸附语义');
+    assert.ok(!/geoSnapTime/.test(src), '旧的「Shift 吸纹理」口径要彻底消失，别再留第二条吸附语义');
 });
 
 test('curve.mjs 接线：拖拽关键帧仍走 snapTime（不能绕过吸附直接写 xToT）', () => {

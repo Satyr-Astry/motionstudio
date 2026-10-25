@@ -1,20 +1,24 @@
-// 属性面板外壳（契约 v7）。六组固定顺序，按两段排：
-//   段一「对象」：对象 → 变换 → 效果（有选中对象才出现）；段二「工程」：时间与时长 → 洋葱皮 → 信息
+// 属性面板外壳（契约 v7）。七组固定顺序，按两段排：
+//   段一「对象」：对象 → 纹理 → 变换 → 效果（有选中对象才出现）；段二「工程」：时间与时长 → 洋葱皮 → 信息
+// 纹理组也依附「当前对象、当前时刻那张图」，所以排进段一（不是段二的全局参数），
+// 位置固定为「对象」之后、「变换」之前；它不进 OBJECT_KEYS —— 那 2 个组的显隐由外壳自己
+// 逐个关，纹理跟着段一走就够了。
 // 组由各模块自建，外壳只做四件事：分段、排顺序、管显隐、转发 refresh。段样式全内联——panels.css 没有
 // .prop-section 的规则，而本文件不许改 CSS；「时间轴帧率分段」已搬到独立挂载的「文档」编辑器。
 import { mount as mountObject } from './prop-object.mjs';
 import { mount as mountDoc } from './prop-doc.mjs';
 import { mount as mountOnion } from './prop-onion.mjs';
 import { mount as mountInfo } from './prop-info.mjs';
+import { mount as mountTextures } from './prop-textures.mjs';
 
 /** 固定的分组顺序，按 .prop-body[data-k] 认组（标题文案可以改，顺序靠这个锁死）。 */
-const ORDER = ['object', 'xform', 'effects', 'time', 'onion', 'info'];
+const ORDER = ['object', 'textures', 'xform', 'effects', 'time', 'onion', 'info'];
 /** 无选中对象时隐藏的组：对象元信息与效果链都只属于「某一个对象」。 */
 const OBJECT_KEYS = ['object', 'effects'];
 
 /** 两段：段一依附当前对象，段二全是全局参数。段标题与组标题同高（--h-bar），靠字号/描边分层级。 */
 const SECTIONS = [
-    { key: 'object', title: '对象', keys: ['object', 'xform', 'effects'] },
+    { key: 'object', title: '对象', keys: ['object', 'textures', 'xform', 'effects'] },
     { key: 'doc', title: '工程', keys: ['time', 'onion', 'info'] },
 ];
 const SEC_BOX = 'display:flex;flex-direction:column;flex:0 0 auto;';
@@ -51,6 +55,7 @@ export function mount(el, ctx) {
 
     // 挂载顺序决定初始顺序，下面的 ORDER 循环只是把它锁死（幂等：重复执行不会改变结果）
     const objectPanel = mountObject(root, ctx);
+    const texturesPanel = mountTextures(root, ctx);
     const docPanel = mountDoc(root, ctx, { timebase: false }); // 帧率分段不进属性面板
     const onionPanel = mountOnion(root, ctx);
     const infoPanel = mountInfo(root, ctx);
@@ -98,6 +103,7 @@ export function mount(el, ctx) {
         docPanel.refresh();
         onionPanel.refresh();
         infoPanel.refresh();
+        texturesPanel.refresh();
         objectPanel.refresh();
     }
 
@@ -111,7 +117,7 @@ export function mount(el, ctx) {
         refresh: paint,
         destroy() {
             off();
-            for (const p of [objectPanel, docPanel, onionPanel, infoPanel]) {
+            for (const p of [objectPanel, texturesPanel, docPanel, onionPanel, infoPanel]) {
                 if (p && typeof p.destroy === 'function') p.destroy();
             }
             root.remove();

@@ -241,7 +241,7 @@ function drawGrid(g, rc) {
         g.fillText(step < 1 ? t.toFixed(1) + 's' : t.toFixed(0) + 's', x + 3, y1 + 11);
     }
 
-    // 画格切换点：该对象每个 cel 的 at 秒（淡色虚线，方便把关键帧对到画格上）
+    // 纹理切换点：该对象每个 cel 的 at 秒（淡色虚线，方便把关键帧对到纹理上）
     const celMarks = celTimes(layer);
     if (celMarks.length) {
         g.save();

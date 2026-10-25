@@ -79,7 +79,7 @@ function defaultTree(ws) {
                     type: 'split',
                     dir: 'col',
                     size: 232,
-                    // 调色定高，对象栈吃掉剩下的高度：对象/画格是这一屏的主角
+                    // 调色定高，对象栈吃掉剩下的高度：对象/纹理是这一屏的主角
                     children: [areaNode('layers'), areaNode('palette', 260)],
                 },
                 areaNode('board'),
@@ -118,13 +118,15 @@ function defaultTree(ws) {
                         type: 'split',
                         dir: 'col',
                         size: 232,
-                        children: [areaNode('layers', 200)],
+                        // 层级与叠放拆成两个面板（docs/层级与叠放-2026-10.md §5）：
+                        // 上面「父子」回答「跟谁动」，下面「叠放」回答「谁盖谁」；叠放吃余量。
+                        children: [areaNode('tree', 180), areaNode('layers')],
                     },
                     areaNode('canvas'),
                     areaNode('properties', 292),
                 ],
             },
-            // 下方并排：画格（像素属于哪一格）+ 曲线（对象在画格之间怎么动）
+            // 下方并排：纹理（像素属于哪一格）+ 曲线（对象在纹理之间怎么动）
             {
                 type: 'split',
                 dir: 'row',
@@ -154,6 +156,36 @@ function ensurePrefsArea(tree) {
     return { type: 'split', dir: 'row', children: [tree, prefs] };
 }
 
+/**
+ * 编排左列的老存档里没有「父子」区域：就地补一个（与偏好区域同一套做法）。
+ * 找到含 layers 的那个子节点，把它换成「上 tree 下 layers」的竖排；用户其余布局不动。
+ */
+function ensureTreeArea(tree) {
+    if (!tree) return tree;
+    if (walkAreas(tree).some((a) => a.editor === 'tree')) return tree;
+    // 用户自己把叠放删掉了 → 不硬塞，尊重他的布局
+    if (!walkAreas(tree).some((a) => a.editor === 'layers')) return tree;
+    const swap = (node) => {
+        if (!node || !Array.isArray(node.children)) return node;
+        const at = node.children.findIndex((c) => c && c.type === 'area' && c.editor === 'layers');
+        if (at >= 0) {
+            const children = node.children.slice();
+            // 原 layers 可能带存档里的定高（老布局是 200）：必须去掉，让它吃余量，
+            // 否则「树 180 + 叠放 200」两个都定高，分割器会把多余高度摊给最后一个。
+            const layersNode = { ...children[at] };
+            delete layersNode.size;
+            children[at] = {
+                type: 'split',
+                dir: 'col',
+                children: [areaNode('tree', 180), layersNode],
+            };
+            return { ...node, children };
+        }
+        return { ...node, children: node.children.map(swap) };
+    };
+    return swap(tree);
+}
+
 function ensureHelpArea(tree) {
     if (!tree) return tree;
     if (walkAreas(tree).some((a) => a.editor === 'help')) return tree;
@@ -180,7 +212,7 @@ function createView(ws) {
 
 /**
  * 绘图工作区回归「对象管理 + 画板」：画板曾经是一个独立的缓冲区编辑器（board），
- * v8 起画板＝主画布上的当前画格，所以老布局存档里那张 board 区域必须就地换回 canvas。
+ * v8 起画板＝主画布上的当前纹理，所以老布局存档里那张 board 区域必须就地换回 canvas。
  * 只改 editor 字段，id / 尺寸 / 用户自己摆的结构全部保留。
  */
 function retargetDrawAreas(node) {
@@ -240,6 +272,7 @@ function buildViews(saved) {
             // 极端存档（整棵树只剩一条 toolbar）摘空后回到默认布局
             view.tree = migrated && walkAreas(migrated).length ? migrated : defaultTree('draw');
         }
+        if (ws === 'animate') view.tree = ensureTreeArea(view.tree);
         if (ws === 'free') view.tree = ensureHelpArea(ensurePrefsArea(view.tree));
         state.views[ws] = view;
     }

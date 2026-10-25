@@ -4,7 +4,7 @@
 //   1) cel.mjs 只是 doc-model.mjs 的适配层 —— 文档模型符号必须是**同一个函数对象**，
 //      不允许在适配层里复制实现（复制就会漂移）；
 //   2) 适配层自己留下的少数辅助（对象增删改序、洋葱皮归一时长辅助）行为正确。
-// 「画格按时间生效」的语义细节在 tests/cel-time.test.mjs。
+// 「纹理按时间生效」的语义细节在 tests/cel-time.test.mjs。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -41,7 +41,7 @@ const {
 
 const ids = (doc) => objectsOf(doc).map((o) => o.id);
 
-test('createDocument 转发 doc-model.createDoc：1 对象、1 个 at=0 画格', () => {
+test('createDocument 转发 doc-model.createDoc：1 对象、1 个 at=0 纹理', () => {
     assert.equal(createDocument, dm.createDoc, 'createDocument 是 createDoc 的别名');
     const doc = createDocument({ width: 32, height: 16, fps: 12 });
     assert.equal(doc.width, 32);
@@ -171,7 +171,7 @@ test('moveLayer 改变顺序并夹取边界', () => {
     assert.equal(moveLayer(doc, order[0], 0), doc, '位置没变 → 原引用');
 });
 
-test('replaceLayers 按 defs 顺序重建，并保留原对象的时间画格', () => {
+test('replaceLayers 按 defs 顺序重建，并保留原对象的时间纹理', () => {
     const doc = createDocument();
     const id = objectsOf(doc)[0].id;
     const withCel = patchObject(doc, id, (o) => setImageAt(o, 0.5, 'IMG'));

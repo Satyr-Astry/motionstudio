@@ -3,23 +3,24 @@
 // ── 为什么删掉 doc.frames ──────────────────────────────────────────────
 // 旧模型是 Pixelorama 式：doc.frames[i].cels[layerId].image —— 内容是「第 i 帧
 // 第 j 个对象的像素」。它把「时间」写死成等距的整数格，于是：
-//   · 两个画格之间想做 0.17 秒的过渡要改 fps 或改 duration 倍率；
+//   · 两个纹理之间想做 0.17 秒的过渡要改 fps 或改 duration 倍率；
 //   · 变速、循环、父子时间全都要在帧索引外面再包一层；
 //   · 时间轴模块一半代码在处理「帧块宽度」而不是「内容何时出现」。
 //
-// 新模型：对象自己持有一串**按秒索引**的画格（cel），画格是一个开关事件：
+// 新模型：对象自己持有一串**按秒索引**的纹理（cel），纹理是一个开关事件：
 //
 //     obj.cels = [{ at: 0, image }, { at: 0.5, image }, { at: 1.25, image }]
-//     celAt(obj, t)  →  at <= t 的最后一个画格（之后一直沿用，直到下一个画格）
+//     celAt(obj, t)  →  at <= t 的最后一个纹理（之后一直沿用，直到下一个纹理）
 //
-// 于是「逐帧动画」变成「一串密集的画格」，「两个画格间隔 3 秒」也完全合法，
-// 而且时间轴只需要画两种东西：画格切换点 + 变换关键帧。
+// 于是「逐帧动画」变成「一串密集的纹理」，「两个纹理间隔 3 秒」也完全合法，
+// 而且时间轴只需要画两种东西：纹理切换点 + 变换关键帧。
 //
 // 所有导出都是纯函数：吃 doc/obj，返回新对象，不改入参。任何脏输入都返回
 // 安全值而不是抛异常（与 timegraph.mjs 的约定一致）。
 
 import { createKey, stateAt } from './transform.mjs';
 import { normalizeTime, isIdentityTime } from './timegraph.mjs';
+import { normalizeDrawOrder } from './draw-order.mjs';
 
 let idSeq = 0;
 
@@ -47,7 +48,7 @@ export function normAt(t) {
 
 /**
  * 造一个对象（原「图层」）。
- * cels 至少要有一个画格，否则它没有任何可绘制的内容。
+ * cels 至少要有一个纹理，否则它没有任何可绘制的内容。
  */
 export function makeObject(o) {
     const src = o && typeof o === 'object' ? o : {};
@@ -68,15 +69,15 @@ export function makeObject(o) {
     // v5 字段：父子层级与时间通道（恒等不落字段，保持对象形状干净）
     if (src.parentId != null) obj.parentId = String(src.parentId);
     if (src.time && !isIdentityTime(src.time)) obj.time = normalizeTime(src.time);
-    // 画格库：可能包含「当前没被任何时刻用到」的画格，必须原样带过去，
-    // 否则存档往返之后那些画格就没了（切走再切回来会失败）。
+    // 纹理库：可能包含「当前没被任何时刻用到」的纹理，必须原样带过去，
+    // 否则存档往返之后那些纹理就没了（切走再切回来会失败）。
     if (Array.isArray(src.drawings)) {
         const lib = src.drawings.filter((d) => d && d.image).map((d) => ({ image: d.image }));
         if (lib.length) obj.drawings = lib;
     }
 
     const cels = Array.isArray(src.cels) ? src.cels : null;
-    // v8：画格挂在关键帧上。任何还带 cels 的对象进来就地搬过去（幂等），
+    // v8：纹理挂在关键帧上。任何还带 cels 的对象进来就地搬过去（幂等），
     // 这样老存档/老的构造代码都还能用，但文档本身只有一条「关键帧」时间轴。
     if (cels && cels.length) {
         let absorbed = Object.assign({}, obj, { cels: [] });
@@ -101,12 +102,12 @@ export function makeObject(o) {
         }
         obj.cels.sort((a, b) => a.at - b.at);
     }
-    // 一个画格都没有时给一个 at=0 的空画格，保证「对象存在即有内容槽」
+    // 一个纹理都没有时给一个 at=0 的空纹理，保证「对象存在即有内容槽」
     if (!obj.cels.length) obj.cels.push({ at: 0, image: null });
     return obj;
 }
 
-/** 归一一个画格记录；at 非法返回 null。 */
+/** 归一一个纹理记录；at 非法返回 null。 */
 export function normCel(c) {
     if (!c || typeof c !== 'object') return null;
     const at = Number(c.at);
@@ -114,7 +115,7 @@ export function normCel(c) {
     const out = { at, image: c.image || null };
     if (c.group != null) out.group = c.group;
     if (isNum(c.opacity) && c.opacity !== 1) out.opacity = c.opacity;
-    // hold 已由「沿用上一个画格」天然表达，字段保留只为兼容旧文件
+    // hold 已由「沿用上一个纹理」天然表达，字段保留只为兼容旧文件
     return out;
 }
 
@@ -146,6 +147,9 @@ export function createDoc(o) {
         tags: Array.isArray(src.tags) ? src.tags : [],
     };
     if (src.timebase && typeof src.timebase === 'object') doc.timebase = src.timebase;
+    // v10：叠放顺序独立于 objects 数组（见 docs/层级与叠放-2026-10.md）。
+    // 缺字段时按 objects 现有顺序派生 —— 与拆分之前的行为完全一致，老文档零迁移。
+    doc.drawOrder = normalizeDrawOrder(objects, src.drawOrder);
     // duration 显式给出则用它，否则按内容推
     doc.duration = isNum(src.duration) && src.duration > 0 ? src.duration : contentDuration(doc);
     return doc;
@@ -168,9 +172,9 @@ export function objectById(doc, id) {
     return objectsOf(doc).find((o) => o && o.id === id) || null;
 }
 
-/* ─────────────────────── 画格（cel）按时间查找 ─────────────────────── */
+/* ─────────────────────── 纹理（cel）按时间查找 ─────────────────────── */
 
-/** 该对象所有画格的时间点（升序、去重）。 */
+/** 该对象所有纹理的时间点（升序、去重）。 */
 export function celTimes(obj) {
     if (!obj || typeof obj !== 'object') return [];
     const out = [];
@@ -182,7 +186,7 @@ export function celTimes(obj) {
         seen.add(k);
         out.push(t);
     };
-    // v8：画格挂在关键帧上（key.drawing），时间轴只有关键帧一条轴
+    // v8：纹理挂在关键帧上（key.drawing），时间轴只有关键帧一条轴
     const keys = obj.transform && Array.isArray(obj.transform.keys) ? obj.transform.keys : [];
     for (const k of keys) if (keyHasDrawing(k)) push(k.t);
     // 老文档（还没迁移）仍然读 cels
@@ -192,8 +196,8 @@ export function celTimes(obj) {
 }
 
 /**
- * 时间 t 生效的画格下标：最后一个 at <= t 的。
- * 没有（t 早于第一个画格）返回 -1。
+ * 时间 t 生效的纹理下标：最后一个 at <= t 的。
+ * 没有（t 早于第一个纹理）返回 -1。
  */
 export function celIndexAt(obj, t) {
     const times = celTimes(obj);
@@ -215,8 +219,8 @@ export function celIndexAt(obj, t) {
 }
 
 /**
- * 时间 t 生效的画格：{ at, image, drawing }（找不到返回 null）。
- * v8 起「画格」是关帧的属性：取最后一个「带 drawing 且 t<=当刻」的关键帧。
+ * 时间 t 生效的纹理：{ at, image, drawing }（找不到返回 null）。
+ * v8 起「纹理」是关帧的属性：取最后一个「带 drawing 且 t<=当刻」的关键帧。
  */
 export function celAt(obj, t) {
     if (!obj || typeof obj !== 'object') return null;
@@ -232,7 +236,7 @@ export function celAt(obj, t) {
     if (Array.isArray(obj.cels) && obj.cels.length) {
         let best = null;
         for (const c of obj.cels) {
-            if (!c || !isNum(c.at) || !c.image) continue;   // 只有占位（image null）不算生效画格
+            if (!c || !isNum(c.at) || !c.image) continue;   // 只有占位（image null）不算生效纹理
             if (c.at <= time + 1e-9 && (!best || c.at > best.at)) best = c;
         }
         if (best) return { at: best.at, image: best.image, drawing: drawingIdOf(best.image) };
@@ -246,7 +250,7 @@ export function imageAt(obj, t) {
     return c && c.image ? c.image : null;
 }
 
-/** 是否存在「正好落在 t」的画格切换点。 */
+/** 是否存在「正好落在 t」的纹理切换点。 */
 export function hasCelAt(obj, t) {
     if (!obj || typeof obj !== 'object') return false;
     const time = isNum(t) ? t : 0;
@@ -255,7 +259,7 @@ export function hasCelAt(obj, t) {
     return Array.isArray(obj.cels) && obj.cels.some((c) => c && Math.abs(c.at - time) <= 1e-9);
 }
 
-/** 时间 t 是否是一个「画格切换点」（画格正好从这里开始）。 */
+/** 时间 t 是否是一个「纹理切换点」（纹理正好从这里开始）。 */
 export function isCelBoundary(obj, t) {
     return hasCelAt(obj, t);
 }
@@ -263,7 +267,7 @@ export function isCelBoundary(obj, t) {
 /* ─────────────────────── 尺寸（对象自己的纸） ─────────────────────── */
 
 /**
- * 对象的基准分辨率：取画格库里第一张有像素的图（老文档退到 cels）。
+ * 对象的基准分辨率：取纹理库里第一张有像素的图（老文档退到 cels）。
  * 空对象返回 null —— 「对象存在即有内容槽」不代表有尺寸。
  */
 export function objectSize(obj) {
@@ -289,7 +293,7 @@ export function objectSize(obj) {
 }
 
 /**
- * 改对象自己的画布尺寸：所有画格位图整张拉伸（等同 Photoshop 的「图像大小」），
+ * 改对象自己的画布尺寸：所有纹理位图整张拉伸（等同 Photoshop 的「图像大小」），
  * 所以视觉形状不变、只是分辨率变了。位图怎么造交给调用方注入的 makeCanvas，
  * doc-model 自己不碰 DOM。
  */
@@ -324,7 +328,7 @@ export function setObjectSize(doc, id, w, h, opts) {
     return patchObject(doc, id, () => next);
 }
 
-/* ─────────────────────── 画格编辑（不可变） ─────────────────────── */
+/* ─────────────────────── 纹理编辑（不可变） ─────────────────────── */
 
 function asKeyModel(obj) {
     if (!obj || typeof obj !== 'object') return obj;
@@ -342,7 +346,7 @@ export function ensureCelAt(obj, t, opts) {
     const lib = drawingsOf(obj);
     const cur = celAt(obj, time);
     let image = 'image' in o ? o.image : o.inherit === false ? null : cur ? cur.image : lib.length ? lib[0].image : null;
-    // 对象所有画格必须同尺寸：给了图就按对象基准尺寸校正（适配器由调用方注入）
+    // 对象所有纹理必须同尺寸：给了图就按对象基准尺寸校正（适配器由调用方注入）
     const base = objectSize(obj);
     if (base && image && typeof o.fitImage === 'function') {
         const iw = Math.round(Number(image.width));
@@ -365,7 +369,7 @@ export function ensureCelAt(obj, t, opts) {
     return { obj: finalized, cel: after, created: !hit };
 }
 
-/** 在时间 t 写入位图：图进库，关键帧带上它的画格属性。 */
+/** 在时间 t 写入位图：图进库，关键帧带上它的纹理属性。 */
 export function setImageAt(obj, t, image) {
     if (!obj || !image) return obj;
     const time = normAt(t);
@@ -374,7 +378,7 @@ export function setImageAt(obj, t, image) {
     return Object.assign({}, next, { cels: projectCels(next) });
 }
 
-/** 删掉时间 t 的画格切换点（关键帧保留，画面回落到上一张）；不允许一张都不剩。 */
+/** 删掉时间 t 的纹理切换点（关键帧保留，画面回落到上一张）；不允许一张都不剩。 */
 export function removeCelAt(obj, t) {
     if (!obj || obj.transform == null) return obj;
     const time = normAt(t);
@@ -390,7 +394,7 @@ export function removeCelAt(obj, t) {
     return out;
 }
 
-/** 把时间 from 的画格切换点挪到 to（连带这条关键帧的状态一起搬）。 */
+/** 把时间 from 的纹理切换点挪到 to（连带这条关键帧的状态一起搬）。 */
 export function moveCel(obj, from, to) {
     if (!obj || obj.transform == null) return obj;
     const a = normAt(from);
@@ -413,7 +417,7 @@ export function moveCel(obj, from, to) {
 /* ───────────────────────────── 时长 ───────────────────────────── */
 
 /**
- * 按内容推算时长：所有画格时间点、变换关键帧都算进去。
+ * 按内容推算时长：所有纹理时间点、变换关键帧都算进去。
  * 没有任何内容时返回 0（由 docDuration 决定下限）。
  */
 /* ─────────── 父子链的有效属性（组变淡/隐藏要带着子树走） ─────────── */
@@ -458,7 +462,7 @@ export function effectiveOpacity(doc, obj) {
 }
 
 /**
- * 交换同一对象里两个画格的时刻（画格栈拖动重排）。时刻是内容的地址，
+ * 交换同一对象里两个纹理的时刻（纹理栈拖动重排）。时刻是内容的地址，
  * 所以互换 at 就等于「这一格挪到那一格的位置」，位图各自跟着自己的格走。
  * 任一时刻不存在、或两者相同 → 原样返回（调用方用 === 判断有没有变）。
  */
@@ -518,18 +522,18 @@ export function totalSeconds(doc) {
 
 /** 用 fn 更新一个对象，返回新 doc。fn 收到旧对象，返回新对象或 null（不改）。 */
 
-/* ───────────────────────── 画格库（drawing library） ─────────────────────────
- * 语义：画格是**可以被复用的图**，不是「某个时刻的一格」。
- * 时间轴上的是「曝光」——某段时间显示哪张画格；同一张画格可以出现在多个时刻，
+/* ───────────────────────── 纹理库（drawing library） ─────────────────────────
+ * 语义：纹理是**可以被复用的图**，不是「某个时刻的一格」。
+ * 时间轴上的是「曝光」——某段时间显示哪张纹理；同一张纹理可以出现在多个时刻，
  * 改它所有时刻一起变（要脱钩就用 makeUnique 独特化）。
  *
  * 身份怎么来：位图对象上挂一个不可枚举的 __msDrawing 标记（不会进 JSON），
- * 于是「同一个 Canvas 引用」天然就是「同一张画格」，不需要改存档格式。
+ * 于是「同一个 Canvas 引用」天然就是「同一张纹理」，不需要改存档格式。
  */
 
 let drawingSeq = 0;
 
-/** 给位图盖上画格 id（已有就返回旧的）。 */
+/** 给位图盖上纹理 id（已有就返回旧的）。 */
 const primitiveDrawings = new Map();
 
 export function stampDrawing(image) {
@@ -559,7 +563,7 @@ export function stampDrawing(image) {
     }
 }
 
-/** 这一格用的画格 id（空画格返回 null）。 */
+/** 这一格用的纹理 id（空纹理返回 null）。 */
 export function drawingIdOf(image) {
     if (image == null) return null;
     if (typeof image !== 'object') {
@@ -571,7 +575,7 @@ export function drawingIdOf(image) {
 }
 
 /**
- * 对象的画格库：按「图」归并，顺序按首次出现的时刻。
+ * 对象的纹理库：按「图」归并，顺序按首次出现的时刻。
  * @returns {{id:string, image:any, times:number[]}[]}
  */
 export function drawingsOf(obj) {
@@ -579,7 +583,7 @@ export function drawingsOf(obj) {
     const cels = Array.isArray(obj.cels) ? obj.cels.slice().sort((a, b) => a.at - b.at) : [];
     const out = [];
     const byId = new Map();
-    // 先收 obj.drawings（含「当前没被任何时刻用到」的画格 —— 它们也要留在库里可供复用）
+    // 先收 obj.drawings（含「当前没被任何时刻用到」的纹理 —— 它们也要留在库里可供复用）
     if (Array.isArray(obj.drawings)) {
         for (const d of obj.drawings) {
             if (!d || !d.image) continue;
@@ -603,7 +607,7 @@ export function drawingsOf(obj) {
         }
         rec.times.push(cel.at);
     }
-    // 顺序：按首次曝光时刻升序；未使用的画格排在后面（保持库里的相对顺序）
+    // 顺序：按首次曝光时刻升序；未使用的纹理排在后面（保持库里的相对顺序）
     out.sort((x, y) => {
         const tx = x.times.length ? x.times[0] : Infinity;
         const ty = y.times.length ? y.times[0] : Infinity;
@@ -613,11 +617,11 @@ export function drawingsOf(obj) {
 }
 
 /**
- * 把对象里的画格登记进 obj.drawings（幂等）。写画格/换图之后都要走一遍，
- * 否则「切走之后那张画格」会从库里消失，用户就没法再切回来。
+ * 把对象里的纹理登记进 obj.drawings（幂等）。写纹理/换图之后都要走一遍，
+ * 否则「切走之后那张纹理」会从库里消失，用户就没法再切回来。
  */
 /**
- * 把「关键帧上的画格」投影成老形状 cels（只读镜像）。
+ * 把「关键帧上的纹理」投影成老形状 cels（只读镜像）。
  * 单一事实来源是 key.drawing + drawings 库；cels 只是给旧代码/旧测试的视图，
  * 任何写入都必须走 setKeyDrawing / placeDrawing 等，别再直接写 cels。
  */
@@ -655,7 +659,7 @@ export function syncLibrary(obj) {
     return next;
 }
 
-/** 某个时刻正在曝光的画格 id。 */
+/** 某个时刻正在曝光的纹理 id。 */
 export function drawingIdAt(obj, t) {
     const id = keyDrawingIdAt(obj, t);
     if (id) return id;
@@ -664,8 +668,8 @@ export function drawingIdAt(obj, t) {
 }
 
 /**
- * 把一张已有画格放到时刻 t（复用/切换）。t 上已有画格就替换它的图，
- * 没有就新建一格。位图是**共享**的：之后改这张画格，所有用到它的时刻一起变。
+ * 把一张已有纹理放到时刻 t（复用/切换）。t 上已有纹理就替换它的图，
+ * 没有就新建一格。位图是**共享**的：之后改这张纹理，所有用到它的时刻一起变。
  */
 export function placeDrawing(obj, t, drawingId) {
     if (!obj || obj.transform == null) return obj;
@@ -675,12 +679,12 @@ export function placeDrawing(obj, t, drawingId) {
 }
 
 /**
- * 把 t 时刻的画格「独特化」：拷一份位图、盖新的画格 id，
+ * 把 t 时刻的纹理「独特化」：拷一份位图、盖新的纹理 id，
  * 之后改它不再影响别的时刻。makeImage 负责造一张同尺寸的空位图。
  */
 /**
- * 往画格库里加一张画格（**不占用任何时刻**）。
- * 画格库与曝光是两层：库是「有哪些图」，曝光是「哪些时刻显示哪张」。
+ * 往纹理库里加一张纹理（**不占用任何时刻**）。
+ * 纹理库与曝光是两层：库是「有哪些图」，曝光是「哪些时刻显示哪张」。
  * 想让它上时间轴，再用 placeDrawing(obj, t, id)。
  */
 export function addDrawing(obj, image) {
@@ -707,18 +711,18 @@ export function makeUnique(obj, t, makeImage) {
         let out = addDrawing(obj, next);
         return setKeyDrawing(out, cel.at, drawingIdOf(next));
     }
-    // 非位图（测试里的字符串图）：没有像素可拷，就把它当成新画格直接挂到当刻
+    // 非位图（测试里的字符串图）：没有像素可拷，就把它当成新纹理直接挂到当刻
     stampDrawing({ id: 'clone-' + cel.at });
     return obj;
 }
 
-/** 删掉一张画格：库表与所有曝光它的时候一起移除（会删光时返回原对象）。 */
+/** 删掉一张纹理：库表与所有曝光它的时候一起移除（会删光时返回原对象）。 */
 export function removeDrawing(obj, drawingId) {
     if (!obj || typeof obj !== 'object') return obj;
     const id = String(drawingId);
     const keys = obj.transform && Array.isArray(obj.transform.keys) ? obj.transform.keys.slice() : [];
     const used = keys.filter((k) => keyHasDrawing(k) && k.drawing != null && String(k.drawing) === id);
-    // 没有被任何时刻用到的画格（库里的「未使用」那张）：直接从库里删掉即可，
+    // 没有被任何时刻用到的纹理（库里的「未使用」那张）：直接从库里删掉即可，
     // 以前这里和「只剩一张」共用同一个提前返回，导致「删不掉未使用的纹理」。
     if (!used.length) {
         const lib = Array.isArray(obj.drawings) ? obj.drawings : [];
@@ -745,7 +749,7 @@ export function removeDrawing(obj, drawingId) {
     return next;
 }
 
-/** 这张画格被几个时刻用到。 */
+/** 这张纹理被几个时刻用到。 */
 export function drawingUseCount(obj, drawingId) {
     return drawingsOf(obj).filter((d) => d.id === drawingId).reduce((n, d) => n + d.times.length, 0);
 }
@@ -766,11 +770,13 @@ export function patchObject(doc, id, fn) {
 /** 兼容别名。 */
 export const patchLayer = patchObject;
 
-/** 追加对象。 */
+/** 追加对象。新对象落在**最上层**（drawOrder[0]），这是「新建后立刻看见」的直觉。 */
 export function addObject(doc, obj) {
     if (!doc) return doc;
     const next = makeObject(obj);
-    return Object.assign({}, doc, { objects: objectsOf(doc).concat([next]), duration: docDuration(doc) });
+    const objects = objectsOf(doc).concat([next]);
+    const drawOrder = normalizeDrawOrder(objects, [next.id].concat(normalizeDrawOrder(objectsOf(doc), doc.drawOrder)));
+    return Object.assign({}, doc, { objects, drawOrder, duration: docDuration(doc) });
 }
 
 /** 删除对象（顺带把以它为父的对象提到根）。 */
@@ -781,7 +787,8 @@ export function removeObject(doc, id) {
         .map((o) => (o && o.parentId === id ? Object.assign({}, o, { parentId: undefined }) : o));
     // v8：允许删到「一个对象都没有」。空文档是合法状态（画板提示「还没有纹理」、
     // 时间轴/曲线/属性都走空态分支），否则用户会看到「对象无法删除」。
-    return Object.assign({}, doc, { objects });
+    const drawOrder = normalizeDrawOrder(objects, normalizeDrawOrder(objectsOf(doc), doc.drawOrder));
+    return Object.assign({}, doc, { objects, drawOrder });
 }
 
 /** 调整对象顺序（时间轴 / 列表排序用）。 */
@@ -819,7 +826,7 @@ export function migrateFromFrames(old) {
     const fps = Number.isFinite(fpsRaw) && fpsRaw > 0 ? clampNum(fpsRaw, 1, 120) : 12;
 
     // 帧序号 → 起始秒（考虑 duration 倍率与分段帧率；这里只按 doc.fps 累加，
-    // 分段帧率由 timebase 在求值时叠加，不影响画格归属）
+    // 分段帧率由 timebase 在求值时叠加，不影响纹理归属）
     const starts = [];
     let acc = 0;
     for (let i = 0; i < frames.length; i++) {
@@ -839,7 +846,7 @@ export function migrateFromFrames(old) {
                 cels.push({ at: starts[i], image: img });
                 prevImage = img;
             } else if (cel && cel.hold === false && prevImage) {
-                // 显式断开继承：留一个空画格占位
+                // 显式断开继承：留一个空纹理占位
                 cels.push({ at: starts[i], image: null });
                 prevImage = null;
             }
@@ -864,7 +871,7 @@ export function migrateFromFrames(old) {
 /* ───────────────────────── 采样与查询 ───────────────────────── */
 
 /**
- * 文档里所有「有意义的时间点」：画格切换点 + 变换关键帧，升序去重。
+ * 文档里所有「有意义的时间点」：纹理切换点 + 变换关键帧，升序去重。
  * 导出序列、生成缩略图、找下一个事件都用它。
  */
 export function eventTimes(doc) {
@@ -905,18 +912,18 @@ export function makeKey(t, state, ease, h1, h2) {
 }
 
 
-/* ───────────── v8：画格属于关键帧（key.drawing）而不是独立的时间轴 ─────────────
-   一个对象的「显示哪张图」由关键帧决定：key.drawing = 画格 id。
+/* ───────────── v8：纹理属于关键帧（key.drawing）而不是独立的时间轴 ─────────────
+   一个对象的「显示哪张图」由关键帧决定：key.drawing = 纹理 id。
    求值规则是**步进**（不做插值）：t 时刻显示「最后一个 t<=当刻、且带 drawing 的关键帧」
    指向的那张图；没有就退到库里第一张。
 
-   这样「替换画格」就是一次关键帧操作，时间轴上只有关键帧一条轴，
-   不再有第二套「画格块」的平行时间线。 */
+   这样「替换纹理」就是一次关键帧操作，时间轴上只有关键帧一条轴，
+   不再有第二套「纹理块」的平行时间线。 */
 
-/** 时间 t 起生效的「带画格的关键帧」（返回 key 或 null）。 */
+/** 时间 t 起生效的「带纹理的关键帧」（返回 key 或 null）。 */
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
-/** 这条关键帧是否「带画格属性」（own 字段；drawing === null 表示显式空白）。 */
+/** 这条关键帧是否「带纹理属性」（own 字段；drawing === null 表示显式空白）。 */
 export function keyHasDrawing(key) {
     return !!key && hasOwn(key, 'drawing') && isNum(key.t);
 }
@@ -933,14 +940,14 @@ export function keyDrawingAt(obj, t) {
     return best;
 }
 
-/** 时间 t 显示的画格 id（步进取最后一个带 drawing 的关键帧；都没有就用库首张）。 */
+/** 时间 t 显示的纹理 id（步进取最后一个带 drawing 的关键帧；都没有就用库首张）。 */
 export function keyDrawingIdAt(obj, t) {
     const key = keyDrawingAt(obj, t);
     if (key) return key.drawing == null ? null : String(key.drawing);
     return null;
 }
 
-/** 时间 t 显示的位图：优先关键帧的画格，其次库首张，再次老字段 cels。 */
+/** 时间 t 显示的位图：优先关键帧的纹理，其次库首张，再次老字段 cels。 */
 export function drawingAt(obj, t) {
     const id = keyDrawingIdAt(obj, t);
     if (id) {
@@ -950,7 +957,7 @@ export function drawingAt(obj, t) {
     return imageAt(obj, t);
 }
 
-/** 把某个关键帧的画格属性改掉（没有这个 t 的关键帧就新建一条，状态沿用当刻求值）。 */
+/** 把某个关键帧的纹理属性改掉（没有这个 t 的关键帧就新建一条，状态沿用当刻求值）。 */
 export function setKeyDrawing(obj, t, drawingId) {
     if (!obj || typeof obj !== 'object') return obj;
     const time = isNum(t) ? t : 0;
@@ -978,7 +985,7 @@ export function setKeyDrawing(obj, t, drawingId) {
 }
 
 /**
- * 把老模型（cels 列表 = 独立的画格轴）迁到关键帧上：
+ * 把老模型（cels 列表 = 独立的纹理轴）迁到关键帧上：
  * 每个 cel 的时刻生成/合并一条带 drawing 的关键帧，状态取该刻的求值结果，
  * 所以画面**一帧都不变**；迁完 cels 清空，时间轴只剩关键帧一条轴。
  */

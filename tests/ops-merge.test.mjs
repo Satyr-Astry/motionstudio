@@ -2,7 +2,7 @@
 //
 // node 里没有 OffscreenCanvas / document，所以用假画布跑：
 // 这里测的不是像素颜色（那要真 canvas，见真机脚本），而是**交给画布的那几件事**
-// —— 采样了哪些时刻、两层各自的 CTM 与 alpha 是多少、写回了几个画格。
+// —— 采样了哪些时刻、两层各自的 CTM 与 alpha 是多少、写回了几个纹理。
 // 这些正是丢变换/丢不透明的根源，锁住它们比锁几个采样点像素更能防回归。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -88,7 +88,7 @@ const transforms = (log) => log.filter((r) => r[0] === 'transform');
 const draws = (log) => log.filter((r) => r[0] === 'draw');
 const surfaces = (log) => log.filter((r) => r[0] === 'surface');
 
-test('mergeDown：采样时刻 = 两边画格切换点 ∪ 上层变换关键帧', () => {
+test('mergeDown：采样时刻 = 两边纹理切换点 ∪ 上层变换关键帧', () => {
     const { doc, upId } = twoLayers({ lowerAt: 0.5, upperKeyAt: 0.3 });
     const rec = makeRecorder();
     const res = mergeDown(doc, upId, { surface: rec.surface });
@@ -180,7 +180,7 @@ test('mergeDown：最底层 / 不存在的对象都退回原文档并给出原�
     assert.equal(mergeDown(null, 'x'), null, '没有文档就原样返回 null');
 });
 
-test('mergeDown：上层被删除、下层恢复可见、合成结果落到下层的画格里', () => {
+test('mergeDown：上层被删除、下层恢复可见、合成结果落到下层的纹理里', () => {
     const { doc, upId, loId } = twoLayers({ lowerAt: 0.5 });
     const hidden = patchObject(doc, loId, (o) => Object.assign({}, o, { visible: false }));
     const res = mergeDown(hidden, upId, { surface: makeRecorder().surface });

@@ -52,7 +52,7 @@ test('snapForDrag：12fps 下吸帧落整帧、Shift 关磁铁可落在两帧之
     const d = doc(12);
     // 0.6652s × 12 = 7.98 帧 → 吸到 8 帧（0.6667s）
     assert.equal(Number(snapForDrag(d, 0.6652892561983471, {}, true).toFixed(6)), 0.666667);
-    // 磁铁开 + Shift = 自由：原样保留，不再有「Shift 吸画格」这层
+    // 磁铁开 + Shift = 自由：原样保留，不再有「Shift 吸纹理」这层
     assert.equal(snapForDrag(d, 0.6652892561983471, { shiftKey: true }, true), 0.6652892561983471);
     // 磁铁关 + Shift = 0.1s 网格
     assert.equal(Number(snapForDrag(d, 0.6652892561983471, { shiftKey: true }, false).toFixed(6)), 0.7);

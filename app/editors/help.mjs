@@ -7,7 +7,7 @@
  * 现在导出两个常量，谁要显示谁 import：
  *
  *   SHORTCUT_GROUPS  分组（文件 / 时间 / 关键帧 / 画板 / 视图）× 条目
- *   LEGEND_ITEMS     画格 vs 关键帧的图例（时间轴右侧「?」与设置共用）
+ *   LEGEND_ITEMS     纹理 vs 关键帧的图例（时间轴右侧「?」与设置共用）
  *
  * 条目形状：{ icon, name, keys, hint? }
  *   icon  app/core/icons.mjs 里的名字（拼错会被 tests/icons.test.mjs 抓住）
@@ -26,7 +26,7 @@ export const CONCEPT_ITEMS = [
     {
         title: '动画是怎么构成的',
         rows: [
-            ['画格', '某时刻起显示的那张画。时间上是离散的——到点就换图，中间没有过渡。在「画板」里画出来。'],
+            ['纹理', '某时刻起显示的那张画。时间上是离散的——到点就换图，中间没有过渡。在「画板」里画出来。'],
             ['关键帧', '位置、缩放、旋转、不透明度、网格变形。时间上连续插值，中间有过渡。拖手柄或改数值就会自动打帧。'],
             ['时间通道', '对象自己的时间。可偏移、缩放、循环，让同一个动画用不同节奏播；套到父对象上会传给整棵子树。'],
         ],
@@ -59,8 +59,8 @@ export const SHORTCUT_GROUPS = [
             { icon: 'play', name: '播放 / 暂停', keys: '空格' },
             { icon: 'step-back', name: '回到开头', keys: 'Home' },
             { icon: 'step-forward', name: '跳到结尾', keys: 'End' },
-            { icon: 'chevron-left', name: '上一个画格', keys: 'Shift+,' },
-            { icon: 'chevron-right', name: '下一个画格', keys: 'Shift+.' },
+            { icon: 'chevron-left', name: '上一个纹理', keys: 'Shift+,' },
+            { icon: 'chevron-right', name: '下一个纹理', keys: 'Shift+.' },
             { icon: 'chevron-right', name: '逐帧微调（1/fps）', keys: '← / →' },
             { icon: 'grid', name: '时间轴缩放（以指针为锚）', keys: 'Ctrl+滚轮' },
         ],
@@ -153,7 +153,7 @@ export const SHORTCUT_GROUPS = [
 ];
 
 /**
- * 画格 vs 关键帧的图例。
+ * 纹理 vs 关键帧的图例。
  * mark 是时间轴上那两种形状的字形占位（方块 / 菱形），kind 决定配色（.is-cel / .is-kf）。
  */
 export const LEGEND_ITEMS = [
@@ -161,8 +161,8 @@ export const LEGEND_ITEMS = [
         kind: 'cel',
         mark: '■',
         icon: 'timer',
-        name: '画格',
-        text: '从这一秒起换成这张图，直到下一个画格；格与格之间不插值。',
+        name: '纹理',
+        text: '从这一秒起换成这张图，直到下一个纹理；格与格之间不插值。',
     },
     {
         kind: 'kf',
@@ -176,7 +176,7 @@ export const LEGEND_ITEMS = [
 /** 曲线区怎么用（纯操作说明，不涉及键位） */
 export const CURVE_TIPS = [
     ['点关键帧', '选中它，出现切线柄。Shift 点可多选，空白处拖出框选。'],
-    ['拖圆点', '上下改数值、左右改时间。按住 Shift 吸附画格切换点。'],
+    ['拖圆点', '上下改数值、左右改时间。按住 Shift 吸附纹理切换点。'],
     ['拖手柄', '改缓动曲线——决定加速还是减速。'],
     ['双击空白', '在该时刻加一个关键帧。'],
     ['右键', '线性 / 贝塞尔 / 保持 / 删除关键帧。'],

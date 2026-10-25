@@ -21,7 +21,7 @@
  *     assets:{ <对象id>:'data:image/png;base64,…', <对象id>#2:… },
  *     tags:[] }
  *
- * 时间模型：`at` 是秒，画格从 `at` 起一直生效到下一个画格；没有帧对象、没有帧计数。
+ * 时间模型：`at` 是秒，纹理从 `at` 起一直生效到下一个纹理；没有帧对象、没有帧计数。
  * 因此文件里**没有 frames 段落**，`duration` 由 docDuration(doc) 算出（内容时长兜底）。
  *
  * 可读形状（jsonToDoc 全部吃下）：
@@ -30,8 +30,8 @@
  *   c) v1/v2/v3 节点 `{…,elements|layers:[…],frames:[…]}` —— 走 migrateFromFrames 迁移
  *
  * assets 去重规则（按位图对象身份）：每个对象的第一张位图存成 `assets[对象id]`，同一对象
- * 的第 2、3… 张不同位图存成 `assets[对象id#2]`、`#3`；引用了这些资产的画格只写
- * `image:{ref,w,h}`，base64 不重复。同一张位图被 20 个画格引用，文件里也只有 1 份。
+ * 的第 2、3… 张不同位图存成 `assets[对象id#2]`、`#3`；引用了这些资产的纹理只写
+ * `image:{ref,w,h}`，base64 不重复。同一张位图被 20 个纹理引用，文件里也只有 1 份。
  *
  * 约定：本模块不碰引擎、不碰 DOM 结构（只借用 canvas 做位图编码/解码），
  * 所有导出都是纯函数或幂等的存储操作，任何异常都收敛成 null / 空数组，绝不抛给调用方。
@@ -40,6 +40,7 @@
 import { createKey } from '../core/transform.mjs';
 import { drawingsOf } from '../core/doc-model.mjs';
 import { docDuration, makeObject, migrateFromFrames, objectsOf } from '../core/doc-model.mjs';
+import { drawOrderOf, normalizeDrawOrder } from '../core/draw-order.mjs';
 
 export const FORMAT = 'motionstudio-project';
 export const VERSION = 4;
@@ -320,14 +321,14 @@ function elementToJSON(l) {
 
 /**
  * doc → v4 节点（不含 format/version 外壳，那个由 docToFile / makeRecord 加）。
- * 对象顺序、id、变换轨道、画格时间点、标签、洋葱皮设置全保留；只有位图变 dataURL。
- * 文件里没有 frames：画格是 `{ at, image }`，at 为秒。
+ * 对象顺序、id、变换轨道、纹理时间点、标签、洋葱皮设置全保留；只有位图变 dataURL。
+ * 文件里没有 frames：纹理是 `{ at, image }`，at 为秒。
  */
 export function docToJSON(doc) {
     if (!doc || typeof doc !== 'object') return null;
     const srcObjects = objectsOf(doc);
 
-    // 同一个位图对象只编码一次（几十个画格共用一张图 → 1 次 toDataURL）。
+    // 同一个位图对象只编码一次（几十个纹理共用一张图 → 1 次 toDataURL）。
     const encoded = new Map();
     const encode = (image) => {
         if (!image) return null;
@@ -367,9 +368,9 @@ export function docToJSON(doc) {
             }
             outCels.push({ at: Number.isFinite(at) && at > 0 ? Math.round(at * 1000) / 1000 : 0, image: image });
         }
-        // 画格库：obj.drawings 里的每张图都要有 assets key，
-        // 这样「切走之后暂时没用到的画格」也能存档，重新打开还能切回来。
-        // 画格库：以 drawingsOf 的库视图为准（关键帧上引用的画格 + 暂时没被用到的画格都在里面）
+        // 纹理库：obj.drawings 里的每张图都要有 assets key，
+        // 这样「切走之后暂时没用到的纹理」也能存档，重新打开还能切回来。
+        // 纹理库：以 drawingsOf 的库视图为准（关键帧上引用的纹理 + 暂时没被用到的纹理都在里面）
         const drawings = drawingsOf(src);
         const outDrawings = [];
         for (const d of drawings) {
@@ -400,6 +401,9 @@ export function docToJSON(doc) {
         assets: assets,
         tags: Array.isArray(doc.tags) ? plain(doc.tags) || [] : [],
     };
+    // v10：叠放顺序（`drawOrder[0]` = 最上层）。缺字段的老存档靠
+    // `normalizeDrawOrder` 从 objects 顺序派生，与拆分之前完全等价。
+    out.drawOrder = drawOrderOf(doc);
     const onion = plain(doc.onion);
     if (onion) out.onion = onion;
     // v5 时间轴分段（timebase.mjs）原样透传
@@ -546,6 +550,9 @@ function docShell(node, objects, opts) {
     if (onion) doc.onion = onion;
     const timebase = plain(node.timebase);
     if (timebase) doc.timebase = timebase;
+    // v10：叠放顺序。老存档没有这个字段时按 objects 顺序派生（与拆分前等价）；
+    // 存档里带着未知 id 或重复项时由 normalizeDrawOrder 修掉。
+    doc.drawOrder = normalizeDrawOrder(objects, node.drawOrder);
     return doc;
 }
 
@@ -565,7 +572,7 @@ async function decodeAssets(node, dims, cache) {
 /** v4 节点：对象自带 cels（时间模型）。 */
 async function docFromTimeNode(node, cache, opts) {
     const rawElements = elementList(node);
-    // 资产尺寸藏在引用它的画格里（`image:{ ref, w, h }`）
+    // 资产尺寸藏在引用它的纹理里（`image:{ ref, w, h }`）
     const refDims = new Map();
     for (const el of rawElements) {
         const cels = Array.isArray(el && el.cels) ? el.cels : [];
@@ -612,7 +619,7 @@ async function docFromTimeNode(node, cache, opts) {
     return docShell(node, objects, opts);
 }
 
-/** v1/v2/v3 节点：帧模型 → 时间模型（migrateFromFrames），只给「内容变化」的帧建画格。 */
+/** v1/v2/v3 节点：帧模型 → 时间模型（migrateFromFrames），只给「内容变化」的帧建纹理。 */
 async function docFromFramesNode(node, cache, opts) {
     const rawElements = elementList(node);
     const rawFrames = Array.isArray(node.frames) ? node.frames : [];
@@ -629,7 +636,7 @@ async function docFromFramesNode(node, cache, opts) {
     const assetImages = await decodeAssets(node, dims, cache);
 
     const shells = rawElements.map(elementShell);
-    // 相邻两帧位图是同一个对象引用 ⇒ 内容没变 ⇒ 不建画格（否则老项目会炸成几千个画格）
+    // 相邻两帧位图是同一个对象引用 ⇒ 内容没变 ⇒ 不建纹理（否则老项目会炸成几千个纹理）
     const prev = new Map();
     const frames = [];
     for (const f of rawFrames) {
@@ -684,7 +691,7 @@ export async function jsonToDoc(json, opts) {
     const node = projectNode(json);
     if (!node || typeof node !== 'object') return null;
     if (!elementList(node).length) return null;
-    // dataURL → 位图：同一张图被多个画格引用时只解码一次
+    // dataURL → 位图：同一张图被多个纹理引用时只解码一次
     const cache = new Map();
     if (isFrameNode(node, fileVersion(json, node))) return docFromFramesNode(node, cache, opts);
     return docFromTimeNode(node, cache, opts);
@@ -756,9 +763,9 @@ export async function imageElementFromFile(spec, opts) {
 /**
  * 把 imageElementFromFile 的结果挂进文档（不改入参 doc，返回新 doc）。
  *
- * 语义：对象插到最上层，并在 t=0 建一个携带该位图的画格 —— 时间模型里画格从 at 起
- * 一直生效，所以「一个画格 = 整条时间轴都可见」，序列化时位图进 assets 只存一份。
- * 需要后续改变像素时，外壳会在当前时间再建画格。
+ * 语义：对象插到最上层，并在 t=0 建一个携带该位图的纹理 —— 时间模型里纹理从 at 起
+ * 一直生效，所以「一个纹理 = 整条时间轴都可见」，序列化时位图进 assets 只存一份。
+ * 需要后续改变像素时，外壳会在当前时间再建纹理。
  *
  * @returns {{doc:object, element:object, celCount:number}|null}
  */
@@ -800,7 +807,7 @@ function newId() {
 
 /**
  * 组装一条库记录：轻量元信息（列表直接读）+ 完整项目（点开才用）。
- * 注意 `rec.layers` / `rec.frames` 是**对象数 / 画格时间点数**的展示口径，projects.mjs
+ * 注意 `rec.layers` / `rec.frames` 是**对象数 / 纹理时间点数**的展示口径，projects.mjs
  * 直接读它，键名不能改；时间模型里没有帧对象了，`frames` 取「所有对象出现过的时间点」。
  * @param {{id?:string,name?:string,doc:object,thumb?:string,file?:string}} spec
  */

@@ -2,7 +2,7 @@
  * MotionStudio —— 项目库面板（editors/projects.mjs）
  *
  * 本地项目库的 UI，纯 DOM，不嵌 iframe：左侧列表以卡片形式展示已保存的项目
- * （缩略图、名称、画格数×尺寸、保存时间），**点卡片任意处即载入**，
+ * （缩略图、名称、纹理数×尺寸、保存时间），**点卡片任意处即载入**，
  * 卡片上只留次级动作 `重命名 / 存为文件 / 删除`（删除走危险色）。
  *
  * 顶部（`.prj-top`）只有一个主行动「新建项目」+ 搜索框 + `…` 菜单：
@@ -13,7 +13,7 @@
  *
  * 「导入图片」走 `<input type="file" accept="image/*">` + FileReader（浏览器原生文件选择，
  * 不是主进程对话框）：选中的图片被当成一个 kind:'image' 对象插进**当前文档**的最上层，
- * 居中摆放，并从 0 秒起一直可见（画格只在 0 秒落一次）。数据转换在 shell/project-store.mjs 的 imageElementFromFile /
+ * 居中摆放，并从 0 秒起一直可见（纹理只在 0 秒落一次）。数据转换在 shell/project-store.mjs 的 imageElementFromFile /
  * addImageElement 里，面板只负责取文件与换文档。
  *
  * 数据与动作全部来自外壳注入的 `ctx.project`（见 shell/app.mjs 的 projectApi）：
@@ -77,7 +77,7 @@ function norm(rec, i) {
         savedAt: Number(r.savedAt) || 0,
         width: Number(r.width) || 0,
         height: Number(r.height) || 0,
-        // v6：记录里数的是画格数。老记录只有 frames（帧数），读的时候兼容，写的时候不再写 frames。
+        // v6：记录里数的是纹理数。老记录只有 frames（帧数），读的时候兼容，写的时候不再写 frames。
         cels: Number(r.cels) || Number(r.frames) || 0,
         layers: Number(r.layers) || 0,
         thumb: typeof r.thumb === 'string' ? r.thumb : '',
@@ -293,7 +293,7 @@ export function mount(host, ctx) {
 
     function metaLine(r) {
         const parts = [];
-        if (r.cels) parts.push(r.cels + ' 画格');
+        if (r.cels) parts.push(r.cels + ' 纹理');
         if (r.width && r.height) parts.push(r.width + '×' + r.height);
         // v2 起 doc.layers 语义是「对象」，展示口径跟着改（记录字段名仍叫 layers）
         if (r.layers) parts.push(r.layers + ' 对象');

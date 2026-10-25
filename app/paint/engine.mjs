@@ -10,7 +10,7 @@
  *   - 显示坐标 = 文档坐标 × zoom + pan
  *
  * 时间约定（v6）：一切都是秒。`getTime()` 给出播放头时间，落笔落在
- * 「该时间的画格」——已有就复用，没有就建一个（默认继承上一张图）。
+ * 「该时间的纹理」——已有就复用，没有就建一个（默认继承上一张图）。
  */
 
 import { createHistory } from '../core/history.mjs';
@@ -118,12 +118,12 @@ export function createEngine(opts) {
     const getLayerId = o.getLayerId || (() => null);
     // 当前活动对象（选中/正在编辑的那个）；拿不到时退回 getLayerId 在文档里查
     const getActiveObject = typeof o.getActiveObject === 'function' ? o.getActiveObject : () => null;
-    // v8：画格画布模式 —— 绘图工作区把「当前画格」当一张独立画布来画。
+    // v8：纹理画布模式 —— 绘图工作区把「当前纹理」当一张独立画布来画。
     // 关掉合成（不套对象变换/父子矩阵/效果），指针坐标与位图像素 1:1，
     // 这样对象有偏移也不会出现「笔落在别处」。返回 true 即启用。
     const isDrawingBoard = typeof o.isDrawingBoard === 'function' ? o.isDrawingBoard : () => false;
-    /** 画格画布模式下的目标位图（没有就返回 null，渲染退回合成路径）。 */
-    /** 画格画布模式下要处理的那个对象：活动对象 → 指定 id → 文档里第一个对象。 */
+    /** 纹理画布模式下的目标位图（没有就返回 null，渲染退回合成路径）。 */
+    /** 纹理画布模式下要处理的那个对象：活动对象 → 指定 id → 文档里第一个对象。 */
     function boardObject() {
         const doc = getDoc();
         if (!doc) return null;
@@ -145,7 +145,7 @@ export function createEngine(opts) {
         const img = imageAt(obj, getTime());
         return img && typeof img.getContext === 'function' ? img : null;
     }
-    // 新建画格后把新对象写回文档：外壳注入 replaceObject(obj)，返回新文档与否都行
+    // 新建纹理后把新对象写回文档：外壳注入 replaceObject(obj)，返回新文档与否都行
     const replaceObject = typeof o.replaceObject === 'function' ? o.replaceObject : null;
     // 效果器：外壳注入，返回 canvas filter 字符串（如 'blur(4px) drop-shadow(0 0 8px #4a7dff)'）
     const filterFor = typeof o.filterFor === 'function' ? o.filterFor : null;
@@ -285,7 +285,7 @@ export function createEngine(opts) {
             fitView();
         }
         if (board) {
-            // 画格画布：把这张画格原样（1:1）画进合成缓冲，落笔与所见完全对得上
+            // 纹理画布：把这张纹理原样（1:1）画进合成缓冲，落笔与所见完全对得上
             cg.drawImage(board, 0, 0, W, H);
         } else if (!stroke && !playing) {
             drawOnion(cg, doc, t, scratch);
@@ -412,7 +412,7 @@ export function createEngine(opts) {
     /* ────────────────────────── 落笔 ────────────────────────── */
 
     /**
-     * 当前可写位图：取 getTime() 处的画格（没有就新建，默认继承上一张图）。
+     * 当前可写位图：取 getTime() 处的纹理（没有就新建，默认继承上一张图）。
      * 返回 { cel, image }；拿不到活动对象时返回 null（落笔/填充自然变成空操作）。
      */
     function activeCel() {
@@ -443,12 +443,12 @@ export function createEngine(opts) {
         else if (cel.image.width !== w || cel.image.height !== h) fitCanvas(cel.image, w, h);
 
         if (nextObj !== obj) {
-            // 新建了画格：把新对象交回外壳写进文档，否则这一格无处安放
+            // 新建了纹理：把新对象交回外壳写进文档，否则这一格无处安放
             if (replaceObject) {
                 replaceObject(nextObj);
                 onNotify('cel');
             } else {
-                warnOnce('no-commit', '新建画格无法回写文档：外壳需注入 replaceObject(obj)');
+                warnOnce('no-commit', '新建纹理无法回写文档：外壳需注入 replaceObject(obj)');
             }
         }
         return { cel, image: cel.image };
@@ -893,7 +893,7 @@ export function createEngine(opts) {
             emit('redo');
             return ok;
         },
-        /* v8：文档级改动（关键帧、对象、画格、时长……）也要进同一个撤销栈。
+        /* v8：文档级改动（关键帧、对象、纹理、时长……）也要进同一个撤销栈。
            引擎是唯一持有 history 的地方，外壳通过这两个口子把文档命令塞进来，
            这样「画一笔 → 挪关键帧 → Ctrl+Z」的撤销顺序才和用户操作顺序一致。 */
         pushCommand(cmd) {
@@ -912,7 +912,7 @@ export function createEngine(opts) {
         fill: floodFill,
         pick: pickColor,
         isDrawing: () => !!stroke,
-        /* v8：画格画布 —— 绘图工作区把当前画格当独立画布（1:1 呈现、1:1 落笔）。 */
+        /* v8：纹理画布 —— 绘图工作区把当前纹理当独立画布（1:1 呈现、1:1 落笔）。 */
         boardImage: () => boardImage(),
         isDrawingBoard: () => !!boardImage(),
     };

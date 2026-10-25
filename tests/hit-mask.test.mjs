@@ -197,7 +197,7 @@ test('hitTest：有图像但掩膜读不出来时退回矩形命中（有意的�
     assert.equal(hitTest(doc, 0, 10.5, 4.5), null, '矩形外仍然不命中');
 });
 
-test('hitTest：没有图像的对象不命中（空画格不能被矩形命中）', () => {
+test('hitTest：没有图像的对象不命中（空纹理不能被矩形命中）', () => {
     const base = createDoc({ width: 10, height: 8, fps: 10 });
     assert.equal(hitTest(base, 0, 5, 4), null);
 });

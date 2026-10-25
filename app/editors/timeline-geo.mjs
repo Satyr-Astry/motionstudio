@@ -1,9 +1,9 @@
-// 时间轴的几何 / 纯数据层：坐标与时间换算、刻度、画格与关键帧分组。
+// 时间轴的几何 / 纯数据层：坐标与时间换算、刻度、纹理与关键帧分组。
 // 零 DOM、零外壳依赖 —— 可以直接在 Node 里 import 来测。
 //
 // 契约：docs/CONTRACT-v6-时间模型.md
-//   · 内容属于「某一秒」：obj.cels = [{ at, image }]，画格开启后一直沿用到下一个画格。
-//   · 时间轴上只有两种东西：画格切换点（方块）与变换关键帧（菱形）。
+//   · 内容属于「某一秒」：obj.cels = [{ at, image }]，纹理开启后一直沿用到下一个纹理。
+//   · 时间轴上只有两种东西：纹理切换点（方块）与变换关键帧（菱形）。
 //
 // 坐标系（唯一，且与契约逐字一致）：
 //   pxPerSecond(doc, zoomX) = 28 * (doc.fps || 12) * zoomX
@@ -113,7 +113,7 @@ export function snapGrid(t, grid = SNAP_GRID) {
 /**
  * 磁铁档位：`off` / `frame` / `grid`。
  *
- * **时间轴与曲线共用这一份**。以前曲线自己写了一套「无条件吸帧、Shift 吸画格」，
+ * **时间轴与曲线共用这一份**。以前曲线自己写了一套「无条件吸帧、Shift 吸纹理」，
  * 于是同一个关键帧在两个面板里拖到同一个像素位置、落到的时刻却不一样 —— 这就是
  * 「时间轴和曲线不同步」里最容易被当成数据 bug 的那种不一致。
  *
@@ -200,7 +200,7 @@ export function rulerTicks(doc, zoomX = 1) {
     return { pps, step, total, totalPx: timeToX(doc, total, zoomX), major, minor };
 }
 
-/** 画格点方块的 left（中心对齐到时间刻度）。 */
+/** 纹理点方块的 left（中心对齐到时间刻度）。 */
 export function celLeft(doc, t, zoomX = 1) {
     return timeToX(doc, t, zoomX) - CEL_SIZE / 2;
 }
@@ -210,7 +210,7 @@ export function kfLeft(doc, t, zoomX = 1) {
     return timeToX(doc, t, zoomX) - KF_SIZE / 2;
 }
 
-/** 对象的画格标记（升序）：{ at, empty }。 */
+/** 对象的纹理标记（升序）：{ at, empty }。 */
 export function celMarks(obj) {
     const out = [];
     for (const cel of obj && Array.isArray(obj.cels) ? obj.cels : []) {
@@ -221,7 +221,7 @@ export function celMarks(obj) {
     return out;
 }
 
-/** 当前时间生效的画格下标（-1 = 还没到第一个画格）。 */
+/** 当前时间生效的纹理下标（-1 = 还没到第一个纹理）。 */
 export function currentCelIndex(obj, t) {
     return celIndexAt(obj, t);
 }

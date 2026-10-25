@@ -207,7 +207,7 @@ export function mount(el, ctx) {
     /** 尺寸行的说明：对象自己的画布 ≠ 文档尺寸；改它等于把位图整张拉伸。 */
     function sizeTitle(doc) {
         const dt = doc && doc.width > 0 && doc.height > 0 ? '（当前文档 ' + doc.width + ' × ' + doc.height + '）' : '';
-        return '对象自己的画布尺寸，和文档尺寸' + dt + '无关；改动会把该对象所有画格的位图整张拉伸到新尺寸';
+        return '对象自己的画布尺寸，和文档尺寸' + dt + '无关；改动会把该对象所有纹理的位图整张拉伸到新尺寸';
     }
 
     /** 读一个尺寸框：夹成 1..4096 的整数；空串 / 非数字返回 null（调用方回滚显示）。 */
@@ -222,7 +222,7 @@ export function mount(el, ctx) {
     /**
      * 提交一次尺寸改动（change / Enter）。
      *
-     * 优先走外壳的 ctx.setObjectSize：它封装了「把每个画格的位图整张拉伸 + 一次 setDoc」。
+     * 优先走外壳的 ctx.setObjectSize：它封装了「把每个纹理的位图整张拉伸 + 一次 setDoc」。
      * 该入口若没挂到这个 ctx 上（本文件禁止改外壳），就退到同一套做法的就地版本：
      * 调同一条 doc-model 纯函数，再交给 ctx.setDoc —— 两条路在撤销栈里都只记一步。
      * 不自己调 render：setDoc 内部的 commitDoc 已经 scheduleRender + 广播刷新面板，
@@ -335,7 +335,7 @@ export function mount(el, ctx) {
         // 正在编辑的输入框不回写，否则会把用户打到一半的字弹回原值（与 xform 同一焦点保护范式）
         if (document.activeElement !== nameInput) nameInput.value = layer.name == null ? '' : String(layer.name);
         kindVal.textContent = KIND_TEXT[layer.kind] || layer.kind || '—';
-        // 尺寸取自对象自己的「纸」（第一个有图的画格）与文档尺寸无关；标题把这层区别讲清楚
+        // 尺寸取自对象自己的「纸」（第一个有图的纹理）与文档尺寸无关；标题把这层区别讲清楚
         const title = sizeTitle(doc);
         // title 前缀保留「宽 / 高」的区分，后半句解释对象画布与文档尺寸的关系
         sizeW.title = '宽 · ' + title;

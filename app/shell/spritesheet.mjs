@@ -1,7 +1,7 @@
 /**
  * MotionStudio —— 精灵图（spritesheet）导出
  *
- * 契约 v6：文档里没有帧对象了，只有「对象 + 画格」（`obj.cels = [{at, image}]`）和
+ * 契约 v6：文档里没有帧对象了，只有「对象 + 纹理」（`obj.cels = [{at, image}]`）和
  * `docDuration(doc)` 给的总时长。所以这里不再按帧号取时间，而是按**采样时间点**合成：
  * 每格用自己的秒数 t 走同一条渲染路径（paint/composite.mjs 的 compositeEvaluated），
  * 屏幕上看到的某一时刻与大图里的某一格必然一致。
@@ -229,7 +229,7 @@ export function buildSpritesheet(doc, opts) {
     const ev = createEvaluator(doc, { cache: false });
 
     for (const item of layout.frames) {
-        // 第 3 个参数就是秒；画格沿用规则由求值器与 doc-model 负责
+        // 第 3 个参数就是秒；纹理沿用规则由求值器与 doc-model 负责
         compositeEvaluated(cell, ev, item.t, { clear: true });
         try {
             g.drawImage(cell, item.x, item.y);

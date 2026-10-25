@@ -242,7 +242,7 @@ export function mount(el, ctx) {
     }
 
     function drawGizmo() {
-    // 画格画布模式（绘图工作区）：这里画的是这张画格本身，1:1、无对象变换，
+    // 纹理画布模式（绘图工作区）：这里画的是这张纹理本身，1:1、无对象变换，
     // 变换手柄在这个语境里没有意义，画出来只会挡视线。
     if (engine && typeof engine.isDrawingBoard === "function" && engine.isDrawingBoard()) {
         const cg = host && host.getContext ? host.getContext("2d") : null;

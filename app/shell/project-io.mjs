@@ -90,7 +90,7 @@ function exportFrames(name) {
     cv.width = Math.max(1, doc.width | 0);
     cv.height = Math.max(1, doc.height | 0);
     const frames = [];
-    // v6：按时间采样 —— 每段用自己的 fps 生成时间点，再按时间取画格合成。
+    // v6：按时间采样 —— 每段用自己的 fps 生成时间点，再按时间取纹理合成。
     // 帧数组已删除，导出完全是「时间 → 图像」的映射。
     const times = sampleTimes(doc, totalSeconds(doc));
     const list = times.length ? times : [0];

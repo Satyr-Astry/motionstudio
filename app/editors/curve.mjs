@@ -451,7 +451,7 @@ export function mount(el, ctx) {
         hint.textContent = keys.length + ' 键 · ' + easeName + (solo ? ' · ⤴独立' : '') + refTag + timeTag;
         hint.title =
             (td && td !== '无时间变换' ? '横轴 = 该对象的局部时间（' + td + '）\n' : '') +
-            '拖点改时间/数值 · 拖柄改曲线 · 右键改缓动 · 双击空白加点 · Delete 删点 · Shift 吸附画格\n' +
+            '拖点改时间/数值 · 拖柄改曲线 · 右键改缓动 · 双击空白加点 · Delete 删点 · Shift 吸附纹理\n' +
             (solo
                 ? '这条通道已独立（⤴）：只动它自己的关键帧，其余曲线不受影响。右键「回到共用关键帧」可撤销。'
                 : '第一次单独拖这条曲线时，它会拷贝一份自己的关键帧（⤴ 独立），之后只影响它自己。');
@@ -560,7 +560,7 @@ export function mount(el, ctx) {
      * 曲线里的吸附必须与时间轴**同一套判据**（`magnetOf` + `snapForDrag`）：
      * 磁铁开 = 吸整帧、Shift = 关磁铁（可落在两帧之间）；磁铁关 = 自由、Shift = 吸 0.1s 网格。
      *
-     * 以前这里自己写「无条件吸帧、Shift 吸画格」，于是同一个关键帧在两个面板里
+     * 以前这里自己写「无条件吸帧、Shift 吸纹理」，于是同一个关键帧在两个面板里
      * 拖到同一像素位置会落到不同时刻 —— 那才是「时间轴和曲线不同步」的真身。
      */
     function snapTime(t, ev) {

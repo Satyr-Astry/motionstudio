@@ -1,6 +1,6 @@
 // app/core/evaluator.mjs 的单元测试（v6 纯时间模型）。
 // 文档一律手搓字面量：求值器只读 doc，不需要建文档的辅助函数。
-// v6 起没有「帧」这回事，画格是 { at(秒), image }，测试全部以秒为单位断言。
+// v6 起没有「帧」这回事，纹理是 { at(秒), image }，测试全部以秒为单位断言。
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,7 +30,7 @@ function trackOf(x, y) {
     return trk;
 }
 
-/** 一个对象：默认 at:0 的空画格，父级为 null。 */
+/** 一个对象：默认 at:0 的空纹理，父级为 null。 */
 function objectOf(id, patch) {
     return Object.assign(
         {
@@ -86,9 +86,9 @@ function fakeCtx() {
     return g;
 }
 
-// ---- 画格：按时间取图 ---------------------------------------------------
+// ---- 纹理：按时间取图 ---------------------------------------------------
 
-test('imageOf / celAt 按时间取画格，对象与 id 都吃得下', () => {
+test('imageOf / celAt 按时间取纹理，对象与 id 都吃得下', () => {
     const A = imageOf(64, 48, 'A');
     const B = imageOf(80, 60, 'B');
     const obj = objectOf('a', {
@@ -100,7 +100,7 @@ test('imageOf / celAt 按时间取画格，对象与 id 都吃得下', () => {
     const ev = createEvaluator(docOf([obj]));
 
     assert.equal(ev.imageOf('a', 0), A);
-    assert.equal(ev.imageOf(obj, 1.999), A, '下一个画格生效前仍是 A');
+    assert.equal(ev.imageOf(obj, 1.999), A, '下一个纹理生效前仍是 A');
     assert.equal(ev.imageOf('a', 2), B, 'at:2 起换成 B');
     assert.equal(ev.imageOf('a', 3.5), B, '一直生效到文档末尾');
 
@@ -109,7 +109,7 @@ test('imageOf / celAt 按时间取画格，对象与 id 都吃得下', () => {
     assert.equal(ev.celAt('a', 2).image, B);
 });
 
-test('t 早于第一个画格时没有生效画格', () => {
+test('t 早于第一个纹理时没有生效纹理', () => {
     const A = imageOf(30, 30, 'A');
     const ev = createEvaluator(docOf([objectOf('a', { cels: [{ at: 3, image: A }] })]));
     assert.equal(ev.imageOf('a', 1), null);
@@ -228,7 +228,7 @@ test('sample 记录：没有 frame 字段，每层带 celAt', () => {
     assert.equal(rec.layers.length, 1);
     const L = rec.layers[0];
     assert.equal('frame' in L, false, '层记录不再有 frame');
-    assert.equal(L.celAt, 0, '当前生效画格的 at');
+    assert.equal(L.celAt, 0, '当前生效纹理的 at');
     assert.equal(L.image, A);
     assert.equal(L.visible, true);
     assert.ok(Array.isArray(L.matrix));

@@ -1,10 +1,10 @@
 /**
  * Kleks Motion —— 图层合成
  *
- * 把某个时间点 t 的所有可见画格按「图层变换 + 不透明度 + 混合模式」画到目标画布上。
+ * 把某个时间点 t 的所有可见纹理按「图层变换 + 不透明度 + 混合模式」画到目标画布上。
  * 只做像素合成，不碰 DOM 布局；显示画布、导出的 PNG 序列、洋葱皮都用它。
  *
- * v6：时间只有秒。取图走 imageAt(obj, t)（画格开启后一直生效到下一个画格），
+ * v6：时间只有秒。取图走 imageAt(obj, t)（纹理开启后一直生效到下一个纹理），
  * 已经没有「第几帧」这个维度，所以 drawLayer / layerStateAt / compositeFrame
  * 的签名里不再有 frameIndex。
  */
@@ -17,6 +17,9 @@ import { elementState, elementMatrix } from '../core/element.mjs';
 import { normalizeLattice, latticeOffset } from '../core/lattice.mjs';
 // v5：世界矩阵与整帧绘制来自统一求值器（paint → core 单向依赖）
 import { drawEvaluated, mulMatrix, matrixTuple } from '../core/evaluator.mjs';
+// 叠放顺序的唯一真源（docs/层级与叠放-2026-10.md §1/§4）：`drawOrder[0]` 最上，
+// 渲染从数组尾往头画。缺字段时 drawOrderOf 会按 objects 顺序现算，等价于旧行为。
+import { drawOrderOf } from '../core/draw-order.mjs';
 
 /** 由两组三角形的对应关系解出仿射矩阵（四角变形用两片三角近似）。 */
 export function triAffine(s0, s1, s2, d0, d1, d2) {
@@ -283,7 +286,7 @@ export function layerStateAt(doc, layer, t) {
     return st && !isIdentity(st) ? st : null;
 }
 
-/** 画格位图在 doc 空间的基准矩形：位图尺寸优先，回退文档尺寸。 */
+/** 纹理位图在 doc 空间的基准矩形：位图尺寸优先，回退文档尺寸。 */
 function contentSize(doc, img) {
     const w = img && img.width ? img.width : Math.max(1, (doc && doc.width) | 0);
     const h = img && img.height ? img.height : Math.max(1, (doc && doc.height) | 0);
@@ -394,9 +397,17 @@ export function compositeFrame(target, doc, t, opts) {
     g.globalCompositeOperation = 'source-over';
     if (o.clear !== false) g.clearRect(0, 0, W, H);
     const list = objectsOf(doc);
+    // 按 id 取对象：叠放顺序与存储顺序从此解耦（drawOrder 只决定谁盖谁）
+    const byId = new Map();
+    for (let i = 0; i < list.length; i++) {
+        const it = list[i];
+        if (it && it.id != null) byId.set(String(it.id), it);
+    }
+    // drawOrder[0] 是最上层，所以从数组尾往头画（与旧的逆序循环等价）
+    const order = drawOrderOf(doc);
     let painted = false;
-    for (let i = list.length - 1; i >= 0; i--) {
-        const layer = list[i];
+    for (let i = order.length - 1; i >= 0; i--) {
+        const layer = byId.get(order[i]);
         if (!layer) continue;
         if (o.skipHidden !== false && !effectiveVisible(doc, layer)) continue;
         if (layer.id === o.skipLayerId) continue;

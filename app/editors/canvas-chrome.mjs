@@ -122,7 +122,7 @@ export function buildChrome(deps) {
         // v8：浮动小框已移除，这里直接收起并返回（node 仍在，但不进 DOM）
         hideBar();
         return;
-        // 画格画布模式（绘图工作区）里画的是这张画格本身：变换/网格/效果都是编排语汇，
+        // 纹理画布模式（绘图工作区）里画的是这张纹理本身：变换/网格/效果都是编排语汇，
         // 显示出来只会挡视线，也会让用户误以为在画布上点选对象能改什么。
         if (engine && typeof engine.isDrawingBoard === "function" && engine.isDrawingBoard()) {
             hideBar();

@@ -3,7 +3,7 @@
  *
  * 从 app.mjs 整组搬出来的原因：app.mjs 的 ctx 是一个 328 行的对象字面量，
  * 里面混着时间通道、父子层级、时间基（VFR）、网格 warp 四件事，
- * 与「画格」「效果器」「项目」混排在同一个字面量里，改动风险高、读起来也要跳。
+ * 与「纹理」「效果器」「项目」混排在同一个字面量里，改动风险高、读起来也要跳。
  *
  * 这一组**只依赖六个注入项**：
  *   getDoc()      当前文档（不可变对象，每次修改换新引用）
@@ -28,6 +28,7 @@ import {
     timeDepth,
 } from '../core/timegraph.mjs';
 import { objectById, objectsOf, patchObject, reorderObject } from '../core/doc-model.mjs';
+import { drawOrderOf, moveInOrder, orderIndex } from '../core/draw-order.mjs';
 import {
     addSegment as addTimeSegment,
     fpsAt as fpsAtTime,
@@ -147,19 +148,45 @@ export function timeCtx(deps) {
         setDoc(() => res.doc);
         return true;
     },
-    /** 把对象移到指定下标（对象列表顺序 = 绘制顺序，0 在最上层）。 */
+    /**
+     * 叠放顺序（v10，`drawOrder[0]` = 最上层）。层级与叠放拆开之后：
+     * 这里的读与写只碰 `doc.drawOrder`，一律不碰 `parentId`。
+     */
+    drawOrder() {
+        const doc = getDoc();
+        return doc ? drawOrderOf(doc) : [];
+    },
+    /** 某对象在第几层（0 = 最上层）；找不到 -1。 */
+    orderIndexOf(id) {
+        const doc = getDoc();
+        return doc ? orderIndex(doc, id) : -1;
+    },
+    /** 把对象移到第 index 层（只改叠放，不动父子关系），一条撤销。 */
+    moveDrawOrder(id, index) {
+        const doc = getDoc();
+        if (!doc) return false;
+        const order = drawOrderOf(doc);
+        const from = order.indexOf(String(id));
+        if (from < 0) return false;
+        const to = Math.max(0, Math.min(order.length - 1, Math.round(Number(index))));
+        if (!Number.isFinite(to) || to === from) return false;
+        const next = moveInOrder(order, id, to);
+        setDoc((d) => Object.assign({}, d, { drawOrder: next }), { label: '调整叠放顺序' });
+        return true;
+    },
+    /** 把对象移到指定下标（v10 起只动叠放；绘制顺序看 `drawOrder`，不看数组下标）。 */
     /** target 既接受下标，也接受对象 id —— 对象面板拖拽时手里只有 id。 */
     moveLayerTo(id, target) {
         const doc = getDoc();
         if (!doc) return false;
-        const list = objectsOf(doc);
-        const from = list.findIndex((o) => o && o.id === id);
+        const order = drawOrderOf(doc);
+        const from = order.indexOf(String(id));
         if (from < 0) return false;
-        const raw = typeof target === 'string' ? list.findIndex((o) => o && o.id === target) : Math.round(Number(target));
+        const raw = typeof target === 'string' ? order.indexOf(String(target)) : Math.round(Number(target));
         if (!Number.isFinite(raw) || raw < 0) return false;
-        const idx = Math.max(0, Math.min(list.length - 1, raw));
+        const idx = Math.max(0, Math.min(order.length - 1, raw));
         if (idx === from) return false;
-        setDoc((d) => reorderObject(d, id, idx), { label: '调整对象顺序' });
+        setDoc((d) => Object.assign({}, d, { drawOrder: moveInOrder(order, id, idx) }), { label: '调整对象顺序' });
         return true;
     },
     /**

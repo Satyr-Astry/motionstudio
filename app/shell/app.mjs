@@ -9,8 +9,8 @@
  *   app.mjs         本文件：把上面四块拼起来 —— ctx（编辑器的外壳契约）、
  *                   window.motionStudio 调试门面、全局快捷键、DOM 骨架与启动
  *
- * 时间模型（契约 v6）：帧对象已删除，内容单位是「画格」——`obj.cels = [{ at, image }]`，
- * at 是秒，画格从 at 起一直生效到下一个画格。画格命令（addCelAt / removeCelAt /
+ * 时间模型（契约 v6）：帧对象已删除，内容单位是「纹理」——`obj.cels = [{ at, image }]`，
+ * at 是秒，纹理从 at 起一直生效到下一个纹理。纹理命令（addCelAt / removeCelAt /
  * clearCelAt / moveCel / celTimesOf / goPrevCel / goNextCel）全部定义在本文件，
  * 时间轴与画布只通过 ctx 调它们；落笔入口是 ctx.ensureCelImage(layerId, w, h)。
  *
@@ -137,16 +137,16 @@ let TOOL_KEYS, DEFAULT_W, DEFAULT_H, DEFAULT_FPS, state, shell, el, engine,
     updateChrome, setTimeClamped, stepFrames, setDuration, fpsNow, goToKey;
 
 
-/* ─────────────────── 画格命令（纯时间模型，契约 v6） ─────────────────── */
+/* ─────────────────── 纹理命令（纯时间模型，契约 v6） ─────────────────── */
 
 /**
- * 帧对象已彻底删除：内容的唯一单位是「画格」——`obj.cels = [{ at, image }]`，
- * at 是秒，画格从 at 起一直生效到下一个画格。下面这组是外壳唯一的画格写入口，
+ * 帧对象已彻底删除：内容的唯一单位是「纹理」——`obj.cels = [{ at, image }]`，
+ * at 是秒，纹理从 at 起一直生效到下一个纹理。下面这组是外壳唯一的纹理写入口，
  * 时间轴模块只认这四个名字：addCelAt / removeCelAt / clearCelAt / moveCel。
  */
 
 /**
- * 交换同一对象里两个画格的时刻（画格栈拖动重排用）。
+ * 交换同一对象里两个纹理的时刻（纹理栈拖动重排用）。
  * 时刻本身是内容的地址，所以「重排」= 两个 at 互换，位图各自跟着自己的格走。
  */
 function swapCelTimes(objId, tA, tB) {
@@ -155,7 +155,7 @@ function swapCelTimes(objId, tA, tB) {
     if (!doc || id == null) return false;
     const next = swapCelAt(doc, id, tA, tB);
     if (next === doc) return false;
-    setDoc(() => next, { label: '交换画格' });
+    setDoc(() => next, { label: '交换纹理' });
     return true;
 }
 
@@ -186,7 +186,7 @@ function celTimeArg(t) {
     return Math.max(0, Number(state.time) || 0);
 }
 
-/** 画布尺寸的空位图（新画格用）。 */
+/** 画布尺寸的空位图（新纹理用）。 */
 /** 造一张指定尺寸的空位图（对象改尺寸时用）。 */
 function blankSurfaceOf(w, h) {
     const cv = document.createElement('canvas');
@@ -286,10 +286,10 @@ function celImageOf(objId, t) {
 }
 
 /**
- * 在时间 t 建画格。
- * 默认**继承**前一张画格的内容（拷一份独立位图）—— 这是动画里最常见的动作：
- * 在上一格的基础上改。要空白就在时间轴上右键「清空此画格内容」。
- * 返回画格落在的时间点。
+ * 在时间 t 建纹理。
+ * 默认**继承**前一张纹理的内容（拷一份独立位图）—— 这是动画里最常见的动作：
+ * 在上一格的基础上改。要空白就在时间轴上右键「清空此纹理内容」。
+ * 返回纹理落在的时间点。
  */
 function fpsOfDoc() {
     const doc = state.doc;
@@ -299,7 +299,7 @@ function fpsOfDoc() {
 
 /**
  * 判断某个帧槽是否已被占用。
- * 不能用 hasCelAt 的 1e-6 容差：历史数据里存在 0.167 这种「非整帧对齐」的画格，
+ * 不能用 hasCelAt 的 1e-6 容差：历史数据里存在 0.167 这种「非整帧对齐」的纹理，
  * 而新落点会按帧网格算成 0.166666，两者按 1e-6 算不等，就会在旁边多造一格。
  * 这里按「半个帧」判占用，视觉上同一帧就算同一格。
  */
@@ -309,7 +309,7 @@ function celSlotTaken(obj, at) {
     return celTimes(obj).some((t) => Math.abs(t - at) < half);
 }
 
-/** 从 t 开始往后找一个「还没有画格」的帧边界（最多找 240 帧，防死循环）。 */
+/** 从 t 开始往后找一个「还没有纹理」的帧边界（最多找 240 帧，防死循环）。 */
 function findFreeCelTime(obj, t) {
     const fps = fpsOfDoc();
     const step = 1 / fps;
@@ -331,14 +331,14 @@ function addCelAt(objId, t) {
     setDoc((d) => {
         const obj = objectById(d, id);
         if (!obj) return d;
-        // 该时刻已经有画格时不能静默失败（用户会觉得「加画格没反应」）：
-        // 顺延到下一个还没有画格的帧边界，落点回报给调用方。
+        // 该时刻已经有纹理时不能静默失败（用户会觉得「加纹理没反应」）：
+        // 顺延到下一个还没有纹理的帧边界，落点回报给调用方。
         const spot = findFreeCelTime(obj, at);
         moved = spot.moved;
         const res = ensureCelAt(obj, spot.at, { inherit: true });
         placed = res.cel ? res.cel.at : spot.at;
         const cur = res.cel || { at: placed, image: null };
-        // 新画格必须有可画的位图；继承来的图要拷一份，否则改一格会改坏上一格
+        // 新纹理必须有可画的位图；继承来的图要拷一份，否则改一格会改坏上一格
         let image = cur.image;
         if (image) {
             try {
@@ -354,11 +354,11 @@ function addCelAt(objId, t) {
         if (!cels.includes(cel)) cels.push(cel);
         return replaceObject(d, id, Object.assign({}, res.obj, { cels: cels }));
     });
-    if (moved) flash('该时刻已有画格，已放到 ' + placed.toFixed(2) + ' s');
+    if (moved) flash('该时刻已有纹理，已放到 ' + placed.toFixed(2) + ' s');
     return placed;
 }
 
-/** 删掉时间 t 的画格；对象只剩一个画格时拒绝并提示。 */
+/** 删掉时间 t 的纹理；对象只剩一个纹理时拒绝并提示。 */
 function removeCelAt(objId, t) {
     const doc = state.doc;
     const id = celTargetId(objId);
@@ -366,21 +366,21 @@ function removeCelAt(objId, t) {
     const obj = objectById(doc, id);
     if (!obj) return false;
     if (celTimes(obj).length <= 1) {
-        flash('至少要保留一个画格');
+        flash('至少要保留一个纹理');
         return false;
     }
     const at = celTimeArg(t);
     const nextObj = removeCelAtDoc(obj, at);
     if (!nextObj || nextObj === obj) {
-        flash('这个时间点没有画格');
+        flash('这个时间点没有纹理');
         return false;
     }
     setDoc((d) => replaceObject(d, id, nextObj));
-    flash('已删除 ' + at.toFixed(2) + 's 的画格');
+    flash('已删除 ' + at.toFixed(2) + 's 的纹理');
     return true;
 }
 
-/** 把时间 t 画格的内容清空（画格保留，image 置 null = 这一段全透明）。 */
+/** 把时间 t 纹理的内容清空（纹理保留，image 置 null = 这一段全透明）。 */
 function clearCelAt(objId, t) {
     const doc = state.doc;
     const id = celTargetId(objId);
@@ -397,13 +397,13 @@ function clearCelAt(objId, t) {
         const cels = (Array.isArray(res.obj.cels) ? res.obj.cels : []).map((c) => (c === res.cel ? cel : c));
         return replaceObject(d, id, Object.assign({}, res.obj, { cels: cels }));
     });
-    if (cleared) flash('已清空画格');
+    if (cleared) flash('已清空纹理');
     return cleared;
 }
 
 /**
- * 落笔前保证「当前时间有可写画格」，返回位图（契约 D 的唯一入口）。
- * 没有画格就 inherit:true 建一个：继承上一格像素，但整条链路与帧无关。
+ * 落笔前保证「当前时间有可写纹理」，返回位图（契约 D 的唯一入口）。
+ * 没有纹理就 inherit:true 建一个：继承上一格像素，但整条链路与帧无关。
  */
 function celImageForPaint(layerId, w, h) {
     const doc = state.doc;
@@ -415,7 +415,7 @@ function celImageForPaint(layerId, w, h) {
     const res = ensureCelAt(obj, t, { inherit: true });
     const cur = res.cel;
     if (cur && cur.image && !res.created) return cur.image;
-    // 新画格继承到的是上一格的位图**引用**：必须克隆，否则落笔会改坏上一格
+    // 新纹理继承到的是上一格的位图**引用**：必须克隆，否则落笔会改坏上一格
     const image = cur && cur.image
         ? cloneSurface(cur.image)
         : createSurface(Math.max(1, Math.round(Number(w) || 1)), Math.max(1, Math.round(Number(h) || 1)));
@@ -428,7 +428,7 @@ function celImageForPaint(layerId, w, h) {
     return image;
 }
 
-/** 把画格从 fromT 挪到 toT（目标时间已有画格则覆盖）。 */
+/** 把纹理从 fromT 挪到 toT（目标时间已有纹理则覆盖）。 */
 function moveCel(objId, fromT, toT) {
     const doc = state.doc;
     const id = celTargetId(objId);
@@ -444,14 +444,14 @@ function moveCel(objId, fromT, toT) {
     return true;
 }
 
-/** 该对象所有画格的时间点（升序）。 */
+/** 该对象所有纹理的时间点（升序）。 */
 function celTimesOf(objId) {
     const doc = state.doc;
     const obj = doc ? objectById(doc, celTargetId(objId)) : null;
     return obj ? celTimes(obj) : [];
 }
 
-/** 跳到当前对象的上一个画格点；已在第一个之前则回 0。 */
+/** 跳到当前对象的上一个纹理点；已在第一个之前则回 0。 */
 function goPrevCel() {
     if (!state.doc) return;
     const times = celTimesOf(null);
@@ -462,7 +462,7 @@ function goPrevCel() {
     setTime(target);
 }
 
-/** 跳到当前对象的下一个画格点；没有下一个就跳到时间轴末尾。 */
+/** 跳到当前对象的下一个纹理点；没有下一个就跳到时间轴末尾。 */
 function goNextCel() {
     if (!state.doc) return;
     const times = celTimesOf(null);
@@ -490,7 +490,7 @@ function clampTime() {
 }
 
 /**
- * 新文档：一个对象 + t=0 的空画格。没有帧、没有帧计数。
+ * 新文档：一个对象 + t=0 的空纹理。没有帧、没有帧计数。
  * duration 显式给 1s —— 与旧版「12 帧 × 12fps」的初始时间轴等长；
  * 时间模型里空文档的 totalSeconds 是 0，没有显式时长时间轴会没有刻度可拖。
  */
@@ -646,11 +646,11 @@ function buildCtx() {
         scheduleRefresh();
     },
 
-    /* ── 画格（时间模型）：时间轴面板只通过这四个名字改画格 ── */
+    /* ── 纹理（时间模型）：时间轴面板只通过这四个名字改纹理 ── */
     /**
-     * 新建画格：只往库里加一张图，**不在时间轴上占位**。
-     * clone=true 时复制当前时刻那张（复制画格），否则给一张空白（尺寸跟对象一致）。
-     * 返回值是新画格的 id；用户点库里那一行才会形成曝光。
+     * 新建纹理：只往库里加一张图，**不在时间轴上占位**。
+     * clone=true 时复制当前时刻那张（复制纹理），否则给一张空白（尺寸跟对象一致）。
+     * 返回值是新纹理的 id；用户点库里那一行才会形成曝光。
      */
     newDrawing(objId, opts) {
         const doc = state.doc;
@@ -664,12 +664,12 @@ function buildCtx() {
         const image = src ? cloneSurface(src) : createSurface(Math.max(1, Math.round(size.w)), Math.max(1, Math.round(size.h)));
         const next = addDrawing(obj, image);
         if (next === obj) return null;
-        setDoc(() => replaceObject(state.doc, id, next), { label: clone ? '复制画格' : '新建画格' });
+        setDoc(() => replaceObject(state.doc, id, next), { label: clone ? '复制纹理' : '新建纹理' });
         const lib = drawingsOf(next);
         const made = lib[lib.length - 1];
         return made ? made.id : null;
     },
-    /** 在给定时刻加一次「曝光」，复用当前画格（不新建图）——时间轴「加曝光」用。 */
+    /** 在给定时刻加一次「曝光」，复用当前纹理（不新建图）——时间轴「加曝光」用。 */
     addExposure(objId, t) {
         const doc = state.doc;
         if (!doc) return null;
@@ -687,7 +687,7 @@ function buildCtx() {
         if (next === obj) return null;
         setDoc(() => replaceObject(state.doc, id, next), { label: '加曝光' });
         setTimeClamped(at);
-        flash('已加曝光 ' + at.toFixed(2) + ' s（复用当前画格）');
+        flash('已加曝光 ' + at.toFixed(2) + ' s（复用当前纹理）');
         return at;
     },
     addCelAt,
@@ -697,8 +697,8 @@ function buildCtx() {
     swapCelTimes,
     celTimesOf,
     celImage: celImageOf,
-    /* v8：画格库 —— 画格是可以复用/切换的「图」，时间轴上的是曝光。
-       同一张画格可以出现在多个时刻，改它所有时刻一起变；要脱钩用 makeUniqueCel。 */
+    /* v8：纹理库 —— 纹理是可以复用/切换的「图」，时间轴上的是曝光。
+       同一张纹理可以出现在多个时刻，改它所有时刻一起变；要脱钩用 makeUniqueCel。 */
     drawingsOf: (objId) => {
         const doc = state.doc;
         const id = celTargetId(objId);
@@ -724,7 +724,7 @@ function buildCtx() {
             if (next === obj) return d;
             changed = true;
             return replaceObject(d, id, next);
-        }, { label: '切换画格' });
+        }, { label: '切换纹理' });
         return changed;
     },
     /** 把当前时刻的曝光独特化：拷一张新图，之后改它不影响别的时刻。 */
@@ -741,7 +741,7 @@ function buildCtx() {
             if (next === obj) return d;
             changed = true;
             return replaceObject(d, id, next);
-        }, { label: '独特化画格' });
+        }, { label: '独特化纹理' });
         return changed;
     },
     /** 旋转/缩放的原点（归一化 0–1，相对对象自己的画布）。0.5/0.5 = 中心。 */
@@ -793,7 +793,7 @@ function buildCtx() {
             if (next === obj) return d;
             changed = true;
             return replaceObject(d, id, next);
-        }, { label: '删除画格' });
+        }, { label: '删除纹理' });
         return changed;
     },
 
@@ -808,7 +808,7 @@ function buildCtx() {
      *   - trim：新图原点 = 旧图被裁掉的左上角，所以对象坐标要 **加** 上它（x += box.x）。
      *   - resize：内容按九宫格放进新画布，整体平移了 (ox, oy)，所以对象坐标要 **减** 回去。
      *
-     * 只替换当前时刻那一张画格；其它画格（同一对象别的图）不动。
+     * 只替换当前时刻那一张纹理；其它纹理（同一对象别的图）不动。
      *
      * @param {string|{id:string}} objId
      * @param {{mode:'trim'}|{mode:'resize',width:number,height:number,align?:string}} opts
@@ -886,7 +886,7 @@ function buildCtx() {
         setDoc((d) => {
             const cur = objectById(d, id);
             if (!cur) return d;
-            // 画格：只换当前时刻这一张
+            // 纹理：只换当前时刻这一张
             let obj2 = setImageAt(cur, time, next.image);
             // 变换：把「图动了多少」补回对象坐标，画面不跳
             const track = obj2.transform || createTrack();
@@ -919,7 +919,7 @@ function buildCtx() {
     goPrevCel,
     goNextCel,
     clampTime,
-    /** 引擎落笔用：保证当前时间有可写画格（旧的 (帧下标, layerId, w, h) 签名已废） */
+    /** 引擎落笔用：保证当前时间有可写纹理（旧的 (帧下标, layerId, w, h) 签名已废） */
     ensureCelImage: celImageForPaint,
 
     exportFrames,
@@ -1113,14 +1113,14 @@ function dispatchTimeEvent(name, detail) {
  * 在赋值前捕获 undefined。
  */
 /**
- * 在当前时刻切换成库里相邻的那张画格（画格是复用的图，不是「每加一格就多一条时间」）。
- * 没有任何画格时提示；越界时绕回另外一端。
+ * 在当前时刻切换成库里相邻的那张纹理（纹理是复用的图，不是「每加一格就多一条时间」）。
+ * 没有任何纹理时提示；越界时绕回另外一端。
  */
 function cycleDrawing(dir) {
     const step = dir < 0 ? -1 : 1;
     const list = typeof ctx.drawingsOf === 'function' ? ctx.drawingsOf(null) : [];
     if (!list.length) {
-        flash('这个对象还没有画格');
+        flash('这个对象还没有纹理');
         return false;
     }
     const cur = typeof ctx.currentDrawingId === 'function' ? ctx.currentDrawingId(null) : null;
@@ -1128,7 +1128,7 @@ function cycleDrawing(dir) {
     const next = list[(i < 0 ? (step > 0 ? 0 : list.length - 1) : (i + step + list.length) % list.length)];
     if (!next) return false;
     const ok = ctx.placeDrawing(null, state.time, next.id);
-    if (ok) flash('当前时刻显示第 ' + (list.indexOf(next) + 1) + ' 张画格');
+    if (ok) flash('当前时刻显示第 ' + (list.indexOf(next) + 1) + ' 张纹理');
     return ok;
 }
 
@@ -1161,17 +1161,17 @@ function buildCommands() {
         { id: 'play.toggle', title: '播放 / 暂停', hint: '时间轴走带', keys: 'Space', group: '播放', run: () => setPlaying(!state.playing) },
         { id: 'play.first', title: '回到开头', hint: 't = 0', keys: 'Home', group: '播放', run: () => setTimeClamped(0) },
         { id: 'play.last', title: '跳到结尾', hint: '文档末端', keys: 'End', group: '播放', run: () => setTimeClamped(totalSeconds(state.doc)) },
-        { id: 'play.prev-cel', title: '上一个画格', hint: '', keys: 'Shift+,', group: '播放', run: () => goPrevCel() },
-        { id: 'play.next-cel', title: '下一个画格', hint: '', keys: 'Shift+.', group: '播放', run: () => goNextCel() },
+        { id: 'play.prev-cel', title: '上一个纹理', hint: '', keys: 'Shift+,', group: '播放', run: () => goPrevCel() },
+        { id: 'play.next-cel', title: '下一个纹理', hint: '', keys: 'Shift+.', group: '播放', run: () => goNextCel() },
         { id: 'play.prev-key', title: '上一个关键帧', hint: '当前对象', keys: ',', group: '播放', run: () => goToKey(-1) },
         { id: 'play.next-key', title: '下一个关键帧', hint: '当前对象', keys: '.', group: '播放', run: () => goToKey(1) },
-        // 画格
-        { id: 'cel.new', title: '新建画格（只进库）', hint: '生成一张新图，不占时间轴；点亮库里那一行才放到时间轴', keys: '', group: '画格', run: () => ctx.newDrawing(null) },
-        { id: 'cel.add', title: '加曝光', hint: '在播放头处再曝光一次当前画格（不新建图）', keys: '', group: '画格', run: () => ctx.addExposure(null, null) },
-        { id: 'cel.remove', title: '删画格', hint: '播放头所在画格', keys: '', group: '画格', run: () => removeCelAt(null, null) },
-        { id: 'cel.cycle-prev', title: '切换画格：上一张', hint: '把库里上一张画格放到当前时刻（复用，不加时间）', keys: '', group: '画格', run: () => cycleDrawing(-1) },
-        { id: 'cel.cycle-next', title: '切换画格：下一张', hint: '把库里下一张画格放到当前时刻（复用，不加时间）', keys: '', group: '画格', run: () => cycleDrawing(1) },
-        { id: 'cel.unique', title: '画格独特化', hint: '当前时刻的画格脱钩成独立一张', keys: '', group: '画格', run: () => ctx.makeUniqueCel && ctx.makeUniqueCel(null, state.time) },
+        // 纹理
+        { id: 'cel.new', title: '新建纹理（只进库）', hint: '生成一张新图，不占时间轴；点亮库里那一行才放到时间轴', keys: '', group: '纹理', run: () => ctx.newDrawing(null) },
+        { id: 'cel.add', title: '加曝光', hint: '在播放头处再曝光一次当前纹理（不新建图）', keys: '', group: '纹理', run: () => ctx.addExposure(null, null) },
+        { id: 'cel.remove', title: '删纹理', hint: '播放头所在纹理', keys: '', group: '纹理', run: () => removeCelAt(null, null) },
+        { id: 'cel.cycle-prev', title: '切换纹理：上一张', hint: '把库里上一张纹理放到当前时刻（复用，不加时间）', keys: '', group: '纹理', run: () => cycleDrawing(-1) },
+        { id: 'cel.cycle-next', title: '切换纹理：下一张', hint: '把库里下一张纹理放到当前时刻（复用，不加时间）', keys: '', group: '纹理', run: () => cycleDrawing(1) },
+        { id: 'cel.unique', title: '纹理独特化', hint: '当前时刻的纹理脱钩成独立一张', keys: '', group: '纹理', run: () => ctx.makeUniqueCel && ctx.makeUniqueCel(null, state.time) },
         // 画布
         { id: 'canvas.fit', title: '适配视图', hint: '画布撑满可视区', keys: '0', group: '画布', run: () => { engine.fitView(); flash('已适配视图'); updateChrome(); } },
         { id: 'canvas.brush-smaller', title: '笔刷变小', hint: '每次 −4px', keys: '[', group: '画布', run: () => nudgeSize(-4) },
@@ -1263,7 +1263,7 @@ function onKeyDown(e) {
         setPlaying(!state.playing);
         return;
     }
-    // 契约 v5：`,` `.` 是「上一个 / 下一个关键帧」。画格切换挪到 Shift+, / Shift+.
+    // 契约 v5：`,` `.` 是「上一个 / 下一个关键帧」。纹理切换挪到 Shift+, / Shift+.
     if (key === ',' || key === '<') {
         e.preventDefault();
         if (e.shiftKey) goPrevCel();
@@ -1286,7 +1286,7 @@ function onKeyDown(e) {
         setTimeClamped(totalSeconds(state.doc));
         return;
     }
-    // 逐帧（1/fps）用方向键：比 `,` `.` 的按画格跳更适合修帧率与对位
+    // 逐帧（1/fps）用方向键：比 `,` `.` 的按纹理跳更适合修帧率与对位
     if (key === 'ArrowLeft' && !e.shiftKey) {
         e.preventDefault();
         stepFrames(-1);

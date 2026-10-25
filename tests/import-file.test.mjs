@@ -184,7 +184,7 @@ test('toBytes：ArrayBuffer / Uint8Array / 视图都认，其它返回 null', ()
     assert.equal(toBytes(42), null);
 });
 
-test('psdToObjects：单图层 → 一个对象，位置落首帧关键帧，画格 at=0', async () => {
+test('psdToObjects：单图层 → 一个对象，位置落首帧关键帧，纹理 at=0', async () => {
     const psd = buildPsd({
         width: 2,
         height: 2,
@@ -296,7 +296,7 @@ test('psdToObjects：组生成组对象，组内图层的 parentId 都指向它'
     assert.deepEqual(res.doc.objects.map((o) => o.name), ['组外', '按钮', '描边', '底色']);
     const [outer, group, top, bottom] = res.doc.objects;
 
-    // 组对象：没有位图，但有画格槽位、自己的不透明度、没有父
+    // 组对象：没有位图，但有纹理槽位、自己的不透明度、没有父
     assert.equal(group.kind, 'image');
     assert.equal(group.cels.length, 1);
     assert.equal(group.cels[0].at, 0);
@@ -565,7 +565,7 @@ test('imageToObject：kind=image、尺寸按图片、画布尺寸不变、默认
     assert.deepEqual(res.doc.objects.map((o) => o.name), ['照片', '已有']);
     const state = obj.transform.keys[0].state;
     assert.deepEqual([state.x, state.y], [430, 310]);
-    // 画格直接持有解码出来的位图（不再复制 / 二次加工）
+    // 纹理直接持有解码出来的位图（不再复制 / 二次加工）
     assert.equal(obj.cels[0].image, bitmap);
 });
 
@@ -886,7 +886,7 @@ test('splitLayerImage 的兼容边界：注入裸位图时 trim 为 0，不补�
 
 // ── 位图（PNG/JPG/WebP）走同一套裁剪规则 ──────────────────────────────────────
 //
-// 位图没有「图层矩形」，所以裁剪只影响两件事：画格位图尺寸、原点偏移。
+// 位图没有「图层矩形」，所以裁剪只影响两件事：纹理位图尺寸、原点偏移。
 // 居中仍按原图尺寸算 —— 裁掉的只是透明的纸，画面位置不能挪。
 
 test('imageToObject：留白 PNG 裁到内容，原点补 dx/dy，居中原点不变', async () => {

@@ -370,7 +370,7 @@ export function pickInRect(geo, track, layerId, shown, x0, x1, y0, y1) {
 }
 
 /**
- * 拖点吸附：在「画格切换点 + 0 秒」里找最近的一个，0.12 秒内才吸。
+ * 拖点吸附：在「纹理切换点 + 0 秒」里找最近的一个，0.12 秒内才吸。
  * marks 由调用方给（= celTimes(layer)），这里不碰 doc。
  */
 export function snapTime(t, marks) {

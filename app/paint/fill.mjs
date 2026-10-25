@@ -3,7 +3,7 @@
  *
  * 只做一件事：给一块 RGBA 像素数组，从 (sx, sy) 起把「颜色相近且连通」的区域刷成目标色。
  * 不碰 canvas、不碰文档、不碰撤销栈 —— 取 ImageData、putImageData、pushCommand 都由调用方负责。
- * 这样切画格/换纹理的时序问题全部留在调用方那一个同步块里（board.mjs 的 doFill）。
+ * 这样切纹理/换纹理的时序问题全部留在调用方那一个同步块里（board.mjs 的 doFill）。
  *
  * 语义与既有实现对齐（`app/paint/engine.mjs:598-657` 的 floodFill）：
  *

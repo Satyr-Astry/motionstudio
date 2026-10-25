@@ -1,0 +1,14 @@
+release: v0.3.0-alpha.11 —— α：层级与叠放两模块、纹理搬进属性面板、术语统一
+
+契约 docs/层级与叠放-2026-10.md。三件事各管一处：层级 = object.parentId（core/hierarchy.mjs）、
+叠放 = doc.drawOrder（core/draw-order.mjs）、纹理 = cels+drawings（core/textures.mjs）。
+改层级不动叠放，改叠放不动层级。
+
+- 绘制顺序改走 drawOrderOf(doc)（composite.mjs / evaluator.mjs），真机像素核对通过
+- 对象面板拆成「父子」(tree.mjs, 180px) 与「叠放」(纯扁平) 两个区域，删掉画格库与折叠体系
+- 属性面板新增「纹理」组（prop-textures.mjs + textures.css）：缩略图/数量/四动作/画布尺寸与对齐
+- 术语：app/** 43 个文件 386 处「画格」→「纹理」，数据字段名不变，映射见 docs/术语.md
+- 播放速度与方式（alpha.10 内容）随本版一并发布
+
+基线：1028 tests / 1026 pass / 2 skipped / 0 fail；82 模块（静态检查 + node --check 全过）；
+70 个测试文件；74 个图标。

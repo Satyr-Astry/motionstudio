@@ -27,6 +27,9 @@ import {
     stateOf,
 } from './doc-model.mjs';
 import { createLattice, latticeOffset, normalizeLattice } from './lattice.mjs';
+// 绘制顺序的唯一真源（docs/层级与叠放-2026-10.md §4）：只用在 drawEvaluated
+// 的遍历上；本模块内部的 objIndex（按 id 查对象）与它无关，别混。
+import { drawOrderOf } from './draw-order.mjs';
 import { effectAt, filterString } from '../paint/effects.mjs';
 
 /** 父链最大深度，与 timegraph 的 MAX_DEPTH 对齐。 */
@@ -223,7 +226,7 @@ export function createEvaluator(doc, opts = {}) {
         return w > 0 && h > 0 ? { w, h } : fallback;
     }
 
-    /** 该时刻生效的画格记录（{at, image}），没有则 null。 */
+    /** 该时刻生效的纹理记录（{at, image}），没有则 null。 */
     function celOf(layer, t) {
         const el = layerOf(layer);
         if (!el || typeof el !== 'object') return null;
@@ -350,7 +353,7 @@ export function createEvaluator(doc, opts = {}) {
             // quad 的角是 [x, y] 数组（契约见 tests/evaluator.test.mjs）；
             // element.mjs 的 elementQuad 走另一条路，返回 {x,y} 对象。
             quad: { tl: map(0, 0), tr: map(1, 0), br: map(1, 1), bl: map(0, 1) },
-            // 画格按**对象局部时间**取：时间通道（offset / scale / loop / hold）
+            // 纹理按**对象局部时间**取：时间通道（offset / scale / loop / hold）
             // 必须能驱动内容，否则它只是一个不影响画面的装饰。
             image: imageAt(layer, ltime),
             cel: celAtOf(layer, ltime),
@@ -384,8 +387,8 @@ export function createEvaluator(doc, opts = {}) {
     /**
      * 同一 t 的求值结果（数值全等；返回对象视为只读）。
      * 缓存键 Math.round(t*1e6)，容量 64，命中即刷新 LRU 顺序。
-     * 每条层记录带自己的 celAt（该对象当前生效画格的 at）；文档级没有
-     * 「唯一的当前画格」这回事，所以顶层不给这个字段。
+     * 每条层记录带自己的 celAt（该对象当前生效纹理的 at）；文档级没有
+     * 「唯一的当前纹理」这回事，所以顶层不给这个字段。
      */
     function sample(t) {
         const tt = timeOf(t);
@@ -496,10 +499,17 @@ export function drawEvaluated(ctx, ev, t, opts = {}) {
 
     const tt = timeOf(t);
     let painted = false;
-    // composite 的层序是 layers[0] 最上，绘制必须倒序。
-    for (let i = record.layers.length - 1; i >= 0; i--) {
+    // 叠放顺序的唯一真源：`drawOrder[0]` 最上，绘制必须倒序（从数组尾往头画）。
+    // record.layers 是按 objects 顺序求值出来的，这里只借它按 id 取记录，不依赖其顺序。
+    const order = drawOrderOf(ev.doc);
+    const byId = new Map();
+    for (let i = 0; i < record.layers.length; i++) {
         const rec = record.layers[i];
-        if (!rec || !rec.layer) continue;
+        if (rec && rec.layer && rec.layer.id != null) byId.set(String(rec.layer.id), rec);
+    }
+    for (let i = order.length - 1; i >= 0; i--) {
+        const rec = byId.get(order[i]);
+        if (!rec) continue;
         if (!o.force && !rec.visible) continue;
         if (o.onlyVisible !== false && !rec.visible) continue;
         if (o.skipLayerId != null && rec.layer.id === o.skipLayerId) continue;

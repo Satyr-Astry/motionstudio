@@ -2,14 +2,14 @@
  * 图像 alpha 掩膜：把任意可绘制源读成一张「每像素 alpha」的字节表。
  *
  * 命中测试要判断某个像素透不透明，但画布上的图像来源是混合的：
- * 手绘画格是可读 canvas（`getContext` 直接取），导入的 PNG/PSD 图层是
+ * 手绘纹理是可读 canvas（`getContext` 直接取），导入的 PNG/PSD 图层是
  * `ImageBitmap`（没有 `getContext`）。`element.mjs` 里的 `pixelAlpha` 只认得
  * 前者，而 `ImageBitmap` 上取像素会抛错并被吞成 0 —— 于是导入的位图在画布上
  * 永远点不中。
  *
  * 这里统一成一条路径：能 `getContext` 的直接读，读不了的先画进一张临时画布
  * 再读。结果按「图像对象本身」缓存在 WeakMap 里 —— 不能用对象 id 做键，
- * id 在撤销/重做与画格切换之间会复用，缓存会串味。
+ * id 在撤销/重做与纹理切换之间会复用，缓存会串味。
  *
  * 掩膜只存 alpha 原值，不存二值结果：阈值是调用方的语义（`hitTest` 的
  * `opts.threshold`），把阈值烧进缓存等于把它锁死在键上。

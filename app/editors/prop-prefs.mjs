@@ -207,7 +207,7 @@ export function mount(el, ctx) {
     for (const item of LEGEND_ITEMS) legendBody.appendChild(makeLegendRow(item));
     addNote(
         legendBody,
-        '画格是离散的（到点换图），关键帧是插值的（中间有过渡）。这张表与时间轴「?」浮层读同一份数据（editors/help.mjs），改一处即两处同步。'
+        '纹理是离散的（到点换图），关键帧是插值的（中间有过渡）。这张表与时间轴「?」浮层读同一份数据（editors/help.mjs），改一处即两处同步。'
     );
 
     /* ─────────────────── 写入 ─────────────────── */

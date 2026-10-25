@@ -6,7 +6,7 @@
  * 历史由 paint/engine 的 history 在 setDoc 之后统一收口（契约 §9.4）。
  *
  * v6：帧操作（加帧 / 删帧 / 移帧 / 链接 / 继承 / 帧时长）整体删除。
- * 画格（cel）是按秒索引的开关事件，增删画格走 app.mjs 的
+ * 纹理（cel）是按秒索引的开关事件，增删纹理走 app.mjs 的
  * addCelAt / removeCelAt / clearCelAt / moveCel —— 它们需要精确的秒坐标，
  * 而这里只剩「对象属性」与「关键帧」两类与时间轴长度无关的写入。
  *

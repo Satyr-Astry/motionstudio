@@ -1,5 +1,5 @@
 // 时间轴的关键帧交互：加 / 选中 / 拖动改时间 / 双击删 / 复制粘贴 / 右键菜单 / 同刻多通道合并。
-// 还带一个通用右键菜单工厂（画格菜单也用同一份，保证样式与关闭行为一致）。
+// 还带一个通用右键菜单工厂（纹理菜单也用同一份，保证样式与关闭行为一致）。
 //
 // 所有外壳调用都走主文件注入的 deps（has / call / notify），本文件不直接摸 ctx。
 
@@ -852,7 +852,7 @@ export function createKeys(deps) {
 
     /**
      * 泳道空白处右键：这是「在时间轴上直接新增关键帧」的第二个入口。
-     * 「在此加画格」顺带当了画格的教学入口 —— 画格的语义就是「从这一刻起换图」。
+     * 「在此加纹理」顺带当了纹理的教学入口 —— 纹理的语义就是「从这一刻起换图」。
      */
     function laneMenu(x, y, layerId, t) {
         // 在空白处开菜单等于「换个位置操作」，旧选择跟着作废，否则 Delete 还会删远处那批
@@ -863,7 +863,7 @@ export function createKeys(deps) {
         deps.menu.open(x, y, [
             { label: '在此打关键帧', run: () => addKeyAt(layerId, t) },
             { label: '粘贴关键帧到此处', disabled: !clip, run: () => pasteKeyAt(layerId, t) },
-            { label: '在此加画格（从此刻起换图）', run: () => addCel(layerId, t) },
+            { label: '在此加纹理（从此刻起换图）', run: () => addCel(layerId, t) },
         ]);
     }
 

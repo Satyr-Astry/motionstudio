@@ -1,5 +1,5 @@
 // 对象（部件）几何层：内容尺寸、变换矩阵（含锚点）、世界/局部换算、手柄位置、点击命中。
-// 依赖：doc-model.mjs（按时间取画格位图）、transform.mjs（取轨道状态 / 矩阵 / warp 四角）。
+// 依赖：doc-model.mjs（按时间取纹理位图）、transform.mjs（取轨道状态 / 矩阵 / warp 四角）。
 // 约定：doc 空间 = 画布像素坐标；变换在 doc 空间内进行；屏幕换算留给画布叠加层。
 import { imageAt, objectById } from './doc-model.mjs';
 import { stateAt, matrixOf, warpQuad } from './transform.mjs';
@@ -23,7 +23,7 @@ export function elementState(el, time) {
     return stateAt(trk, time) || {};
 }
 
-/** 对象内容矩形尺寸：优先该时间生效的画格位图尺寸，回退文档尺寸 */
+/** 对象内容矩形尺寸：优先该时间生效的纹理位图尺寸，回退文档尺寸 */
 export function elementSize(doc, el, t) {
     const img = el ? imageAt(el, typeof t === 'number' && Number.isFinite(t) ? t : 0) : null;
     if (img && img.width && img.height) return { w: img.width, h: img.height };
@@ -428,7 +428,7 @@ export function hitTest(doc, time, x, y, opts) {
         const lx = clampIdx(Math.floor(loc.x), 0, w - 1);
         const ly = clampIdx(Math.floor(loc.y), 0, h - 1);
         const image = imageAt(el, time);
-        // 没有图像（空画格 / 纯矢量对象）：不命中。这一条不能并进下面的降级，
+        // 没有图像（空纹理 / 纯矢量对象）：不命中。这一条不能并进下面的降级，
         // 否则一个还没画任何东西的空对象会整块矩形都能点中。
         if (!image) continue;
         // 图像尺寸为 0 同样视为「没有内容」：elementSize 此时会回退到 doc 尺寸，

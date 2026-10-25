@@ -7,8 +7,10 @@
 | 文档 | 讲什么 | 什么时候必须读 |
 | --- | --- | --- |
 | [CONTRACT.md](CONTRACT.md) | 总纲：模块边界、单写者状态、零依赖约束 | 任何结构性改动之前 |
-| [CONTRACT-v6-时间模型.md](CONTRACT-v6-时间模型.md) | 「没有帧，只有时间」：`cels` / `keys` / `drawing:null` | 动时间、画格、关键帧之前 |
+| [CONTRACT-v6-时间模型.md](CONTRACT-v6-时间模型.md) | 「没有帧，只有时间」：`cels` / `keys` / `drawing:null` | 动时间、纹理、关键帧之前 |
 | [CONTRACT-v5-时间图与对象层级.md](CONTRACT-v5-时间图与对象层级.md) | 父子层级、时间通道、有效可见性与不透明度 | 动层级、蒙版、合成之前 |
+| [层级与叠放-2026-10.md](层级与叠放-2026-10.md) | **v10**：层级（`parentId`）/ 叠放（`doc.drawOrder`）/ 纹理（`cels`+`drawings`）三件事拆开；七条一致性规则、`hierarchy.mjs`·`draw-order.mjs`·`textures.mjs` 的 API、界面分工 | 动层级、叠放、纹理归属，或改对象面板/属性面板之前 |
+| [术语.md](术语.md) | 用户可见术语（纹理）与数据字段（`cels`/`drawing`）的映射，以及「字段名为什么不跟着改」 | 写任何用户可见文案之前 |
 | [CONTRACT-v3-连续时间轴与效果器.md](CONTRACT-v3-连续时间轴与效果器.md) | 连续时间轴、缓动、效果参数即通道 | 动缓动、效果、曲线之前 |
 | [CONTRACT-v7-界面模式化与模块职责.md](CONTRACT-v7-界面模式化与模块职责.md) | 三个工作区、面板归属、谁拥有哪层状态 | 动界面结构、面板之前 |
 | [CONTRACT-v8-分区与时间轴.md](CONTRACT-v8-分区与时间轴.md) | 分区、画板控件、纹理与关键帧的交互契约 | 动时间轴与画板交互之前 |

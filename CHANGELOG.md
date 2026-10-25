@@ -1,5 +1,35 @@
 # MotionStudio 更新日志
 
+## v0.3.0-alpha.11 — 2026-10-26 · 层级与叠放拆成两个模块，纹理搬进属性面板
+
+按新规则这是**加功能 + 一次结构性重构**，批次 +1（0.2.x → 0.3.0）。契约写在 `docs/层级与叠放-2026-10.md`，一句话：**三件事各管一处，互不代偿**。
+
+**1. 层级和叠放从此是两个独立事实**
+以前只有 `parentId` 一棵树，叠放顺序是 `doc.objects` 的下标——于是「把父对象挪一层」会把它和它的孩子拆开，同一棵树能排出两种画法。现在：
+- 层级 = `object.parentId`，归新模块 `app/core/hierarchy.mjs`（`parentChainOf` / `collectSubtree` / `isDescendant` / `treeOrder` / `normalizeParents`）。
+- 叠放 = `doc.drawOrder: string[]`，归新模块 `app/core/draw-order.mjs`，`drawOrder[0]` 是最上层，集合与对象集合恒等，缺字段时 `normalizeDrawOrder` 现算（等幂）。
+- **改层级不动叠放，改叠放不动层级**——这是这次重构唯一的硬规矩。
+
+绘制侧跟着改：`composite.mjs` 与 `evaluator.mjs` 都按 `drawOrderOf(doc)` 逆序画。真机核对：同样是 `objects [红, 蓝]`，`drawOrder ['b','r']` 时中心像素是 `0,0,255`，`['r','b']` 时是 `255,0,0`。
+
+**2. 对象面板一件事一个区域**
+左列从「叠放 / 父子树 / 纹理库挤在 230 px」拆成上下两块：
+- 上：「父子」面板（`app/editors/tree.mjs`，占 180 px）只编辑谁是谁的子对象——缩进 12 px/级、折叠、「N 个子对象」胶囊、拖到空白处脱父。
+- 下：「叠放」面板只回答「谁盖谁」——纯扁平列表，没有缩进、没有折叠、没有缩略图，行尾一枚「N 纹」角标说明这个对象有几张纹理。拖拽只改 `drawOrder`，一次一条撤销。
+
+**3. 纹理搬进属性面板**
+「这个对象有几张图」属于对象属性，不属于画布秩序。属性面板多了「纹理」组：缩略图、数量、动作四枚（新建 / 独特化 / 删除 / 裁到内容）、画布尺寸与重设（左 / 中 / 右对齐）。对象面板里那一整截画格库连同它的缩略图、棋盘格、折叠箭头一起删掉了——搬家后留两份实现，下次改一处就得读三处。
+
+**4. 术语统一：画格 → 纹理**
+`app/**` 里 43 个文件、386 处「画格」全部改成「纹理」（画格库 → 纹理库、画格切换点 → 纹理切换点……）。**数据字段名不改**：`cels` / `drawing` / `celTimes` 保持原样，`.msp` 格式不受影响；映射表在 `docs/术语.md`。
+
+**5. 增量播放速度与方式（alpha.10 的内容，本版一并发布）**
+见下方 v0.2.0-alpha.10 一节。
+
+**验证**：`node --test tests/*.test.mjs` → **1028 tests / 1026 pass / 2 skipped / 0 fail**；`npm run check` → 82 模块（静态检查 0 残留 0 坏 import、`node --check` 82/82）；70 个测试文件。新增 `tests/draw-order.test.mjs` 8 例、`tests/hierarchy.test.mjs` 6 例、`tests/order-render.test.mjs` 14 例。
+
+**过程记录（照旧写在这里）**：删 `layers.mjs` 死代码时 `node --check` 一路绿，删完启动页面才炸出两处孤儿调用 `drawingsOf`（副标题与「N 纹」角标各一处），改走 `textureCount(layer)` 才干净——语法检查不等于能跑，这条已经第三次应验，`npm run check:syntax` 只能拦住语法层。
+
 ## v0.2.0-alpha.10 — 2026-10-25 · 预览播放：速度与方式
 
 按新规则这是**加功能**，所以批次 +1（0.1.x → 0.2.0），`alpha.10` 接在上一个序号后面。两件事：播放能变速，播放方式补齐四种。

@@ -3,13 +3,15 @@
  *
  * core/cel.mjs 管结构与时间，这里管「像素怎么搬」：复制对象、向下合并。
  * 全部是纯函数式：返回新 doc，不改入参。
- * v6：画格由 at（秒）定位，没有帧序号 —— 合并时按两边切换点的并集逐一烘焙。
+ * v6：纹理由 at（秒）定位，没有帧序号 —— 合并时按两边切换点的并集逐一烘焙。
  */
 
 import { celAt, celTimes, objectsOf, makeObject, patchObject, patchLayer, setImageAt } from '../core/cel.mjs';
 import { createSurface, cloneSurface } from './surface.mjs';
 import { createEvaluator, drawEvaluated } from '../core/evaluator.mjs';
 import { elementMatrix, elementSize, invertMatrix, mulMatrix } from '../core/element.mjs';
+import { drawOrderOf, normalizeDrawOrder } from '../core/draw-order.mjs';
+import { collectSubtree } from '../core/timegraph.mjs';
 
 function newId(doc, base) {
     let n = 1;
@@ -32,7 +34,7 @@ function keyTimesOf(obj) {
 }
 
 /**
- * 合并要逐一烘焙的时刻：两边画格切换点 ∪ 上层的变换关键帧。
+ * 合并要逐一烘焙的时刻：两边纹理切换点 ∪ 上层的变换关键帧。
  *
  * 下层的变换关键帧**不进**这个集合：下层是画在自己的局部坐标里的，它的变换在写回之后
  * 由 evaluator 照常施加上去，采样时刻与它无关。上层的变换则必须采样 —— 上层对象在合并后
@@ -58,26 +60,53 @@ function lowerInverse(doc, lower, t) {
     return invertMatrix(elementMatrix(lower, t, elementSize(doc, lower, t)));
 }
 
-/** 在 layerId 之上复制一层（内容与所有画格位图都深拷贝，at 原样保留）。 */
+/**
+ * 在 layerId 之上复制**整棵子树**（内容与所有纹理位图都深拷贝，at 原样保留）。
+ *
+ * v10：以前只复制一个对象，复制「父对象」会得到一个没有孩子的空壳。现在按
+ * `docs/层级与叠放-2026-10.md` §3 的一致性规则走：子树内部重新映射 parentId，
+ * 子树外的父引用原样保留，克隆块插在源对象**当前层之上**（drawOrder 同位）。
+ */
 export function duplicateLayer(doc, layerId) {
     if (!doc) return doc;
     const list = objectsOf(doc);
     const i = list.findIndex((l) => l && l.id === layerId);
     if (i < 0) return doc;
-    const src = list[i];
-    const cels = (Array.isArray(src.cels) ? src.cels : []).map((c) => ({
-        at: c.at,
-        image: c.image ? cloneSurface(c.image) : null,
-    }));
-    const layer = makeObject(Object.assign({}, src, {
-        id: newId(doc, 'L'),
-        name: (src.name || '对象') + ' 副本',
-        cels,
-        transform: src.transform ? JSON.parse(JSON.stringify(src.transform)) : src.transform,
-    }));
+    const ids = collectSubtree(doc, layerId).filter((id) => list.some((l) => l && l.id === id));
+    if (!ids.length) return doc;
+    const used = new Set(list.map((l) => l && l.id));
+    const map = new Map();
+    for (const id of ids) {
+        let n = 1;
+        while (used.has('L' + n)) n += 1;
+        const nid = 'L' + n;
+        used.add(nid);
+        map.set(String(id), nid);
+    }
+    const clones = ids.map((id) => {
+        const src = list.find((l) => l && l.id === id);
+        const pid = src.parentId == null ? undefined
+            : (map.has(String(src.parentId)) ? map.get(String(src.parentId)) : src.parentId);
+        return makeObject(Object.assign({}, src, {
+            id: map.get(String(id)),
+            name: (src.name || '对象') + ' 副本',
+            parentId: pid,
+            cels: (Array.isArray(src.cels) ? src.cels : []).map((c) => ({
+                at: c.at,
+                image: c.image ? cloneSurface(c.image) : null,
+            })),
+            transform: src.transform ? JSON.parse(JSON.stringify(src.transform)) : src.transform,
+        }));
+    });
     const objects = list.slice();
-    objects.splice(i, 0, layer);
-    return Object.assign({}, doc, { objects });
+    objects.splice(i, 0, ...clones);
+    const order = drawOrderOf(doc);
+    const at = Math.max(0, order.indexOf(String(layerId)));
+    const drawOrder = normalizeDrawOrder(
+        objects,
+        order.slice(0, at).concat(clones.map((c) => c.id), order.slice(at)),
+    );
+    return Object.assign({}, doc, { objects, drawOrder });
 }
 
 /**
@@ -119,7 +148,7 @@ export function mergeDown(doc, layerId, opts) {
         const g = out.getContext('2d');
         if (!g) continue;
         g.clearRect(0, 0, out.width, out.height);
-        // 下层：画在它自己的局部坐标里，alpha 只算到「层 × 画格」这一级 ——
+        // 下层：画在它自己的局部坐标里，alpha 只算到「层 × 纹理」这一级 ——
         // 它的 state.opacity 会在写回之后由 evaluator 再乘一次，这里乘就会淡两次。
         if (hasB) drawEvaluated(g, loEv, at, { ignoreTransform: true, force: true, onlyVisible: false });
         // 上层：搬到下层局部坐标后按完整语义合成（含 state.opacity）。
@@ -128,11 +157,13 @@ export function mergeDown(doc, layerId, opts) {
             if (base) drawEvaluated(g, upEv, at, { baseMatrix: base, force: true, onlyVisible: false });
         }
         g.globalAlpha = 1;
-        // 上层此刻没有像素、下层也没有精确画格 → 合成结果与延用图一致，不必固化。
+        // 上层此刻没有像素、下层也没有精确纹理 → 合成结果与延用图一致，不必固化。
         if (!hasA && !b) continue;
         next = patchObject(next, lower.id, (layer) => setImageAt(layer, at, out));
     }
     const objects = objectsOf(next).filter((l) => l && l.id !== upper.id);
-    next = Object.assign({}, next, { objects });
+    // v10：叠放表要跟着摘掉上层；下层的层号保持不动（合并结果落在下层身上）。
+    const drawOrder = normalizeDrawOrder(objects, drawOrderOf(next));
+    next = Object.assign({}, next, { objects, drawOrder });
     return { doc: patchLayer(next, lower.id, { visible: true }), merged: upper.name };
 }

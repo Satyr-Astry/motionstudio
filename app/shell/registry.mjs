@@ -14,6 +14,7 @@ import { mount as mountCanvas } from '../editors/canvas.mjs';
 import { mount as mountBoard } from '../editors/board.mjs';
 import { mount as mountToolbar } from '../editors/toolbar.mjs';
 import { mount as mountLayers } from '../editors/layers.mjs';
+import { mount as mountTree } from '../editors/tree.mjs';
 import { mount as mountTimeline } from '../editors/timeline.mjs';
 import { mount as mountCurve } from '../editors/curve.mjs';
 import { mount as mountPalette } from '../editors/palette.mjs';
@@ -55,15 +56,18 @@ export const EDITORS = [
     // 画板：对象的出生地。自带 canvas 与工具条，与画布的单例宿主互不相干。
     { id: 'board', title: '画板', hint: '只编辑当前这一张纹理（与编排分离）', mount: mountBoard },
     { id: 'toolbar', title: '工具', hint: '画笔 / 笔尖 / 撤销', mount: mountToolbar },
-    { id: 'layers', title: '对象', hint: '对象列表、可见性与不透明度', mount: mountLayers },
+    // 层级与叠放拆成两个面板（docs/层级与叠放-2026-10.md §5）：
+    // tree 只编辑 parentId（跟谁动），layers 只管 drawOrder（谁盖谁），两边各改一处数据。
+    { id: 'tree', title: '父子', hint: '父子关系（跟谁动）', mount: mountTree },
+    { id: 'layers', title: '叠放', hint: '叠放顺序（谁盖谁）', mount: mountLayers },
     { id: 'timeline', title: '时间轴', hint: '帧、时长与播放', mount: mountTimeline },
     { id: 'curve', title: '曲线', hint: '对象变换的连续曲线与贝塞尔切线', mount: mountCurve },
     { id: 'palette', title: '调色', hint: '色相、明度与最近颜色', mount: mountPalette },
     { id: 'properties', title: '属性', hint: '文档、帧与变换参数', mount: mountProperties },
     // 设置模式的三块：文档 / 洋葱皮 / 信息（原先挤在属性面板里）
     { id: 'doc', title: '文档', hint: '画布尺寸、帧率与循环', mount: withPropShell(mountDoc) },
-    { id: 'onion', title: '洋葱皮', hint: '前后画格的残影', mount: withPropShell(mountOnion) },
-    { id: 'info', title: '信息', hint: '对象 / 画格 / 关键帧统计', mount: withPropShell(mountInfo) },
+    { id: 'onion', title: '洋葱皮', hint: '前后纹理的残影', mount: withPropShell(mountOnion) },
+    { id: 'info', title: '信息', hint: '对象 / 纹理 / 关键帧统计', mount: withPropShell(mountInfo) },
     // 偏好：本机习惯（localStorage ms.prefs），不随项目走，所以独立成一块
     { id: 'prefs', title: '偏好', hint: '自动保存、撤销步数、吸附与画布底色', mount: withPropShell(mountPrefs) },
 

@@ -244,7 +244,7 @@ test('阶段二使用点：时间轴 / 曲线 / 区域头的图标名都真实�
     const tl = read('../app/editors/timeline-paint.mjs');
     const tlSpec = [...tl.matchAll(/icon:\s*'([a-z-]+)'/g)].map((m) => m[1]);
     const tlCall = [...tl.matchAll(/\bicon\('([a-z-]+)'/g)].map((m) => m[1]);
-    // 13（v8 走带 5 + 画格 5 + 关键帧/磁铁/缩放等） + 2（v10 预览播放的速度与方式）
+    // 13（v8 走带 5 + 纹理 5 + 关键帧/磁铁/缩放等） + 2（v10 预览播放的速度与方式）
     assert.equal(tlSpec.length, 15, '时间轴工具条一共 15 个按钮，实际登记 ' + tlSpec.length);
     for (const name of tlSpec.concat(tlCall)) {
         assert.ok(hasIcon(name), '时间轴用了不存在的图标：' + name);

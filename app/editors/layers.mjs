@@ -6,37 +6,13 @@ import { addLayer, removeLayer, moveLayer, patchLayer, celAt, imageAt, celTimes,
 import { objectSize } from '../core/doc-model.mjs';
 import { icon } from '../core/icons.mjs';
 import { duplicateLayer, mergeDown } from '../paint/ops.mjs';
-import { thumbFrom } from '../paint/thumb.mjs';
-
-const THUMB_W = 40;
-const THUMB_H = 30;
-// 画格库里的缩略图比对象行更小一档：它表示的是同一对象的一张画格（一张图），不是另一个对象
-const CEL_THUMB_W = 34;
-const CEL_THUMB_H = 22;
-const CHECKER = 4;        // 空 cel 棋盘格边长
-// 棋盘配色与 panels.css 里 .lyr-thumb 现有棋盘保持一致（--panel-2 / --bg，对比 ≈1.6:1）
-const CHECKER_TOKENS = ['--panel-2', '--bg'];
-const CHECKER_FALLBACK = ['#26282d', '#141518'];
-let checkerCache = null;  // 首次绘制时从设计令牌读取并缓存
+import { textureCount } from '../core/textures.mjs';
 
 // 对象种类文案（CONTRACT-v2 §1：kind = 'paint' 手绘 / 'image' 导入图片）
 const KIND_TEXT = { paint: '手绘', image: '图片' };
-let dragId = null;
-// v8：父对象的折叠状态（只影响面板显示，不进文档）。localStorage 里存 id 数组。
-let collapsedIds = new Set();
-try {
-    const raw = JSON.parse(localStorage.getItem('ms.layers.collapsed') || '[]');
-    if (Array.isArray(raw)) collapsedIds = new Set(raw.filter((x) => typeof x === 'string'));
-} catch (err) {
-    collapsedIds = new Set();
-}
-function saveCollapsed() {
-    try {
-        localStorage.setItem('ms.layers.collapsed', JSON.stringify([...collapsedIds]));
-    } catch (err) {
-        /* 存不进去只影响下次启动的展开状态，不该打断交互 */
-    }
-}   // v5：正在拖拽的对象 id（dragstart 里写入）
+let dragId = null;   // v5：正在拖拽的对象 id（dragstart 里写入）
+// v10：折叠体系随「叠放列表扁平化」下线 —— 本面板只回答「谁盖谁」，没有子层级可折；
+// 父子层级与折叠归「父子」面板（tree.mjs）。旧 localStorage 键不再写入。
 let popover = null;   // v5：时间通道浮层（懒创建、模块级复用）
 
 // v8（第十六批）：对象动作不再折进 ⋯ 菜单。
@@ -198,46 +174,8 @@ export function mount(el, ctx) {
     const list = document.createElement('div');
     list.className = 'lyr-list';
 
-    // ── 画格库（v9）：对象管理面板的下半截。
-    // 画格（drawing）= 一张可以单独拿出来复用和切换的图；时间轴上的只是「曝光」
-    // （某段时刻显示哪张画格）。所以这里列的是「这个对象有几张画格」，
-    // 不是「时间轴上有几个时刻」——同一张画格可以被多个时刻用到，改它所有时刻一起变。
-    const cels = document.createElement('div');
-    cels.className = 'lyr-cels';
-    const celsHead = document.createElement('div');
-    celsHead.className = 'lyr-cels-head';
-    const celsTitle = document.createElement('span');
-    celsTitle.className = 'lyr-cels-title';
-    celsTitle.textContent = '纹理';
-    const celsCount = document.createElement('span');
-    celsCount.className = 'lyr-cels-count';
-    celsCount.textContent = '0';
-    const celsActs = document.createElement('span');
-    celsActs.className = 'lyr-cels-acts';
-    // [act, 图标名, 按钮文字（null = 纯图标）, 提示]
-    const CEL_ACTS = [
-        ['add', 'plus', null, '新建一张纹理：只进纹理库，不占时间轴（点这一行才会放到当前时刻）'],
-        ['dup', 'copy', null, '复制当前纹理：独特化成新图，之后改它不影响原来的时刻'],
-        ['prev', 'chevron-left', null, '跳到上一个曝光点（Shift+,）'],
-        ['next', 'chevron-right', null, '跳到下一个曝光点（Shift+.）'],
-        ['del', 'trash', null, '删除这张纹理（所有曝光它的时刻一起消失）'],
-    ];
-    const celBtn = new Map();
-    for (const [act, iconName, text, title] of CEL_ACTS) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'lyr-cels-btn ' + (text ? 'ms-icon-label' : 'ms-icon-btn');
-        b.dataset.celact = act;
-        b.innerHTML = icon(iconName) + (text ? '<span>' + text + '</span>' : '');
-        b.title = title;
-        b.setAttribute('aria-label', title);
-        celsActs.appendChild(b);
-        celBtn.set(act, b);
-    }
-    const celList = document.createElement('div');
-    celList.className = 'lyr-cel-list';
-    celsHead.append(celsTitle, celsCount, celsActs);
-    cels.append(celsHead, celList);
+    // v10：纹理库整块已迁到属性面板的「纹理」组（app/editors/prop-textures.mjs）。
+    // 对象面板只回答「谁盖谁」，同一功能不留两个入口。
 
     const foot = document.createElement('div');
     foot.className = 'lyr-foot';
@@ -245,7 +183,7 @@ export function mount(el, ctx) {
     countEl.className = 'lyr-count';
     foot.appendChild(countEl);
 
-    root.append(bar, alphaWrap, list, cels, foot);
+    root.append(bar, alphaWrap, list, foot);
     el.appendChild(root);
 
     /* ── L3：列表空白区 = 移到根层末尾（拖到列表下方松手就提起父级） ── */
@@ -291,7 +229,6 @@ export function mount(el, ctx) {
     /* ── L3：拖拽落点状态与视觉 ──
        只在「目标 / 模式」变化时重绘；dragover 每帧都会来，改 class 比重建 DOM 便宜得多。 */
     let dropState = { targetId: null, mode: null, ok: false };
-    let tempExpandedId = null;   // 「投进去」时临时展开的折叠行，离开后原样收起
 
     const dropLine = document.createElement('div');
     dropLine.className = 'lyr-drop-line';
@@ -340,12 +277,6 @@ export function mount(el, ctx) {
     function endDropHover() {
         clearDropMarks();
         dropState = { targetId: null, mode: null, ok: false };
-        if (tempExpandedId) {
-            collapsedIds.add(tempExpandedId);
-            tempExpandedId = null;
-            saveCollapsed();
-            paint();
-        }
     }
 
     function hoverRow(targetId, mode) {
@@ -362,12 +293,6 @@ export function mount(el, ctx) {
         }
         if (mode === 'into') {
             rec.row.classList.add('drop-into');
-            // 折叠的目标临时展开：不然「投进去」之后东西凭空消失，用户会以为丢了
-            if (collapsedIds.has(targetId) && tempExpandedId !== targetId) {
-                tempExpandedId = targetId;
-                collapsedIds.delete(targetId);
-                paint();
-            }
             return;
         }
         const indent = indentOf(depthOf(targetId));
@@ -432,7 +357,7 @@ export function mount(el, ctx) {
         return id && objectsOf(doc).some((l) => l.id === id) ? id : null;
     }
 
-    // 唯一时间源：ctx.time()（连续秒）。缩略图与「生效画格」都按这个时间取。
+    // 唯一时间源：ctx.time()（连续秒）。缩略图与「生效纹理」都按这个时间取。
     function nowTime() {
         const fn = typeof ctx.time === 'function' ? ctx.time : null;
         const v = fn ? Number(fn()) : 0;
@@ -444,29 +369,13 @@ export function mount(el, ctx) {
         row.className = 'lyr-row';
         row.dataset.id = layer.id;
 
-        // 折叠箭头：只有「有子对象」的行才显示，点它只切面板显示，不改文档。
-        // 图标随展开态在 chevron-right / chevron-down 之间切（原先用 ▾/▸ 文本，带 aria-expanded）。
-        const caret = document.createElement('button');
-        caret.type = 'button';
-        caret.className = 'lyr-caret ms-icon-btn';
-        caret.innerHTML = icon('chevron-down');
-        caret.dataset.icon = 'chevron-down';
-        caret.title = '收起 / 展开子对象';
-        caret.setAttribute('aria-label', caret.title);
-        caret.setAttribute('aria-expanded', 'true');
-        caret.style.display = 'none';
-
+        // v10：扁平「叠放」列表没有子层级，折叠箭头随折叠体系一起下线。
         const vis = document.createElement('button');
         vis.type = 'button';
         vis.className = 'lyr-vis ms-icon-btn';
         vis.title = '显示 / 隐藏';
         vis.innerHTML = icon('eye');
         vis.dataset.icon = 'eye';
-
-        const thumb = document.createElement('canvas');
-        thumb.className = 'lyr-thumb';
-        thumb.width = THUMB_W;
-        thumb.height = THUMB_H;
 
         const meta = document.createElement('div');
         meta.className = 'lyr-meta';
@@ -552,8 +461,8 @@ export function mount(el, ctx) {
             commitDrop(from, { mode, targetId });
         });
 
-        row.append(caret, vis, thumb, meta, kids, timeBadge);
-        return { row, caret, vis, thumb, name, sub, timeBadge, kids };
+        row.append(vis, meta, kids, timeBadge);
+        return { row, vis, name, sub, timeBadge, kids };
     }
 
     // ── 时间通道浮层（v5）
@@ -706,45 +615,6 @@ const TIME_MODE_TEXT = [
         host.style.top = Math.round(top) + 'px';
     }
 
-    // 缩略图：先铺棋盘格底（空 cel 也能看出「这对象是空的」），再把 cel 内容等比叠上去。
-    // thumbFrom 传 bg = null 才不覆盖底色，等比缩放居中由它内部完成，不会拉伸。
-    function drawThumb(rec, layer, cel, resolved) {
-        const g = rec.thumb.getContext('2d');
-        if (!g) return;
-        g.clearRect(0, 0, THUMB_W, THUMB_H);
-        drawChecker(g, THUMB_W, THUMB_H);
-        g.imageSmoothingEnabled = false;
-        const img = resolved === undefined ? cel && cel.image : resolved;
-        g.drawImage(thumbFrom(img || null, THUMB_W, THUMB_H, null), 0, 0);
-    }
-
-    // 4px 交替棋盘：取自设计令牌（--panel-2 / --bg），取不到时退回深灰
-    function drawChecker(g, w, h) {
-        const pair = checkerColors();
-        for (let y = 0; y < h; y += CHECKER) {
-            for (let x = 0; x < w; x += CHECKER) {
-                const even = (((x / CHECKER) | 0) + ((y / CHECKER) | 0)) % 2 === 0;
-                g.fillStyle = even ? pair[0] : pair[1];
-                g.fillRect(x, y, Math.min(CHECKER, w - x), Math.min(CHECKER, h - y));
-            }
-        }
-    }
-
-    // 主题令牌在运行中不变，取一次缓存；无样式环境退回同令牌的十六进制值
-    function checkerColors() {
-        if (checkerCache) return checkerCache;
-        const out = CHECKER_TOKENS.map((name, i) => {
-            try {
-                const cs = getComputedStyle(document.documentElement);
-                const v = String(cs.getPropertyValue(name) || '').trim();
-                return v || CHECKER_FALLBACK[i];
-            } catch (err) {
-                return CHECKER_FALLBACK[i];
-            }
-        });
-        checkerCache = out;
-        return checkerCache;
-    }
 
     function kindLabel(layer) {
         return KIND_TEXT[layer && layer.kind] || KIND_TEXT.paint;
@@ -759,21 +629,13 @@ const TIME_MODE_TEXT = [
         const seen = new Set();
         let prev = null;
         const all = objectsOf(doc);
-        const hasChild = new Set();
-        for (const it of all) if (it && it.parentId != null) hasChild.add(it.parentId);
-        // 任一祖先被折叠 → 这一行不显示（沿 parentId 上溯，环由 maxDepth 兜住）
-        const hiddenBy = (layer) => {
-            let node = layer;
-            let guard = 0;
-            while (node && node.parentId != null && guard < 64) {
-                if (collapsedIds.has(node.parentId)) return true;
-                node = all.find((x) => x && x.id === node.parentId) || null;
-                guard += 1;
-            }
-            return false;
-        };
-        // L2：按父子链深度优先渲染 —— 父在前、子紧随。同层内部仍按数组相对顺序。
-        treeOrder(all).forEach(({ layer, depth }) => {
+        // 扁平化（docs/层级与叠放-2026-10.md §5）：叠放面板只回答「谁盖谁」，
+        // 顺序直接取 drawOrder（[0] = 最上层），与画布绘制顺序同源；
+        // 层级缩进与父子排序归「父子」面板（tree.mjs 走 core/hierarchy 的 treeOrder）。
+        const order = typeof ctx.drawOrder === 'function' ? ctx.drawOrder() : [];
+        const byId = new Map(all.map((o) => [o && o.id, o]));
+        const flat = order.length ? order.map((id) => byId.get(id)).filter(Boolean) : all.slice();
+        flat.forEach((layer) => {
             let rec = rows.get(layer.id);
             if (!rec) {
                 rec = makeRow(layer);
@@ -787,21 +649,8 @@ const TIME_MODE_TEXT = [
             prev = rec.row;
 
             const cel = celAt(layer, t);
-            // v6：缩略图取 t 时刻生效的位图（画格开启后一直生效，无需再解析「继承」）
-            drawThumb(rec, layer, cel, imageAt(layer, t));
 
-            const kids = hasChild.has(layer.id);
-        rec.caret.style.display = kids ? '' : 'none';
-        // 展开 = chevron-down（头朝下），收起 = chevron-right。只在文本变化时才重设 innerHTML，
-        // 否则每次 paint 都重建 DOM 会让 hover/焦点抖动。
-        const wantCaret = collapsedIds.has(layer.id) ? 'chevron-right' : 'chevron-down';
-        if (kids && rec.caret.dataset.icon !== wantCaret) {
-            rec.caret.dataset.icon = wantCaret;
-            rec.caret.innerHTML = icon(wantCaret);
-            rec.caret.setAttribute('aria-expanded', wantCaret === 'chevron-down' ? 'true' : 'false');
-        }
-        rec.row.style.display = hiddenBy(layer) ? 'none' : '';
-        rec.row.classList.toggle('is-active', layer.id === active);
+            rec.row.classList.toggle('is-active', layer.id === active);
             rec.row.classList.toggle('is-sel', layer.id === sel);
             rec.row.classList.toggle('is-hold', !!(cel && cel.hold && !cel.image));
             rec.row.classList.toggle('is-linked', !!(cel && cel.group));
@@ -815,13 +664,13 @@ const TIME_MODE_TEXT = [
                 rec.vis.innerHTML = icon(wantEye);
             }
             if (rec.name.textContent !== layer.name) rec.name.textContent = layer.name;
-            // 副标题：种类 + 库内画格张数 + 关键帧数。
+            // 副标题：种类 + 库内纹理张数 + 关键帧数。
             // 这里必须短：.lyr-sub 的宽度预算实测只有 134px（11px 字号 ≈ 12 个汉字），
-            // 原先「0 画格 · 1 曝露 · 1 关键帧」写完 141px 会被 CSS 截成「1 关…」，
+            // 原先「0 纹理 · 1 曝露 · 1 关键帧」写完 141px 会被 CSS 截成「1 关…」，
             // 用户看到的是半截词。曝光处数不是「几个时刻在用它」，完整版放进 row.title。
-            const libCount = drawingsOf(layer && layer.id).length;
+            const libCount = textureCount(layer);
             const expoCount = celTimes(layer).length;
-            let sub = kindLabel(layer) + ' · ' + libCount + ' 画格 · ' + keyCount(layer) + ' 键';
+            let sub = kindLabel(layer) + ' · ' + libCount + ' 纹理 · ' + keyCount(layer) + ' 键';
     // 对象自己带分辨率：只有和文档画布不一样时才标出来，否则每行都挂一遍 900×640 是噪音
     const osz = objectSize(layer);
     if (osz && doc && (osz.w !== doc.width || osz.h !== doc.height)) sub += ' · ' + osz.w + '×' + osz.h;
@@ -831,32 +680,20 @@ const TIME_MODE_TEXT = [
             const tip = layer.name + ' · 不透明度 ' + pct + '% · ' + sub + ' · 曝光 ' + expoCount + ' 处';
             if (rec.row.title !== tip) rec.row.title = tip;
 
-            // L2：父子缩进沿用已有实现（6 + depth*12），引导线宽度交给 CSS 的 --guide-w
-            const capped = Math.min(MAX_VISIBLE_DEPTH, Math.max(0, Number(depth) || 0));
-            const pad = indentOf(depth);
-            if (rec.row.style.paddingLeft !== pad + 'px') rec.row.style.paddingLeft = pad + 'px';
-            rec.row.classList.toggle('is-child', depth > 0);
-            const guide = capped > 0 ? capped * 12 + 'px' : '0px';
-            rec.row.style.setProperty('--guide-w', guide);
-            // 超过 6 级：行尾标 +N，说明「这行还有 N 级没被缩进出来」
-            const extra = Math.max(0, Number(depth) - capped);
-            const deepTxt = extra > 0 ? '+' + extra : '';
-            if ((rec.row.dataset.deep || '') !== deepTxt) {
-                if (deepTxt) rec.row.dataset.deep = deepTxt;
-                else delete rec.row.dataset.deep;
-            }
-            // L2：行尾「N 个子对象」胶囊 —— 拖父对象时整棵子树都会跟着走，先让人看见有多少
-            const hasKids = hasChild.has(layer.id);
-            rec.kids.hidden = !hasKids;
-            if (hasKids) {
-                const kidCount = kidCountOf(all, layer.id);
-                // 面板只有 230px 宽：胶囊写全称「N 个子对象」会把名字挤成省略号，
-                // 所以面板里只放「N 子」，完整说法进 title
-                const ktxt = kidCount + ' 子';
-                if (rec.kids.textContent !== ktxt) rec.kids.textContent = ktxt;
-                const ktip = '含 ' + kidCount + ' 个子对象（拖动这一行会整棵子树一起移动）';
-                if (rec.kids.title !== ktip) rec.kids.title = ktip;
-            }
+            // 叠放列表是纯扁平的（docs/层级与叠放-2026-10.md §5）：
+            // 层级与缩进归「父子」面板（tree.mjs），这里只回答「谁盖谁」，所以不再算 depth 缩进。
+            rec.row.classList.remove('is-child');
+            if (rec.row.style.paddingLeft) rec.row.style.paddingLeft = '';
+            if (rec.row.style.getPropertyValue('--guide-w')) rec.row.style.removeProperty('--guide-w');
+            if (rec.row.dataset.deep) delete rec.row.dataset.deep;
+            // 行尾角标改成「N 纹」：叠放面板该说的是「这个对象有几张纹理」；
+            // 子对象数属于父子树（那边有自己的「N 个子对象」胶囊），两个面板各说各的。
+            const texCount = textureCount(layer);
+            rec.kids.hidden = false;
+            const ktxt = texCount + ' 纹';
+            if (rec.kids.textContent !== ktxt) rec.kids.textContent = ktxt;
+            const ktip = '共 ' + texCount + ' 张纹理（这个角标不表示子对象数，子对象看「父子」面板）';
+            if (rec.kids.title !== ktip) rec.kids.title = ktip;
             const ident = typeof ctx.isLayerTimeIdentity === 'function' ? ctx.isLayerTimeIdentity(layer.id) : true;
             rec.timeBadge.classList.toggle('is-off', ident);
             const timeTip =
@@ -908,147 +745,22 @@ const TIME_MODE_TEXT = [
         alphaVal.textContent = pct + '%';
     }
 
-    /* ── 画格库：这个对象有哪些画格、每张被几个时刻用到、当前时刻在用的是哪张 ──
-       数据层里 obj.cels[{ at, image }] 的 image 带 drawingId，同一张图可以被多个 at 引用，
-       所以这里的行 = 画格（drawing），不是时刻。点一行 = 把这张画格放到当前时刻（切换）；
-       要让它只属于当前时刻就「独特化」（拷一张新图）。时间轴那边只回答「什么时候显示哪张」。 */
-
-    const celRows = new Map(); // drawingId → { row, thumb, at, sub }
-
-    // 画格命令都挂在 ctx 上（app\shell\app.mjs 提供）；缺失时退化成空库，别让面板整块炸掉
-    function celApi(name) {
-        return typeof ctx[name] === 'function' ? ctx[name] : null;
-    }
-
-    function drawingsOf(objId) {
-        const fn = celApi('drawingsOf');
-        if (!fn || !objId) return [];
-        try {
-            const out = fn(objId);
-            return Array.isArray(out) ? out : [];
-        } catch (err) {
-            return [];
-        }
-    }
-
-    function currentDrawingOf(objId) {
-        const fn = celApi('currentDrawingId');
-        if (!fn || !objId) return null;
-        try {
-            const v = fn(objId);
-            return v == null ? null : String(v);
-        } catch (err) {
-            return null;
-        }
-    }
-
-    // 曝光的时刻 → 「0.00s、1.20s」；超过 4 个折成「等 N 处」，tooltip 不该写成一条长龙
-    function timesText(times) {
-        const all = Array.isArray(times) ? times : [];
-        const head = all.slice(0, 4).map((t) => Number(t).toFixed(2) + 's');
-        return head.join('、') + (all.length > head.length ? ' 等 ' + all.length + ' 处' : '');
-    }
-
-    function makeCelRow() {
-        const row = document.createElement('div');
-        row.className = 'lyr-cel';
-        const thumb = document.createElement('canvas');
-        thumb.className = 'lyr-cel-thumb';
-        thumb.width = CEL_THUMB_W;
-        thumb.height = CEL_THUMB_H;
-        const meta = document.createElement('div');
-        meta.className = 'lyr-cel-meta';
-        const at = document.createElement('div');
-        at.className = 'lyr-cel-at';
-        const sub = document.createElement('div');
-        sub.className = 'lyr-cel-sub';
-        meta.append(at, sub);
-        row.append(thumb, meta);
-        return { row, thumb, at, sub };
-    }
-
-    function syncLibrary(doc, active) {
-        const drawings = drawingsOf(active);
-        const cur = currentDrawingOf(active);
-
-        celsTitle.textContent = '画格';
-        celsCount.textContent = doc ? String(drawings.length) : '—';
-
-        const seen = new Set();
-        let prev = null;
-        for (let i = 0; i < drawings.length; i++) {
-            const d = drawings[i] || {};
-            const id = d.id == null ? '' : String(d.id);
-            if (!id) continue;
-            seen.add(id);
-            let rec = celRows.get(id);
-            if (!rec) {
-                rec = makeCelRow();
-                celRows.set(id, rec);
-            }
-            rec.row.dataset.drawing = id;
-            const want = prev ? prev.nextSibling : celList.firstChild;
-            if (want !== rec.row) celList.insertBefore(rec.row, want);
-            prev = rec.row;
-
-            const used = Array.isArray(d.times) ? d.times.length : 0;
-            // 编号要稳定：用画格 id 里的序号（dw-7 → 画格 7），不能按列表下标算——
-            // 切换一次曝光顺序就变，按下标算会让「画格 1」跳到别的行上去。
-            const m = /(\d+)$/.exec(id);
-            rec.at.textContent = '纹理 ' + (m ? m[1] : i + 1);
-            rec.sub.textContent = used ? '×' + used + ' 处' : '未使用';
-
-            const g = rec.thumb.getContext('2d');
-            if (g) {
-                g.clearRect(0, 0, CEL_THUMB_W, CEL_THUMB_H);
-                drawChecker(g, CEL_THUMB_W, CEL_THUMB_H);
-                g.imageSmoothingEnabled = false;
-                g.drawImage(thumbFrom(d.image || null, CEL_THUMB_W, CEL_THUMB_H, null), 0, 0);
-            }
-
-            rec.row.classList.toggle('is-cur', !!cur && id === cur);
-            rec.row.title = used
-                ? '点击把这张画格放到当前时刻（切换）· 已用于 ' + timesText(d.times)
-                : '点击把这张画格放到当前时刻（切换）· 还没被任何时刻用到';
-        }
-        for (const [id, rec] of celRows) {
-            if (seen.has(id)) continue;
-            rec.row.remove();
-            celRows.delete(id);
-        }
-
-        // 无对象时整排置灰；只有一张画格时「删」也置灰（点击仍会给出中文提示）
-        const none = !active;
-        setOff(celBtn.get('add'), none);
-        setOff(celBtn.get('dup'), none || cur == null);
-        setOff(celBtn.get('prev'), none || !drawings.length);
-        setOff(celBtn.get('next'), none || !drawings.length);
-        // 播放头落在两段曝光之间时 cur 是 null，但「删哪张」仍然明确（库里第一张 / 当前那张），
-        // 以前这里把按钮置灰，用户点了没反应，要点一下某行才能删 —— 就是「要重新点一下」的根因
-        setOff(celBtn.get('del'), none || drawings.length <= 1);
-    }
-
+    // v10：纹理库（纹理库）整块已迁到属性面板的「纹理」组，这里不再维护第二份。
     function paint() {
         const doc = ctx.doc();
         if (!doc) {
             list.textContent = '';
             rows.clear();
-            celList.textContent = '';
-            celRows.clear();
             countEl.textContent = '—';
-            celsCount.textContent = '—';
-            celsTitle.textContent = '画格';
             alpha.disabled = true;
             alphaVal.textContent = '—';
             for (const b of actBtn.values()) b.disabled = true;
-            for (const b of celBtn.values()) setOff(b, true);
             return;
         }
         const active = activeId(doc);
         syncRows(doc, active, selectedId(doc), nowTime());
         syncBar(doc, active);
         syncAlpha(doc, active);
-        syncLibrary(doc, active);
     }
 
     // ── 工具条 / ⋯ 菜单动作：动作体只有这一份，两个入口都走 runAct
@@ -1124,128 +836,13 @@ const TIME_MODE_TEXT = [
         paint();
     });
 
-    /* ── 画格库动作：复用 ctx 的画格命令，面板里不另算时间逻辑 ── */
-
-    celsActs.addEventListener('click', (e) => {
-        const btn = e.target.closest ? e.target.closest('.lyr-cels-btn') : null;
-        if (!btn) return;
-        const doc = ctx.doc();
-        if (!doc) return;
-        const act = btn.dataset.celact;
-        const active = activeId(doc);
-
-        if (act === 'prev' || act === 'next') {
-            if (act === 'prev' && typeof ctx.goPrevCel === 'function') ctx.goPrevCel();
-            else if (typeof ctx.goNextCel === 'function') ctx.goNextCel();
-            paint();
-            return;
-        }
-        if (!active) {
-            notify('先选一个对象');
-            return;
-        }
-        if (act === 'add') {
-            // 新建画格只往库里加一张图，**不占时间轴**。
-            // 库 = 「有哪些图」，曝光 = 「哪些时刻显示哪张」；把新图放到时间上是下一个动作。
-            if (typeof ctx.newDrawing !== 'function') {
-                notify('新建画格：该操作尚未接线');
-                return;
-            }
-            const made = ctx.newDrawing(active);
-            if (!made) notify('新建画格失败');
-            else notify('已新建一张画格（未使用）· 点这一行放到当前时刻');
-        } else if (act === 'dup') {
-            // 复制当前画格 = 独特化：拷一张新图挂到当前时刻，之后改它不影响别的时刻
-            const fn = celApi('makeUniqueCel');
-            if (!fn) {
-                notify('复制画格：该操作尚未接线');
-                return;
-            }
-            if (fn(active, nowTime()) === false) notify('当前时刻没有可复制的画格');
-        } else if (act === 'del') {
-            // 删的是「这一张纹理」：所有曝光它的时刻一起消失
-            const fn = celApi('removeDrawing');
-            const lib = drawingsOf(active);
-            // 播放头所在时刻有纹理就删它；没有（落在两段曝光之间）就删「最近一张没被用到的」，
-            // 全都用到就退到第一张（此时 removeDrawing 会拒绝并提示「至少要保留一张纹理」）。
-            const unused = lib.filter((d) => !d.times || !d.times.length);
-            // 与 Del 一致：先删未使用的，再删当前显示的，最后兜底第一张
-            const id = (unused.length ? unused[unused.length - 1].id : null)
-                || currentDrawingOf(active)
-                || (lib[0] && lib[0].id)
-                || null;
-            if (!fn || !id) {
-                notify('没有可删除的纹理');
-                return;
-            }
-            if (fn(active, id) === false) notify('至少要保留一张纹理');
-            else if (typeof ctx.requestRender === 'function') ctx.requestRender();
-        }
-        paint();
-    });
-
-    // 点一行 = 把这张画格放到当前时刻（切换）。
-    // 已经是当前那张就只重绘：不写文档，免得每次点一下都平白多一步 undo。
-    celList.addEventListener('click', (e) => {
-        const row = e.target.closest ? e.target.closest('.lyr-cel') : null;
-        if (!row) return;
-        const doc = ctx.doc();
-        if (!doc) return;
-        const active = activeId(doc);
-        if (!active) return;
-        const id = row.dataset.drawing;
-        if (!id) return;
-        if (id !== currentDrawingOf(active)) {
-            const fn = celApi('placeDrawing');
-            if (!fn) {
-                notify('切换画格：该操作尚未接线');
-                return;
-            }
-            if (fn(active, nowTime(), id) === false) notify('这张画格放不到当前时刻');
-        }
-        paint();
-    });
-
-    // 双击一行 = 独特化：把当前时刻的这张画格拷成一张新图（等同「复」，但只影响当前时刻）
-    celList.addEventListener('dblclick', (e) => {
-        const row = e.target.closest ? e.target.closest('.lyr-cel') : null;
-        if (!row) return;
-        e.preventDefault();
-        const doc = ctx.doc();
-        if (!doc) return;
-        const active = activeId(doc);
-        if (!active) return;
-        const fn = celApi('makeUniqueCel');
-        if (!fn) {
-            notify('独特化画格：该操作尚未接线');
-            return;
-        }
-        if (fn(active, nowTime()) === false) notify('当前时刻没有可独特化的画格');
-        paint();
-    });
-
+    // v10：纹理库的动作与行交互整块随库一起搬到属性面板「纹理」组（prop-textures.mjs）。
     // ── 行内交互：选对象 / 切可见性 / 双击改名
     list.addEventListener('click', (e) => {
         const row = e.target.closest ? e.target.closest('.lyr-row') : null;
         if (!row) return;
         const id = row.dataset.id;
-        const caret = e.target.closest ? e.target.closest('.lyr-caret') : null;
-        if (caret) {
-            // 点箭头 = 只折这一支（后代的折叠状态各自保留）；
-            // Alt+点 = 整支收起 / 整支展开（深层树上一次收拢，再点一次全部放回来）
-            if (e.altKey) {
-                const ids = subtreeIds(objectsOf(ctx.doc()), id);
-                const allFolded = ids.every((x) => collapsedIds.has(x));
-                for (const x of ids) {
-                    if (allFolded) collapsedIds.delete(x);
-                    else collapsedIds.add(x);
-                }
-            } else if (collapsedIds.has(id)) collapsedIds.delete(id);
-            else collapsedIds.add(id);
-            saveCollapsed();
-            paint();
-            return;
-        }
+        // v10：折叠箭头已随扁平化下线（层级在 tree.mjs），这里不再处理 .lyr-caret。
         const vis = e.target.closest ? e.target.closest('.lyr-vis') : null;
         if (vis) {
             ctx.setDoc((d) => patchLayer(d, id, { visible: !isVisible(d, id) }));
@@ -1342,7 +939,7 @@ const TIME_MODE_TEXT = [
     const off = typeof ctx.subscribeDoc === 'function' ? ctx.subscribeDoc(() => paint()) : () => {};
 
     // 切帧 / 切对象时把当前对象行滚进可视区；重绘交给 refresh，避免重复绘制缩略图
-    // 把一个行滚进可视区（对象行与画格行共用）。
+    // 把一个行滚进可视区（对象行与纹理行共用）。
     // 坐标必须按滚动盒自己的内容系算：offsetTop 相对的是最近的定位祖先（这里是 .area-body），
     // 和 box.scrollTop 不是一个参考系，列表一滚就会算飞；rect 相减才是「行在内容里的位置」。
     function scrollRowInto(box, row) {
@@ -1365,7 +962,6 @@ const TIME_MODE_TEXT = [
         if (!doc) return;
         const rec = rows.get(activeId(doc));
         scrollRowInto(list, rec && rec.row);
-        scrollRowInto(celList, celList.querySelector ? celList.querySelector('.lyr-cel.is-cur') : null);
     }
 
     paint();

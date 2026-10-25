@@ -62,7 +62,7 @@ test('normCel：at 非法返回 null，合法则保留 image', () => {
     assert.equal(c.image.tag, 'a');
 });
 
-test('makeObject：没有画格时自动补一个 at=0 的空画格', () => {
+test('makeObject：没有纹理时自动补一个 at=0 的空纹理', () => {
     const o = makeObject({ name: '甲' });
     assert.equal(o.cels.length, 1);
     assert.equal(o.cels[0].at, 0);
@@ -70,7 +70,7 @@ test('makeObject：没有画格时自动补一个 at=0 的空画格', () => {
     assert.equal(o.name, '甲');
 });
 
-test('makeObject：画格按 at 升序整理', () => {
+test('makeObject：纹理按 at 升序整理', () => {
     const o = makeObject({ cels: [{ at: 2, image: img('c') }, { at: 0, image: img('a') }, { at: 1, image: img('b') }] });
     assert.deepEqual(o.cels.map((c) => c.at), [0, 1, 2]);
 });
@@ -126,7 +126,7 @@ test('objectsOf / objectById：认 objects 也认 layers', () => {
     assert.deepEqual(objectsOf(null), []);
 });
 
-/* ─────────────────── 画格查找：时间是唯一索引 ─────────────────── */
+/* ─────────────────── 纹理查找：时间是唯一索引 ─────────────────── */
 
 test('celTimes：升序去重', () => {
     const o = makeObject({ cels: [{ at: 1, image: null }, { at: 0, image: null }, { at: 1, image: null }] });
@@ -135,7 +135,7 @@ test('celTimes：升序去重', () => {
     assert.deepEqual(celTimes(null), []);
 });
 
-test('celAt：at<=t 的最后一个（画格一直沿用到下一个）', () => {
+test('celAt：at<=t 的最后一个（纹理一直沿用到下一个）', () => {
     const o = makeObject({
         cels: [{ at: 0, image: img('a') }, { at: 0.5, image: img('b') }, { at: 2, image: img('c') }],
     });
@@ -147,13 +147,13 @@ test('celAt：at<=t 的最后一个（画格一直沿用到下一个）', () => 
     assert.equal(celAt(o, 99).image.tag, 'c');
 });
 
-test('celAt：t 早于第一个画格时返回 null', () => {
+test('celAt：t 早于第一个纹理时返回 null', () => {
     const o = makeObject({ cels: [{ at: 1, image: img('a') }] });
     assert.equal(celAt(o, 0.5), null);
     assert.equal(celAt(o, 1).image.tag, 'a');
 });
 
-test('imageAt：直接取位图，空画格返回 null', () => {
+test('imageAt：直接取位图，空纹理返回 null', () => {
     const o = makeObject({ cels: [{ at: 0, image: null }, { at: 1, image: img('z') }] });
     assert.equal(imageAt(o, 0.5), null);
     assert.equal(imageAt(o, 1.5).tag, 'z');
@@ -179,7 +179,7 @@ test('hasCelAt / isCelBoundary：只认「正好落在这里」', () => {
     assert.equal(isCelBoundary(o, 0.5), false);
 });
 
-/* ─────────────────────────── 画格编辑 ─────────────────────────── */
+/* ─────────────────────────── 纹理编辑 ─────────────────────────── */
 
 test('ensureCelAt：已有则复用，没有则新建并继承上一张图', () => {
     const o = makeObject({ cels: [{ at: 0, image: img('a') }] });
@@ -198,7 +198,7 @@ test('ensureCelAt：inherit=false 时不继承', () => {
     assert.equal(r.cel.image, null);
 });
 
-test('setImageAt：写入指定时间的画格，不动别的画格', () => {
+test('setImageAt：写入指定时间的纹理，不动别的纹理', () => {
     const o = makeObject({ cels: [{ at: 0, image: img('a') }] });
     const next = setImageAt(o, 0.5, img('b'));
     assert.equal(next.cels.length, 2);
@@ -207,7 +207,7 @@ test('setImageAt：写入指定时间的画格，不动别的画格', () => {
     assert.equal(imageAt(o, 0.5).tag, 'a', '入参不变');
 });
 
-test('setImageAt：覆盖同一时间的画格', () => {
+test('setImageAt：覆盖同一时间的纹理', () => {
     const o = makeObject({ cels: [{ at: 0, image: img('a') }] });
     const next = setImageAt(o, 0, img('q'));
     assert.equal(next.cels.length, 1);
@@ -218,13 +218,13 @@ test('removeCelAt：删得掉中间，删不掉最后一个', () => {
     const o = makeObject({ cels: [{ at: 0, image: img('a') }, { at: 1, image: img('b') }] });
     const one = removeCelAt(o, 0);
     assert.equal(one.cels.length, 1);
-    assert.equal(imageAt(one, 1).tag, 'b', '剩下的画格在它自己的时间点生效');
-    assert.equal(imageAt(one, 0), null, '删掉首格后 0 秒没有任何画格');
+    assert.equal(imageAt(one, 1).tag, 'b', '剩下的纹理在它自己的时间点生效');
+    assert.equal(imageAt(one, 0), null, '删掉首格后 0 秒没有任何纹理');
     const kept = removeCelAt(makeObject({ cels: [{ at: 0, image: null }] }), 0);
     assert.equal(kept.cels.length, 1, '最后一个不能删');
 });
 
-test('moveCel：把画格挪到别的时间点，目标已存在则覆盖', () => {
+test('moveCel：把纹理挪到别的时间点，目标已存在则覆盖', () => {
     const o = makeObject({ cels: [{ at: 0, image: img('a') }, { at: 1, image: img('b') }] });
     const m = moveCel(o, 1, 0.5);
     assert.deepEqual(m.cels.map((c) => c.at), [0, 0.5]);
@@ -236,7 +236,7 @@ test('moveCel：把画格挪到别的时间点，目标已存在则覆盖', () =
 
 /* ─────────────────────────── 时长 ─────────────────────────── */
 
-test('contentDuration：取画格与关键帧的最晚时间', () => {
+test('contentDuration：取纹理与关键帧的最晚时间', () => {
     const d = createDoc({
         objects: [
             { cels: [{ at: 0, image: null }, { at: 1.5, image: img('a') }] },
@@ -246,7 +246,7 @@ test('contentDuration：取画格与关键帧的最晚时间', () => {
     near(contentDuration(d), 2.25);
 });
 
-test('docDuration：空文档为 0，有画格/关键帧时按内容推算', () => {
+test('docDuration：空文档为 0，有纹理/关键帧时按内容推算', () => {
     // near(a, b, eps)：第三参是容差不是说明文字
     near(docDuration(createDoc()), 0);
     near(totalSeconds(createDoc()), 0);
@@ -294,7 +294,7 @@ test('reorderObject：夹取目标下标', () => {
 
 /* ─────────────────────── 旧模型迁移 ─────────────────────── */
 
-test('migrateFromFrames：帧序号换成秒，空画格跳过', () => {
+test('migrateFromFrames：帧序号换成秒，空纹理跳过', () => {
     const old = {
         width: 10,
         height: 10,
@@ -328,7 +328,7 @@ test('migrateFromFrames：脏输入返回 null', () => {
 
 /* ─────────────────────── 采样与查询 ─────────────────────── */
 
-test('eventTimes：画格点与关键帧合并升序，总含 0', () => {
+test('eventTimes：纹理点与关键帧合并升序，总含 0', () => {
     const d = createDoc({
         objects: [
             { cels: [{ at: 0, image: null }, { at: 1, image: null }] },

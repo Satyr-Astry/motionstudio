@@ -2,7 +2,7 @@
 // 再把结果作为子对象的输入时间，逐级向叶传递。
 //
 // 这是「嵌套组」语义的核心断言 —— 父级 scale / offset / loop 要真的驱动子级的
-// 画格切换与关键帧推进，而不只是挪动父级自己的矩阵。
+// 纹理切换与关键帧推进，而不只是挪动父级自己的矩阵。
 //
 // 语义（见 app/core/timegraph.mjs 的 applyTime）：
 //   raw = (tGlobal - offset) * scale      ← offset 是「延后」，不是「提前」

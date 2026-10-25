@@ -167,7 +167,7 @@ export function applyTime(time, tGlobal, totalSec) {
 
 /** 取文档总时长；容错。 */
 // 不 import cel.mjs 的 totalSeconds：cel → doc-model → 本模块，互相 import 会成环
-// （会静默打挂整个 shell 的模块绑定）。自己扫对象画格，语义一致。
+// （会静默打挂整个 shell 的模块绑定）。自己扫对象纹理，语义一致。
 export function docTotal(doc) {
     try {
         const declared = doc && typeof doc.duration === 'number' && doc.duration > 0 ? doc.duration : 0;

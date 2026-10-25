@@ -28,6 +28,7 @@
 
 import { parsePsd } from '../core/psd.mjs';
 import { createDoc, makeObject } from '../core/doc-model.mjs';
+import { normalizeDrawOrder } from '../core/draw-order.mjs';
 import { createKey } from '../core/transform.mjs';
 import * as ipc from './ipc.mjs';
 
@@ -813,11 +814,14 @@ async function flatObjects(layers, makeImage, report) {
  * 没有基准文档时用 createDoc 造一份（它会塞一个占位对象，这里整表替换掉）。
  */
 function importTargetDoc(base, objects, opts) {
+    const freshIds = objects.map((o) => o && o.id);
     if (base && typeof base === 'object') {
         // 已有对象整体后移：新导入的排最上面，才能立刻看见 / 被选中
         const key = Array.isArray(base.objects) ? 'objects' : 'layers';
         const rest = Array.isArray(base[key]) ? base[key] : [];
-        return { ...base, [key]: objects.concat(rest) };
+        const next = objects.concat(rest);
+        // v10：叠放表独立于数组顺序，导入后按「新导入在上」重算一次
+        return { ...base, [key]: next, drawOrder: normalizeDrawOrder(next, freshIds.concat(base.drawOrder || [])) };
     }
     const o = opts || {};
     const shell = createDoc({
@@ -826,7 +830,7 @@ function importTargetDoc(base, objects, opts) {
         fps: Number(o.fps) > 0 ? Number(o.fps) : DEFAULT_FPS,
         duration: Number(o.duration) > 0 ? Number(o.duration) : DEFAULT_SECONDS,
     });
-    return { ...shell, objects };
+    return { ...shell, objects, drawOrder: normalizeDrawOrder(objects, freshIds) };
 }
 
 /**

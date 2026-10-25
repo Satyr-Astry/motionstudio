@@ -118,7 +118,7 @@ test('boardToObjectDraft 非法画板返回 null', () => {
 });
 
 // 这条是被真机发现的漏网之鱼：ensureCelAt 曾经忽略 opts.image，
-// createObjectFromBoard 建出来的画格 at 对、image 却是 null，而且不报错。
+// createObjectFromBoard 建出来的纹理 at 对、image 却是 null，而且不报错。
 test('ensureCelAt 接受 opts.image（对象工厂的出生路径）', async () => {
     const { ensureCelAt } = await import('../app/core/doc-model.mjs');
     const img = { width: 8, height: 8, tag: 'board' };
@@ -129,7 +129,7 @@ test('ensureCelAt 接受 opts.image（对象工厂的出生路径）', async () 
     assert.equal(res.cel.image, img);
 });
 
-test('工厂从画板建出的对象，画格必须真的带图', async () => {
+test('工厂从画板建出的对象，纹理必须真的带图', async () => {
     const { createDoc } = await import('../app/core/doc-model.mjs');
     const { createBoard, setBoardSurface, markBoardDirty } = await import('../app/core/board.mjs');
     const { createObjectFromBoard } = await import('../app/shell/object-factory.mjs');
@@ -141,11 +141,11 @@ test('工厂从画板建出的对象，画格必须真的带图', async () => {
     const res = createObjectFromBoard(doc, b, { at: 0.25 });
     assert.ok(res.object, '应该建出对象');
     const cel = (res.object.cels || []).find((c) => Math.abs(c.at - 0.25) < 1e-9);
-    assert.ok(cel, '应该有 0.25 秒的画格');
-    assert.equal(cel.image, surface, '画格必须带画板位图');
+    assert.ok(cel, '应该有 0.25 秒的纹理');
+    assert.equal(cel.image, surface, '纹理必须带画板位图');
 });
 
-test('objectSize 取第一个有图画格的尺寸，空对象返回 null', async () => {
+test('objectSize 取第一个有图纹理的尺寸，空对象返回 null', async () => {
     const { objectSize } = await import('../app/core/doc-model.mjs');
     assert.equal(objectSize({ cels: [] }), null);
     assert.equal(objectSize({ cels: [{ at: 0, image: null }] }), null);
@@ -153,7 +153,7 @@ test('objectSize 取第一个有图画格的尺寸，空对象返回 null', asyn
     assert.deepEqual(objectSize({ cels: [{ at: 0, image: null }, { at: 1, image: img }] }), { w: 48, h: 32 });
 });
 
-test('ensureCelAt 在尺寸不一致时用 fitImage 校正（对象内画格必须同尺寸）', async () => {
+test('ensureCelAt 在尺寸不一致时用 fitImage 校正（对象内纹理必须同尺寸）', async () => {
     const { ensureCelAt } = await import('../app/core/doc-model.mjs');
     const base = { width: 40, height: 40, tag: 'base' };
     const big = { width: 80, height: 80, tag: 'big' };
@@ -177,10 +177,10 @@ test('ensureCelAt 尺寸一致时不调用 fitImage', async () => {
     assert.equal(res.cel.image, same);
 });
 
-test('ensureCelAt 命中已有画格时也要写入 image（对象工厂的真实路径）', async () => {
+test('ensureCelAt 命中已有纹理时也要写入 image（对象工厂的真实路径）', async () => {
     const { ensureCelAt } = await import('../app/core/doc-model.mjs');
     const img = { width: 16, height: 16, tag: 'painted' };
-    // addObject 会先造一个空画格，工厂接着往里塞图
+    // addObject 会先造一个空纹理，工厂接着往里塞图
     const obj = { id: 'o', cels: [{ at: 0, image: null }] };
     const res = ensureCelAt(obj, 0, { image: img });
     assert.equal(res.created, false);

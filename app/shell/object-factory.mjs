@@ -21,7 +21,7 @@ function nextObjectName(doc) {
     return '对象 ' + n;
 }
 
-/** 把位图塞进对象的 0 秒画格。没有 cel 就建一个，有就覆盖。 */
+/** 把位图塞进对象的 0 秒纹理。没有 cel 就建一个，有就覆盖。 */
 function attachImage(obj, at, image, fitImage) {
     if (!obj || !image) return obj;
     // fitImage 由调用方给（浏览器里是 canvas 缩放），core 只负责「发现尺寸不一致」
@@ -67,7 +67,7 @@ export function createEmptyObject(doc, opts) {
     const next = addObject(doc, { name: o.name || nextObjectName(doc) });
     const created = objectsOf(next)[objectsOf(next).length - 1];
     if (!created) return { doc, id: null, object: null, error: '对象写入失败' };
-    // 空对象也占一个 0 秒画格：时间轴要能看见它，落笔时 ensureCelImage 才有落点。
+    // 空对象也占一个 0 秒纹理：时间轴要能看见它，落笔时 ensureCelImage 才有落点。
     const withCel = ensureCelAt(created, Number.isFinite(o.at) ? o.at : 0, {});
     const obj = withCel && withCel.obj ? withCel.obj : created;
     return { doc: replaceObject(next, created.id, obj), id: created.id, object: obj, width, height };

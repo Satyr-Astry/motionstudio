@@ -1,11 +1,11 @@
 /**
  * Kleks Motion —— 洋葱皮（v6 时间模型）
  *
- * 语义不再按「帧序号 ±N」，而是按**画格切换点**：取当前时间 t 之前 / 之后各 N 个
- * 画格时间点，把那些时刻的画面做成半透明彩色「幽灵」叠在下面。
+ * 语义不再按「帧序号 ±N」，而是按**纹理切换点**：取当前时间 t 之前 / 之后各 N 个
+ * 纹理时间点，把那些时刻的画面做成半透明彩色「幽灵」叠在下面。
  *   · 时间点来自 objectsOf(doc) 各对象 celTimes 的并集（override.layerId 时只看该对象）；
  *   · 「当前是第几个切换点」用 celIndexAt 定位，t 早于第一个切换点时 before 为空；
- *   · 间隔 3 秒的两个画格与间隔 1/12 秒的两个画格在这里没有区别 —— 只有顺序有意义。
+ *   · 间隔 3 秒的两个纹理与间隔 1/12 秒的两个纹理在这里没有区别 —— 只有顺序有意义。
  *
  * cel 位图可能是**不透明白底**（导入的图片），所以先剥白底再着色，
  * 否则整块画布会被染成一片红/绿。
@@ -28,7 +28,7 @@ export function hexToRgb(hex) {
 }
 
 /**
- * 参与洋葱皮的画格切换点（秒，升序去重）。
+ * 参与洋葱皮的纹理切换点（秒，升序去重）。
  * override.layerId 有值时只看该对象，否则取全文档并集。
  */
 export function onionTimes(doc, override) {
@@ -97,7 +97,7 @@ export function tintAt(buf, bufCtx, doc, t, cfg, dir) {
 }
 
 /**
- * 把前后画格的幽灵画到目标上下文（调用方负责先清屏）。
+ * 把前后纹理的幽灵画到目标上下文（调用方负责先清屏）。
  * @param t 当前时间（秒）
  * @param scratch `{buf, ctx}` 复用缓冲，避免每次新建 canvas
  * @param override `{layerId?, before?, after?, mode?, past?, next?, opacity?, ignoreTransform?}`

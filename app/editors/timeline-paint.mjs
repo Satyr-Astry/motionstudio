@@ -4,13 +4,13 @@
 //
 // 结构：
 //   .tline
-//     .tline-tools   播放 / 上一画格 / 下一画格 / 加画格 / 删画格 / − 缩放 + / 倍率 / 总时长
+//     .tline-tools   播放 / 上一纹理 / 下一纹理 / 加纹理 / 删纹理 / − 缩放 + / 倍率 / 总时长
 //     .tline-ruler   秒刻度尺 + .tline-fpslane 段帧率条 + 播放头
 //     .tline-rows    每个对象一行
 //       .tline-row
 //         .tline-label   对象名（sticky 96px）
 //         .tline-lane
-//           （画格块已移除：画格挂在关键帧上，换图看 .tline-kf.has-drawing）
+//           （纹理块已移除：纹理挂在关键帧上，换图看 .tline-kf.has-drawing）
 //           .tline-kf[data-layer][data-t]   关键帧菱形
 //
 // 几何（left/top/width/height）一律内联写入，CSS 只负责颜色与手感。
@@ -135,19 +135,19 @@ export function createView(el) {
     unitEl.textContent = 's';
     gTime.append(nowEl, sepEl, totalEl, unitEl);
 
-    /* ── 3. 画格（从这一刻起换图） ──
+    /* ── 3. 纹理（从这一刻起换图） ──
        三字文案缩成两字：加图标后「上一格」要 61px，工具条在 1280 宽已经贴边。
        「上格 / 下格 / 曝光 / 删格」配上图标语义一样清楚，标题里保留完整说明。 */
     const gCel = grp('cel', 'edit');
-    const prevCel = mkBtn(gCel, 'prevcel', { icon: 'chevron-left', text: '上格', title: '跳到上一个画格点' });
-    const nextCel = mkBtn(gCel, 'nextcel', { icon: 'chevron-right', text: '下格', title: '跳到下一个画格点' });
-    const add = mkBtn(gCel, 'addcel', { icon: 'plus', text: '曝光', title: '在播放头处再加一次曝光（复用当前画格，不新建图）' });
-    const del = mkBtn(gCel, 'delcel', { icon: 'trash', text: '删格', title: '删除当前时间生效的画格' });
+    const prevCel = mkBtn(gCel, 'prevcel', { icon: 'chevron-left', text: '上格', title: '跳到上一个纹理点' });
+    const nextCel = mkBtn(gCel, 'nextcel', { icon: 'chevron-right', text: '下格', title: '跳到下一个纹理点' });
+    const add = mkBtn(gCel, 'addcel', { icon: 'plus', text: '曝光', title: '在播放头处再加一次曝光（复用当前纹理，不新建图）' });
+    const del = mkBtn(gCel, 'delcel', { icon: 'trash', text: '删格', title: '删除当前时间生效的纹理' });
 
     /* ── 4. 关键帧 ── */
     const gKey = grp('key', 'edit');
     const addKey = mkBtn(gKey, 'addkey', { icon: 'diamond', text: '', title: '在当前时间打一个变换关键帧（也可双击对应泳道）' });
-    // 磁铁：拖动关键帧 / 画格 / 时长手柄时吸附到整帧（AE、Aseprite 的默认行为）。
+    // 磁铁：拖动关键帧 / 纹理 / 时长手柄时吸附到整帧（AE、Aseprite 的默认行为）。
     const snap = mkBtn(gKey, 'snap', { icon: 'magnet', text: '磁铁', title: '吸附到整帧（拖动时按住 Shift 可临时自由）' });
     if (typeof snap.setAttribute === 'function') snap.setAttribute('aria-pressed', 'true');
 
@@ -255,7 +255,7 @@ export function createView(el) {
         zoomEl,
         nowEl,
         totalEl,
-        // v8 的五组按钮：播放控制 / 时间读数 / 画格 / 关键帧 / 缩放
+        // v8 的五组按钮：播放控制 / 时间读数 / 纹理 / 关键帧 / 缩放
         btns: {
             first,
             prev,
@@ -288,7 +288,7 @@ export function setEmptyChrome(view, zoomX) {
     }
 }
 
-/* ─────────────────────────── 图例：画格 vs 关键帧 ─────────────────────────── */
+/* ─────────────────────────── 图例：纹理 vs 关键帧 ─────────────────────────── */
 
 /**
  * 工具条右侧的「?」图例。点开两行说明，点别处或 Esc 收起。
@@ -305,7 +305,7 @@ export function createLegend() {
     btn.type = 'button';
     btn.className = 'tline-legend';
     btn.innerHTML = icon('help');
-    btn.title = '画格与关键帧有什么区别（点开看图例）';
+    btn.title = '纹理与关键帧有什么区别（点开看图例）';
     if (typeof btn.setAttribute === 'function') btn.setAttribute('aria-label', btn.title);
 
     function close() {
@@ -480,7 +480,7 @@ export function rebuildRows(view, doc) {
         lane.style.flex = '1 1 auto';
         lane.style.height = ROW_H + 'px';
         // 空白区本来就能双击，但没有任何提示；悬停在空白处时由这条 title 告诉用户。
-        // 画格/菱形自带 title，浏览器会优先显示更内层的那条，互不干扰。
+        // 纹理/菱形自带 title，浏览器会优先显示更内层的那条，互不干扰。
         lane.title = '双击空白处打一个变换关键帧 · 右键看更多';
 
         row.append(label, lane);
@@ -696,7 +696,7 @@ export function beginFpsEdit(node, deps) {
     if (typeof inp.select === 'function') inp.select();
 }
 
-/* ─────────────────────────── 行内容：画格点 + 关键帧菱形 ─────────────────────────── */
+/* ─────────────────────────── 行内容：纹理点 + 关键帧菱形 ─────────────────────────── */
 
 /** frame = { doc, now, totalPx, zoomX, active }；celDrag 来自主文件（拖动中的节点不被拉回）。 */
 export function paintRows(view, frame, celDrag) {
@@ -771,7 +771,7 @@ export function paintTracks(view, frame) {
             if (node.style.left !== left) node.style.left = left;
             node.dataset.t = String(g.t);
             node.dataset.layer = ref.id;
-            // v8：画格挂在关键帧上 —— 带画格的键要能一眼看出来（.has-drawing / .is-blank）
+            // v8：纹理挂在关键帧上 —— 带纹理的键要能一眼看出来（.has-drawing / .is-blank）
             const kfOwn = keys[g.idx[0]];
             const carries = !!kfOwn && Object.prototype.hasOwnProperty.call(kfOwn, 'drawing');
             node.classList.toggle('has-drawing', carries && kfOwn.drawing != null);
@@ -926,7 +926,7 @@ export function updateTools(view, frame) {
     view.btns.next.disabled = now >= total - T_EPS;
     view.btns.last.disabled = now >= total - T_EPS;
 
-    // 画格动作：必须先选对象；删画格还要留一格
+    // 纹理动作：必须先选对象；删纹理还要留一格
     view.btns.prevCel.disabled = !obj || !marks.some((m) => m.at < now - T_EPS);
     view.btns.nextCel.disabled = !obj || !marks.some((m) => m.at > now + T_EPS);
     view.btns.addCel.disabled = !obj;
