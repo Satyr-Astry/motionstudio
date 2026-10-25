@@ -39,6 +39,8 @@ import { createEngine, TOOLS } from '../paint/engine.mjs';
 import { ONION_DEFAULTS } from '../paint/onion.mjs';
 import { WS_IDS, WS_TABS } from './chrome.mjs';
 import * as store from './project-store.mjs';
+// 播放刷新分级：纯决策放在 refresh-plan.mjs（node 里可直测），这里只负责执行
+import { planRefresh, celSignature } from './refresh-plan.mjs';
 // 存档身份（原先在 project-io，会和本模块形成 import 环；下沉到这里，
 // project-io 改为单向从这里取）。字段含义见 project-io 顶部注释。
 const project = { id: '', name: '', file: '', dirty: false };
@@ -594,6 +596,10 @@ function setPlaying(v) {
         playRaf = 0;
         playLast = 0;
     }
+    // 停下必须补一次全量：播放期间走的是时间档，只刷「跟时间走」的面板，
+    // 其余面板停在开始播放那一刻的内容上。往末尾播到底（LOOP_NONE）也走这里 ——
+    // 那一支自己排过一次时间档，这次调用会把 full 标记合并进同一次刷新。
+    if (!want) scheduleRefresh();
     updateChrome();
 }
 
@@ -642,6 +648,8 @@ function playLoop(ts) {
 
 let wantFullRefresh = false;
 let refreshTimer = 0;
+// 上一次刷新时的「当前生效画格」签名：变了才说明缩略图/画格行需要重画
+let lastCelSig = '';
 // 上一次排刷新的时刻：用来识别「rAF 被吞掉」的悬挂句柄（见 scheduleRefresh）
 let refreshAskedAt = 0;
 const REFRESH_FALLBACK_MS = 60;
@@ -712,11 +720,18 @@ function scheduleRefresh(opts) {
 function refreshPanels(withFocus, full) {
     const all = full !== false;
     const active = state.workspace;
+    // 画格签名：只有跨过画格边界时，缩略图/画格行才需要重画（见 refresh-plan.mjs）。
+    const sig = celSignature(objectsOf(state.doc), state.time);
+    const celChanged = sig !== lastCelSig;
+    lastCelSig = sig;
     // 轻量计数：播放掉帧排查用（window.motionStudio.state.refreshStats）。
     // 只记次数，不参与任何逻辑分支。
-    state.refreshStats = state.refreshStats || { calls: 0, panels: 0, fullCalls: 0, hidden: 0 };
+    state.refreshStats = state.refreshStats || { calls: 0, panels: 0, fullCalls: 0, hidden: 0, skipped: 0 };
     state.refreshStats.calls++;
     if (all) state.refreshStats.fullCalls++;
+    // 先把当前工作区的面板摊平：分级要按「有一共有哪些编辑器」来算，
+    // 而不是边遍历边判断，否则同一编辑器的多个实例会被算错。
+    const slots = [];
     for (const view of viewList()) {
         if (view.ws !== active) {
             // 隐藏工作区整片跳过；记个数方便回归时确认「确实跳过了」
@@ -724,15 +739,27 @@ function refreshPanels(withFocus, full) {
             continue;
         }
         for (const slot of view.map.values()) {
-            const inst = slot.inst;
-            if (!inst) continue;
-            state.refreshStats.panels++;
-            try {
-                if (typeof inst.refresh === 'function') inst.refresh();
-                if (withFocus && typeof inst.focusFrame === 'function') inst.focusFrame();
-            } catch (err) {
-                console.error('[shell] 面板刷新失败：' + slot.editor, err);
-            }
+            if (slot && slot.inst) slots.push(slot);
+        }
+    }
+    const plan = planRefresh(slots.map((s) => s.editor), { full: all, celChanged });
+    // 同一个编辑器可能在一个工作区里开了多个实例（分屏），按次数发名额
+    const quota = new Map();
+    for (const id of plan.run) quota.set(id, (quota.get(id) || 0) + 1);
+    for (const slot of slots) {
+        const left = quota.get(slot.editor) || 0;
+        if (left <= 0) {
+            state.refreshStats.skipped = (state.refreshStats.skipped || 0) + 1;
+            continue;
+        }
+        quota.set(slot.editor, left - 1);
+        const inst = slot.inst;
+        state.refreshStats.panels++;
+        try {
+            if (typeof inst.refresh === 'function') inst.refresh();
+            if (withFocus && typeof inst.focusFrame === 'function') inst.focusFrame();
+        } catch (err) {
+            console.error('[shell] 面板刷新失败：' + slot.editor, err);
         }
     }
     updateChrome();
