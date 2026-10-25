@@ -24,7 +24,16 @@
 - 最小窗口（1000×620）逐工作区收溢出：时间轴工具条按级收字并可横滚、画板栏 1100px 断点收标签（内容 782 → 726，余 +34）、属性行可换行、区域头不再画到邻居身上。
 - 项目库空态重做（图标 + 主副文案 + 主按钮）；`main.js` 写死页面缩放策略（附证据边界：本机负对照显示原本也不缩放，属防御性约束）。
 
-**基线**：690 tests / 688 pass / 2 skipped / 0 fail；静态检查 67 个模块、帧概念残留 0、坏 import 0。
+**第二批（同日收尾，四个提交）**：`e8ff561` 刻度尺适应全长 · `1763745` 导入图像命中 · `a93faea` 快捷键浮层最小窗口 · `20666d2` 画板油漆桶。
+
+- **画板油漆桶**（`G`）：`app/paint/fill.mjs` 是纯函数（`floodFillRegion(data,w,h,sx,sy,hex,tol)`），容差 24、四邻域、填完 alpha 写 255；撤销绑 canvas 引用而不是对象 id，所以换画格后再撤销也不会写错图。导入的位图纹理（`ImageBitmap` 无 `getContext`）显式拒绝并提示。连填 20 次中位 2.9 ms。
+- **导入的图片与 PSD 图层现在点得中**：`pixelAlpha` 用 `getContext('2d')` 读像素，而导入链路产出的是 `ImageBitmap` —— 永远读回 0，整张图被判为全透明。新建 `app/core/hit-mask.mjs`（`alphaMaskOf` + `WeakMap` 按图像对象缓存，失败也缓存 null），`hitTest` 改走掩膜；掩膜不可用时退回矩形命中（宁可多选中一次也不要选不中）。首次含构建 5 ms、缓存后 0.013 ms/次。
+- **双击刻度尺 = 适应全长**：`timeline-geo.fitZoom(doc, availPx)` 是纯函数，`ZOOM_MIN/ZOOM_MAX` 夹紧，时长或视口为 0 时返回 null 而不是猜一个数。
+- **`?` 浮层在最小窗口不再切字**：`max-height ≤ 700px` 时加宽到 900px、内容三列、`max-height 84vh`，`.keys-body` 补细滚动条与 `overscroll-behavior: contain`（原来 1000×620 下 62px 内容被滚出视野且没有可见滚动条）。
+- 可点区全部 ≥20×20（`prop-toggle` 34×16 → 34×22 实体盒、`prop-check` 14×22 → 20×20、`pal-hue` 18 → 20px 并删掉 `palette.mjs` 里重复的内联尺寸）；`.bd-bar` gap 5 → 4px，1000×620 内容 738 → 728。
+- 帮助表补最后一条「代码有、表里没有」：`V` 选择工具；`tests/shortcuts-overlay.test.mjs` 的行数断言改成跟着数据走（`expectedRows` 由 `SHORTCUT_GROUPS` 推导）。
+
+**基线**：716 tests / 714 pass / 2 skipped / 0 fail；静态检查 69 个模块、帧概念残留 0、坏 import 0。
 
 ## v1.0.0-beta.1 — 2026-10-25 · 第一个公开测试版（Beta）
 
