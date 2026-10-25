@@ -72,7 +72,11 @@ test('overlayGroups：把 SHORTCUT_GROUPS 原样搬成浮层 spec', () => {
             assert.equal(it.icon, undefined, '浮层列表不吃 icon，映射时要丢掉');
         }
     }
-    assert.ok(rows >= 35, '键位条目太少：' + rows);
+    // 行数不硬编码成 35：以 help 表自身为准（今天加一行明天删一行都不用同步改数字），
+    // 再兜一个松下界防「表被削空」。零余量断言会把正常的表维护变成假红。
+    const expectedRows = SHORTCUT_GROUPS.reduce((n, g) => n + g.items.length, 0);
+    assert.equal(rows, expectedRows, '浮层行数必须与 help 表逐条对应');
+    assert.ok(expectedRows >= 30, '帮助表被削空了？：' + expectedRows);
     // 缺 keys / hint 的条目要有兜底，浮层才不会出现空键位列
     const soft = overlayGroups([{ title: 'G', items: [{ name: '拖拽' }] }]);
     assert.equal(soft[0].items[0].keys, '鼠标');
