@@ -43,6 +43,8 @@ import { WS_IDS, WS_TABS } from './chrome.mjs';
 import * as store from './project-store.mjs';
 // 播放刷新分级：纯决策放在 refresh-plan.mjs（node 里可直测），这里只负责执行
 import { planRefresh, celSignature } from './refresh-plan.mjs';
+// 播放推进：累计秒 → 显示时刻的映射（四种方式）与速度档位，纯逻辑在 core/playback.mjs
+import { playbackAt, LOOP_REVERSE, clampSpeed, formatSpeed } from '../core/playback.mjs';
 // 存档身份（原先在 project-io，会和本模块形成 import 环；下沉到这里，
 // project-io 改为单向从这里取）。字段含义见 project-io 顶部注释。
 const project = { id: '', name: '', file: '', dirty: false };
@@ -615,7 +617,11 @@ function setPlaying(v) {
     }
     state.playing = want;
     if (want) {
-        playAcc = state.time;
+        // 累计量是「从 . 起往前走了多少秒」，而 reverse 的显示时刻是 total - 累计量。
+        // 不换算的话，从 0 起播会立刻显示成末尾（用户看到的就是「一按播放跳到结尾」）。
+        const total = state.doc ? docDuration(state.doc) : 0;
+        const reverse = state.doc && state.doc.loopMode === LOOP_REVERSE;
+        playAcc = reverse && total > 0 ? Math.max(0, total - state.time) : state.time;
         playLast = 0;
         if (!playRaf) playRaf = requestAnimationFrame(playLoop);
     } else if (playRaf) {
@@ -630,7 +636,13 @@ function setPlaying(v) {
     updateChrome();
 }
 
-/** 播放循环：按 docDuration / wrapTime 推进秒，支持 cycle / pingpong / none。 */
+/**
+ * 播放循环：累计秒 → 显示时刻。
+ *
+ * 累计量 `playAcc` 只往前长（暂停就停住），怎么折回时间轴由 `playbackAt` 决定：
+ * cycle / pingpong / reverse / none 四种全在 `core/playback.mjs` 里，本函数只管
+ * 「乘速度、推进、必要时停」——判定放纯函数里才能在 node 里测。
+ */
 function playLoop(ts) {
     if (!state.playing) {
         playRaf = 0;
@@ -650,11 +662,12 @@ function playLoop(ts) {
     if (!playLast) playLast = ts;
     const dt = Math.max(0, Math.min(0.25, (ts - playLast) / 1000));
     playLast = ts;
-    playAcc += dt;
+    const speed = clampSpeed(prefSnap.playSpeed);
+    playAcc += dt * speed;
 
-    const wrapped = wrapTime(doc, playAcc);
-    if (wrapped == null) {
-        // LOOP_NONE 越界：停在末尾
+    const step = playbackAt(playAcc, total, doc.loopMode);
+    if (step.done) {
+        // 单次播到底：停在末尾（累计量也钉到末尾，再点播放从头开始）
         playAcc = total;
         state.time = total;
         engine.scheduleRender();
@@ -663,6 +676,7 @@ function playLoop(ts) {
         setPlaying(false);
         return;
     }
+    const wrapped = step.t;
     if (Math.abs(wrapped - state.time) > 1e-6) {
         state.time = wrapped;
         engine.scheduleRender();
@@ -984,6 +998,7 @@ const PREF_DEFAULTS = Object.freeze({
     objectW: DEFAULT_W,
     objectH: DEFAULT_H,
     bg: 'checker',
+    playSpeed: 1,
 });
 
 let prefSnap = Object.freeze(cleanPrefs(null, PREF_DEFAULTS));
@@ -997,6 +1012,38 @@ export function setPrefs(next) {
     // 撤销步数真正落到引擎：只存不生效等于假开关
     if (engine && typeof engine.setHistoryLimit === 'function') engine.setHistoryLimit(prefSnap.undoLimit);
     return prefSnap;
+}
+
+/** 预览播放速度（1 为原速）。读的是偏好快照，所以设置面板与工具条看到的是同一个值。 */
+export function playSpeed() {
+    return clampSpeed(prefSnap.playSpeed);
+}
+
+/**
+ * 改预览播放速度并落盘。
+ *
+ * 落盘用「读-改-写」而不是整份覆盖：`ms.prefs` 里还有设置面板的键，
+ * 工具条这一侧只该动自己那一项（否则在设置里改过、再来这里点一下速度就被打回缺省）。
+ * 这里是播放速度的唯一写入点，面板与工具条都调它。
+ */
+export function setPlaySpeed(v) {
+    const speed = clampSpeed(v);
+    setPrefs({ playSpeed: speed });
+    try {
+        const KEY = 'ms.prefs';
+        const raw = window.localStorage.getItem(KEY);
+        const cur = raw ? JSON.parse(raw) : {};
+        const next = cur && typeof cur === 'object' && !Array.isArray(cur) ? cur : {};
+        next.playSpeed = speed;
+        window.localStorage.setItem(KEY, JSON.stringify(next));
+    } catch {
+        /* 无痕模式 / 坏 JSON：本次会话内仍然生效 */
+    }
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('ms:prefs', { detail: prefSnap }));
+    }
+    flash('播放速度 ' + formatSpeed(speed));
+    return speed;
 }
 
 /**

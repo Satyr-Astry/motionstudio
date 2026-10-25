@@ -1,0 +1,22 @@
+release: v0.2.0-alpha.10 —— 预览播放的速度与方式（循环/来回/反向循环/单次）
+
+播放推进原本是 playAcc += dt 加 wrapTime，速度无处安放，方式只有三种且工具条
+没有入口。这一版把两件事补齐，并把映射收进纯函数以便测。
+
+- 新增 app/core/playback.mjs：PLAY_MODES（四种方式的中文名/图标/说明）、
+  SPEEDS（0.25–4 六档）、clampSpeed / nextSpeed / formatSpeed、
+  playbackAt(acc, total, mode) → { t, done }。
+- doc-state.playLoop 改 playAcc += dt * speed 并用 playbackAt；setPlaying 对
+  reverse 按 total - 当前时间 换算起播累计量（否则一按播放就跳到末尾）。
+- 时间轴走带组加两枚控件：1× 换档（Shift 反向）、方式按钮（点一下按
+  PLAY_MODE_IDS 顺序换，写 doc.loopMode，与设置面板同源）。
+- cel.mjs 增 LOOP_REVERSE；prop-doc 的 LOOP_VALUE 补「反向循环」并把
+  「往返」统一成「来回」。cleanPrefs 白名单加 playSpeed（夹 0.25–4）；
+  prop-prefs.commit 改读-改-写，避免两处偏好写入互相覆盖。
+- icons.mjs 增 loop / pingpong / loop-reverse / play-once / gauge（69 → 74）。
+  反向循环用镜像轮廓而不是换箭头尖：16px 下箭头尖只有 3px，分不出正反。
+
+验证：985 tests / 983 pass / 2 skipped / 0 fail；npm run check 77 模块
+（静态 0 残留 0 坏 import、node --check 77/77）；66 个测试文件。
+真机（8900 副本）：1× 实测 0.989 倍速、2× 1.922、0.5× 0.496；四种方式的
+逐个采样见 docs/修复列表-v8.md §1w。

@@ -6,7 +6,9 @@
 import { docDuration } from '../core/cel.mjs';
 import { makeGroup, makeValue, makeNum, makeNumPair, makeSeg, nowTime } from './prop-kit.mjs';
 
-const LOOP_VALUE = [['cycle', '循环'], ['pingpong', '往返'], ['none', '单次']];
+// 顺序与 core/playback.mjs 的 PLAY_MODES 一致：工具条按钮点一下就是按这个顺序换下一种，
+// 两处文案相同（「来回」不写「往返」），用户看到的词不该因面板而异。
+const LOOP_VALUE = [['cycle', '循环'], ['pingpong', '来回'], ['reverse', '反向循环'], ['none', '单次']];
 
 export function mount(el, ctx, opts) {
     const o = opts || {};

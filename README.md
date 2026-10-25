@@ -3,7 +3,7 @@
 **时间驱动的 2D 动画编辑器**：没有「帧」，只有秒与关键帧；画板只编辑一张纹理，编排只管时间与合成。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-4a7dff.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-970%20passing-2ea043.svg)](tests)
+[![Tests](https://img.shields.io/badge/tests-983%20passing-2ea043.svg)](tests)
 [![Runtime deps](https://img.shields.io/badge/runtime%20deps-0-brightgreen.svg)](package.json)
 [![Electron](https://img.shields.io/badge/shell-Electron%20%2B%20native%20ESM-47848f.svg)](main.js)
 
@@ -161,7 +161,7 @@ npm run check:syntax   # 只跑语法检查
 
 `npm test` 只 import 纯逻辑模块，DOM 那几个（`app.mjs`、`layers.mjs`、`board.mjs`…）从没被 node 加载过 —— 所以历史上出现过三次「测试全绿 + 静态检查干净 + 页面白屏」（同一函数被 `export` 两次、import 列表写重、文件被写一半）。`check:syntax` 就是补这条缝的：它对 `app/**/*.mjs` 逐个跑 `node --check`，几百毫秒。
 
-当前基线：**972 tests / 970 pass / 2 skipped / 0 fail**；静态检查扫描 76 个模块，残留 0、坏 import 0；语法检查 76/76。改代码后 `npm test` 与 `npm run check` 都跑一遍。
+当前基线：**985 tests / 983 pass / 2 skipped / 0 fail**；静态检查扫描 77 个模块，残留 0、坏 import 0；语法检查 77/77。改代码后 `npm test` 与 `npm run check` 都跑一遍。
 
 ## 设计原则
 
@@ -199,7 +199,7 @@ npm run check:syntax   # 只跑语法检查
 
 ```bash
 npm install && npm start     # Node 20+; Electron is the only dev dependency
-npm test                     # 970 passing / 2 skipped
+npm test                     # 983 passing / 2 skipped
 ```
 
 Early-stage software: file format and APIs still move. MIT licensed.

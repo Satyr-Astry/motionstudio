@@ -222,14 +222,19 @@ export function mount(el, ctx) {
     /** 存盘 + 立刻应用：localStorage 失败也不能让界面与内存状态脱节。 */
     function commit() {
         try {
+            // 读-改-写：这份 JSON 里还有别的写入点（时间轴工具条的播放速度），
+            // 整份覆盖会把它们的键冲掉 —— 表现为「在工具条调的速度，进设置存一次就没了」。
+            const raw = localStorage.getItem(KEY);
+            const base = raw ? JSON.parse(raw) : {};
+            const out = base && typeof base === 'object' && !Array.isArray(base) ? base : {};
             // 同时写一份外壳键名（objectW/objectH）：启动时 doc-state 的 loadPrefs 从
             // 这个 key 读的正是那对键，只存 sizeW/sizeH 会让「重启后新对象尺寸悄悄回缺省」。
-            localStorage.setItem(KEY, JSON.stringify(Object.assign({}, prefs, {
+            localStorage.setItem(KEY, JSON.stringify(Object.assign(out, prefs, {
                 objectW: prefs.sizeW,
                 objectH: prefs.sizeH,
             })));
         } catch (err) {
-            /* 无痕模式 / 配额满：本次会话内仍然生效 */
+            /* 无痕模式 / 配额满 / 坏 JSON：本次会话内仍然生效 */
         }
         applyPrefs();
         paintControls();

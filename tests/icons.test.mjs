@@ -244,7 +244,8 @@ test('阶段二使用点：时间轴 / 曲线 / 区域头的图标名都真实�
     const tl = read('../app/editors/timeline-paint.mjs');
     const tlSpec = [...tl.matchAll(/icon:\s*'([a-z-]+)'/g)].map((m) => m[1]);
     const tlCall = [...tl.matchAll(/\bicon\('([a-z-]+)'/g)].map((m) => m[1]);
-    assert.equal(tlSpec.length, 13, '时间轴工具条一共 13 个按钮，实际登记 ' + tlSpec.length);
+    // 13（v8 走带 5 + 画格 5 + 关键帧/磁铁/缩放等） + 2（v10 预览播放的速度与方式）
+    assert.equal(tlSpec.length, 15, '时间轴工具条一共 15 个按钮，实际登记 ' + tlSpec.length);
     for (const name of tlSpec.concat(tlCall)) {
         assert.ok(hasIcon(name), '时间轴用了不存在的图标：' + name);
     }
@@ -416,9 +417,14 @@ test('task-24：12 枚新图标都在表里，总数锁死 68', () => {
         assert.ok(svg.includes('stroke="currentColor"'), name + ' 没有继承文字色');
     }
     // 52 旧 + 12 新 + 2（v8 第十六批：对象栈工具条的 chevron-up / merge-down）
-    // + 2（v8 第二十批：画板纹理尺寸控件的 crop-content / canvas-resize）。
+    // + 2（v8 第二十批：画板纹理尺寸控件的 crop-content / canvas-resize）
+    // + 5（v10 第二十一批：预览播放的 loop / pingpong / loop-reverse / play-once / gauge）。
     // 数量锁死是为了防「悄悄加一枚又删一枚」的净零漂移。
-    assert.equal(ICON_NAMES.length, 69, '图标表应为 52 旧 + 12 新 + 2 对象栈 + 2 尺寸控件 + 1 unlink = 69，实际 ' + ICON_NAMES.length);
+    assert.equal(ICON_NAMES.length, 74, '图标表应为 52 旧 + 12 新 + 2 对象栈 + 2 尺寸控件 + 1 unlink + 5 播放 = 74，实际 ' + ICON_NAMES.length);
+    for (const name of ['loop', 'pingpong', 'loop-reverse', 'play-once', 'gauge']) {
+        assert.ok(hasIcon(name), '预览播放控件要用：' + name);
+    }
+    // 对象栈工具条（v8 第十六批）的两枚：删掉会静默变成空白按钮
     for (const name of ['chevron-up', 'merge-down']) {
         assert.ok(hasIcon(name), '对象栈工具条要用：' + name);
     }

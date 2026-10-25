@@ -16,6 +16,8 @@
 // 几何（left/top/width/height）一律内联写入，CSS 只负责颜色与手感。
 
 import { icon, escapeAttr } from '../core/icons.mjs';
+// 播放速度的读数与播放方式的名/图标：与 core/playback.mjs 的判定表同源
+import { formatSpeed, modeInfo } from '../core/playback.mjs';
 // 图例的唯一数据源在 help.mjs：设置里的「图例」分组与这个浮层读同一份，不再各写一套
 import { LEGEND_ITEMS } from './help.mjs';
 import { docDuration, drawingsOf, drawingIdOf, imageAt, objectById, objectsOf } from '../core/doc-model.mjs';
@@ -102,6 +104,10 @@ export function createView(el) {
     const play = mkBtn(gTr, 'play', { icon: 'play', text: '', title: '播放 / 暂停（空格）' });
     const next = mkBtn(gTr, 'next', { icon: 'chevron-right', text: '', title: '下一帧（→）' });
     const last = mkBtn(gTr, 'last', { icon: 'step-forward', text: '', title: '跳到结尾（End）' });
+    /* v10：预览的两件事放在走带后面 —— 它们只影响播放，不影响文档内容。
+       速度是观看偏好（存 ms.prefs），方式是文档字段（doc.loopMode），点一下换下一种。 */
+    const speedBtn = mkBtn(gTr, 'play-speed', { icon: 'gauge', text: '1×', title: '播放速度 1×（点一下换档，Shift+点反向）' });
+    const modeBtn = mkBtn(gTr, 'play-mode', { icon: 'loop', text: '', title: '播放方式：循环（点一下换下一种）' });
 
     /* ── 2. 时间读数：当前时间与总时长都是可输入的数字 ──
        「总时长调整不直观」的根因就是它原本只是一段只读文字。 */
@@ -256,6 +262,8 @@ export function createView(el) {
             play,
             next,
             last,
+            speed: speedBtn,
+            mode: modeBtn,
             prevCel,
             nextCel,
             addCel: add,
@@ -886,6 +894,26 @@ export function updateTools(view, frame) {
     view.btns.play.title = playing ? '暂停（空格）' : '播放 / 暂停（空格）';
     if (typeof view.btns.play.setAttribute === 'function') view.btns.play.setAttribute('aria-label', view.btns.play.title);
     view.btns.play.classList.toggle('is-on', playing);
+
+    /* 速度与方式：这两个按钮的读数从「偏好」与「文档字段」来，不在这里写状态 ——
+       点一下只负责把值交给 ctx（时间轴主文件分派），这里照值画。 */
+    if (view.btns.speed) {
+        const speedTxt = formatSpeed(Number(frame.speed) || 1);
+        // 只改文字那一格：整块 textContent 会把左边的 SVG 一起抹掉
+        const lab = view.btns.speed.querySelector ? view.btns.speed.querySelector('span') : null;
+        if (lab) lab.textContent = speedTxt;
+        else view.btns.speed.textContent = speedTxt;
+        view.btns.speed.title = '播放速度 ' + speedTxt + '（点一下换档，Shift+点反向）';
+        if (typeof view.btns.speed.setAttribute === 'function') view.btns.speed.setAttribute('aria-label', '播放速度 ' + speedTxt);
+        view.btns.speed.classList.toggle('is-odd', speedTxt !== '1×');
+    }
+    if (view.btns.mode) {
+        const info = modeInfo(frame.doc && frame.doc.loopMode);
+        view.btns.mode.innerHTML = icon(info.icon);
+        view.btns.mode.title = '播放方式：' + info.label + '（' + info.hint + '）· 点一下换下一种';
+        if (typeof view.btns.mode.setAttribute === 'function') view.btns.mode.setAttribute('aria-label', '播放方式：' + info.label);
+        view.btns.mode.classList.toggle('is-odd', info.id !== 'cycle');
+    }
 
     // 读数：正在输入的那个框不抢，否则每帧重绘会把光标和选区踢掉
     const focused = document.activeElement;

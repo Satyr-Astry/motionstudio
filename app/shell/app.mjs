@@ -133,7 +133,7 @@ import {
 // 顶层只拿 namespace。绑定推迟到 boot()：这台 Electron 上 doc-state 的求值时机
 // 不稳定，顶层解构会静默拿到 undefined（表现为整个 app 白屏）。
 let TOOL_KEYS, DEFAULT_W, DEFAULT_H, DEFAULT_FPS, state, shell, el, engine,
-    setDoc, subscribeDoc, setTime, setPlaying, scheduleRefresh, flash, hintText,
+    setDoc, subscribeDoc, setTime, setPlaying, playSpeed, setPlaySpeed, scheduleRefresh, flash, hintText,
     updateChrome, setTimeClamped, stepFrames, setDuration, fpsNow, goToKey;
 
 
@@ -538,6 +538,9 @@ function buildCtx() {
     setTime,
     playing: () => state.playing,
     setPlaying,
+    /* v10：预览播放速度（0.25×–4×，落 ms.prefs）。工具条与设置面板读的是同一份偏好。 */
+    playSpeed,
+    setPlaySpeed,
     /* v8：时间轴工具条与拖拽的正规入口。
        setTime 会 wrapTime 回绕（拖播放头到末尾会跳回 0），面板一律用 setTimeClamped。 */
     setTimeClamped,
@@ -1404,7 +1407,7 @@ function expose() {
 function boot() {
     ({
         TOOL_KEYS, DEFAULT_W, DEFAULT_H, DEFAULT_FPS, state, shell, el, engine,
-        setDoc, subscribeDoc, setTime, setPlaying, scheduleRefresh, flash, hintText,
+        setDoc, subscribeDoc, setTime, setPlaying, playSpeed, setPlaySpeed, scheduleRefresh, flash, hintText,
         updateChrome, setTimeClamped, stepFrames, setDuration, fpsNow, goToKey,
     } = DS);
     // 先造 ctx：此时所有模块都已求值完毕，import 绑定一定可用

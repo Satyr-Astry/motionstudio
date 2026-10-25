@@ -59,6 +59,9 @@ import {
 export const LOOP_CYCLE = 'cycle';
 export const LOOP_PINGPONG = 'pingpong';
 export const LOOP_NONE = 'none';
+// v9：反向循环。时间的**流向**由播放推进负责（app/core/playback.mjs 的 playbackAt），
+// 这里只需要认得这个值、别把它当未知模式：折叠规则与 cycle 相同。
+export const LOOP_REVERSE = 'reverse';
 
 // ── 对象（老名 layer，与 doc.objects 一一对应） ─────────────────────────────
 

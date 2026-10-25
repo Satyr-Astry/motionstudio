@@ -424,6 +424,8 @@ test('mount 能用最小 ctx 挂起来：结构、画格点、菱形、段条都
         const btns = root.childNodes[0].querySelectorAll('.tline-btn');
         assert.deepEqual(btns.map((b) => b.dataset.act), [
             'first', 'prev', 'play', 'next', 'last',
+            // v10：预览播放的两件（速度 / 方式）紧跟走带 —— 只影响播放，不改文档结构
+            'play-speed', 'play-mode',
             'prevcel', 'nextcel', 'addcel', 'delcel', 'addkey', 'snap',
             'zoomout', 'zoomin',
         ]);

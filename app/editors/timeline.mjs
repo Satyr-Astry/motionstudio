@@ -12,6 +12,8 @@
 // 外壳只保证 mount(el, ctx) → { destroy, refresh, focusFrame }。
 
 import { celAt, celTimes, docDuration, objectById } from '../core/doc-model.mjs';
+// 预览播放：速度换档与方式循环的判定表都在 core/playback.mjs（工具条与设置面板同源）
+import { PLAY_MODE_IDS, modeInfo, nextSpeed } from '../core/playback.mjs';
 import { setSegmentFps } from '../core/timebase.mjs';
 import {
     LABEL_W, SNAP_GRID, T_EPS, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP, celMarks,
@@ -228,6 +230,8 @@ export function mount(el, ctx) {
             snapOn,
             active: activeId(),
             playing: isPlaying(),
+            // 预览速度：偏好值，工具条只读它画读数（写入走 ctx.setPlaySpeed）
+            speed: has('playSpeed') ? call('playSpeed') : 1,
             selKey: keys.selection(), // 主键：老读数，.is-ch 通道键仍按它判断
             selKeys: keys.selectionAll(), // 整个集合：多选高亮用
         };
@@ -606,6 +610,21 @@ export function mount(el, ctx) {
             stepBy(1);
         } else if (act === 'last') {
             seekLast();
+        } else if (act === 'play-speed') {
+            // 换档：就近落档再前后挪一格；Shift+点反向，省得为降档绕一圈
+            if (!has('setPlaySpeed') || !has('playSpeed')) {
+                notWired('setPlaySpeed');
+                return;
+            }
+            call('setPlaySpeed', [nextSpeed(call('playSpeed'), e.shiftKey ? -1 : 1)]);
+        } else if (act === 'play-mode') {
+            // 方式是文档字段（doc.loopMode）：写文档、走 setDoc，和设置面板同一处真源
+            const curDoc = docNow();
+            const mode0 = curDoc && typeof curDoc.loopMode === 'string' ? curDoc.loopMode : 'cycle';
+            const idx = PLAY_MODE_IDS.indexOf(mode0);
+            const next = PLAY_MODE_IDS[(idx + 1) % PLAY_MODE_IDS.length];
+            call('setDoc', [(d) => Object.assign({}, d, { loopMode: next }), { label: '播放方式：' + modeInfo(next).label }]);
+            notify('播放方式：' + modeInfo(next).label + '（' + modeInfo(next).hint + '）');
         } else if (act === 'prevcel') {
             goCel(-1);
         } else if (act === 'nextcel') {

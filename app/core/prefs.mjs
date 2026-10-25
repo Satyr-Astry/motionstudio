@@ -17,6 +17,7 @@ export const FALLBACK_PREFS = Object.freeze({
     objectW: 900,
     objectH: 640,
     bg: 'checker',
+    playSpeed: 1,
 });
 
 /**
@@ -61,5 +62,8 @@ export function cleanPrefs(raw, defaults) {
         // 只放行「小写字母开头 + 小写字母/连字符」的标识符：值会进 class 与分支判断，
         // 不接受任意字符串（更不接受数字/对象）。
         bg: typeof src.bg === 'string' && /^[a-z][a-z-]{0,15}$/.test(src.bg) ? src.bg : dflt.bg,
+        // 预览播放速度：夹到 0.25–4（与 core/playback.mjs 的 SPEEDS 两端一致）。
+        // 不限制成「表里的档位」：手改一个 1.25 也该能跑，面板上的换档会就近落档。
+        playSpeed: num(src.playSpeed, 0.25, 4, dflt.playSpeed),
     };
 }
