@@ -42,6 +42,7 @@ export const icons = Object.freeze({
 
     // ── 方向与列表 ──
     'chevron-down': '<path d="M6.2 9.4 12 15.2l5.8-5.8"/>',
+    'chevron-up': '<path d="M6.2 14.6 12 8.8l5.8 5.8"/>',
     'chevron-right': '<path d="M9.4 6.2 15.2 12l-5.8 5.8"/>',
     'chevron-left': '<path d="M14.6 6.2 8.8 12l5.8 5.8"/>',
     'more-horizontal':
@@ -81,6 +82,10 @@ export const icons = Object.freeze({
     // ── 区域布局（区域头 ▤ ▥） ──
     rows: '<rect x="4.2" y="4.2" width="15.6" height="15.6" rx="1.4"/><path d="M4.2 12h15.6"/>',
     columns: '<rect x="4.2" y="4.2" width="15.6" height="15.6" rx="1.4"/><path d="M12 4.2v15.6"/>',
+    // v8：向下合并 —— 两条「层」+ 一枚向下箭头，箭头穿过上层落进下层
+    'merge-down':
+        '<path d="M4.6 4.8h14.8v4.1H4.6z"/><path d="M4.6 15.1h14.8v4.1H4.6z"/>' +
+        '<path d="M12 9.6v3.6"/><path d="M10.2 11.4 12 13.2l1.8-1.8"/>',
 
     // ── 缓动预设（曲线面板）：图形就是曲线段的样子，所以六个别名各自不同 ──
     'curve-line': '<path d="M4.4 17.6 19.6 6.4"/>',

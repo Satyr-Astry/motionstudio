@@ -407,15 +407,19 @@ test('E 键的语义分裂：编排是橡皮，画板是取色器', () => {
 const NEW_ICONS = ['brush-round', 'brush-soft', 'pencil', 'brush-pixel', 'brush-smudge', 'brush-scatter',
                     'flip-h', 'flip-v', 'flip-both', 'sliders', 'stabilizer', 'image-plus'];
 
-test('task-24：12 枚新图标都在表里，总数锁死 64', () => {
+test('task-24：12 枚新图标都在表里，总数锁死 66', () => {
     for (const name of NEW_ICONS) {
         assert.ok(hasIcon(name), '缺少新图标：' + name);
         const svg = icon(name);
         assert.ok(svg.includes('viewBox="0 0 24 24"'), name + ' 的 viewBox 不是 24×24');
         assert.ok(svg.includes('stroke="currentColor"'), name + ' 没有继承文字色');
     }
-    // 52 旧 + 12 新。数量锁死是为了防「悄悄加一枚又删一枚」的净零漂移。
-    assert.equal(ICON_NAMES.length, 64, '图标表应为 52 旧 + 12 新 = 64，实际 ' + ICON_NAMES.length);
+    // 52 旧 + 12 新 + 2（v8 第十六批：对象栈工具条的 chevron-up / merge-down）。
+    // 数量锁死是为了防「悄悄加一枚又删一枚」的净零漂移。
+    assert.equal(ICON_NAMES.length, 66, '图标表应为 52 旧 + 12 新 + 2 对象栈 = 66，实际 ' + ICON_NAMES.length);
+    for (const name of ['chevron-up', 'merge-down']) {
+        assert.ok(hasIcon(name), '对象栈工具条要用：' + name);
+    }
     // 第七支笔复用既有键，不许再新建一个橡皮语义
     assert.ok(hasIcon('eraser'), 'eraser 必须还在（第七支笔用它，不新建）');
 });

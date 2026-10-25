@@ -39,112 +39,40 @@ function saveCollapsed() {
 }   // v5：正在拖拽的对象 id（dragstart 里写入）
 let popover = null;   // v5：时间通道浮层（懒创建、模块级复用）
 
-// v8：工具条只留两个可见按钮（＋ 新建 / ⋯ 菜单），其余 5 个动作收进菜单。
-// 动作顺序沿用老平铺工具条的 ＋ 复 ↑ ↓ 合 删，只是「入口」从按钮换成了菜单项。
-// [act, 图标名, 按钮文字（null = 纯图标）, 提示] —— 图标来自 core/icons.mjs
-const BAR_ACTS = [['add', 'plus', null, '新建对象']];
-// [act, 菜单文字, 提示]
-const MENU_ACTS = [
-    ['dup', '复制对象', '复制当前对象'],
-    ['up', '上移一层', '把当前对象往上挪一层'],
-    ['down', '下移一层', '把当前对象往下挪一层'],
-    ['merge', '向下合并', '把当前对象合进下一层；结果会落到下层对象的坐标系'],
-    ['del', '删除对象', '删除当前对象'],
+// v8（第十六批）：对象动作不再折进 ⋯ 菜单。
+// 上一版把 5 个动作收进菜单是为了省宽度，代价是「复制 / 上移 / 下移 / 合并 / 删除」每次都要先开菜单 ——
+// 这五个都是对象栈的常用动作，宽度也用不着省（6 个 22px 按钮 ≈ 150px，面板 230px）。
+// [act, 图标名, 提示] —— 图标来自 core/icons.mjs，全部纯图标，靠 title + aria-label 说明
+const BAR_ACTS = [
+    ['add', 'plus', '新建对象'],
+    ['dup', 'copy', '复制对象'],
+    ['up', 'chevron-up', '上移一层'],
+    ['down', 'chevron-down', '下移一层'],
+    ['merge', 'merge-down', '向下合并（结果会落到下层对象的坐标系）'],
+    ['del', 'trash', '删除对象'],
 ];
 // 动作全集：状态同步（置灰）与守卫提示都按这一份走
-const ACTS = BAR_ACTS.concat(MENU_ACTS);
+const ACTS = BAR_ACTS;
 
 export function mount(el, ctx) {
     // 布局由 styles/panels.css 的 .lyr* 规则承担，这里不写内联样式
     const root = document.createElement('div');
     root.className = 'lyr';
 
-    // ── 工具条：只剩 ＋（新建）与 ⋯（菜单），菜单本体挂在 body 上，见 ensureObjMenu
+    // ── 工具条：6 个对象动作全部常显（纯图标，title + aria-label 说明）
     const bar = document.createElement('div');
     bar.className = 'lyr-bar';
-    const actBtn = new Map();   // act → 要同步置灰的控件（工具条按钮或菜单项）
-    for (const [act, iconName, text, title] of BAR_ACTS) {
+    const actBtn = new Map();   // act → 要同步置灰的控件
+    for (const [act, iconName, title] of BAR_ACTS) {
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = 'lyr-btn ' + (text ? 'ms-icon-label' : 'ms-icon-btn');
-        b.innerHTML = icon(iconName) + (text ? '<span>' + text + '</span>' : '');
+        b.className = 'lyr-btn ms-icon-btn';
+        b.innerHTML = icon(iconName);
         b.dataset.act = act;
         b.title = title;
         b.setAttribute('aria-label', title);
         bar.appendChild(b);
         actBtn.set(act, b);
-    }
-    const moreBtn = document.createElement('button');
-    moreBtn.type = 'button';
-    moreBtn.className = 'lyr-btn lyr-more ms-icon-btn';
-    moreBtn.innerHTML = icon('more-horizontal');
-    moreBtn.title = '更多对象操作';
-    moreBtn.setAttribute('aria-label', '更多对象操作');
-    moreBtn.setAttribute('aria-haspopup', 'true');
-    moreBtn.setAttribute('aria-expanded', 'false');
-    bar.appendChild(moreBtn);
-
-    // ── ⋯ 菜单：绝对定位的小浮层（样式在 panels.css 末尾的 v8 块里）。
-    // 菜单项与老按钮共用 actBtn 状态表和 runAct 动作体，行为完全一致。
-    let objMenu = null;
-    function ensureObjMenu() {
-        if (objMenu) return objMenu;
-        objMenu = document.createElement('div');
-        objMenu.className = 'lyr-menu';
-        objMenu.hidden = true;
-        objMenu.setAttribute('role', 'menu');
-        objMenu.addEventListener('pointerdown', (e) => e.stopPropagation());
-        for (const [act, text, title] of MENU_ACTS) {
-            const it = document.createElement('button');
-            it.type = 'button';
-            it.className = 'lyr-menu-item' + (act === 'del' ? ' is-danger' : '');
-            it.dataset.act = act;
-            it.textContent = text;
-            it.title = title;
-            it.setAttribute('role', 'menuitem');
-            objMenu.appendChild(it);
-            actBtn.set(act, it);
-        }
-        document.body.appendChild(objMenu);
-        document.addEventListener('pointerdown', onOutsideDown, true);
-        return objMenu;
-    }
-
-    // 点面板以外的地方收起（捕获阶段，先于 bar / 菜单自己的委托）
-    function onOutsideDown(e) {
-        if (!objMenu || objMenu.hidden) return;
-        if (objMenu.contains(e.target)) return;
-        if (moreBtn.contains(e.target)) return;  // 开合交给 ⋯ 自己的 click
-        hideObjMenu();
-    }
-
-    function showObjMenu() {
-        const menu = ensureObjMenu();
-        const r = moreBtn.getBoundingClientRect();
-        menu.hidden = false;
-        const w = menu.offsetWidth || 120;
-        const h = menu.offsetHeight || 0;
-        const vw = window.innerWidth || 0;
-        const vh = window.innerHeight || 0;
-        // 默认与 ⋯ 右对齐；顶到视口边就翻到按钮上方
-        let left = Math.round(r.right - w);
-        if (left < 4) left = 4;
-        if (vw && left + w > vw - 4) left = Math.max(4, vw - 4 - w);
-        let top = Math.round(r.bottom + 4);
-        if (vh && h && top + h > vh - 4) top = Math.max(4, Math.round(r.top - 4 - h));
-        menu.style.left = left + 'px';
-        menu.style.top = top + 'px';
-        moreBtn.setAttribute('aria-expanded', 'true');
-    }
-
-    function hideObjMenu() {
-        if (objMenu) objMenu.hidden = true;
-        moreBtn.setAttribute('aria-expanded', 'false');
-    }
-
-    function toggleObjMenu() {
-        if (objMenu && !objMenu.hidden) hideObjMenu();
-        else showObjMenu();
     }
 
     // ── 当前对象不透明度
@@ -880,29 +808,12 @@ const TIME_MODE_TEXT = [
         }
     }
 
-    // 先建菜单：让 6 个动作都能拿到自己的控件，paint / syncBar 的置灰一次到位
-    ensureObjMenu();
-
     bar.addEventListener('click', (e) => {
-        if (e.target.closest && e.target.closest('.lyr-more')) {
-            toggleObjMenu();
-            return;
-        }
         const btn = e.target.closest ? e.target.closest('.lyr-btn') : null;
         if (!btn || btn.disabled) return;
         const doc = ctx.doc();
         if (!doc) return;
         runAct(btn.dataset.act, doc);
-        paint();
-    });
-
-    ensureObjMenu().addEventListener('click', (e) => {
-        const item = e.target.closest ? e.target.closest('.lyr-menu-item') : null;
-        if (!item) return;
-        hideObjMenu();
-        const doc = ctx.doc();
-        if (!doc) return;
-        runAct(item.dataset.act, doc);
         paint();
     });
 
@@ -1149,12 +1060,6 @@ const TIME_MODE_TEXT = [
         destroy() {
             off();
             rows.clear();
-            // ⋯ 菜单挂在 body 上，区域重挂时必须带走，否则 body 里会堆积死菜单
-            if (objMenu) {
-                document.removeEventListener('pointerdown', onOutsideDown, true);
-                objMenu.remove();
-                objMenu = null;
-            }
             root.remove();
         },
     };

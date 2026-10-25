@@ -2277,57 +2277,9 @@ body.is-dropping #ws-host::after {
     height: var(--h-row);
 }
 
-/* ── 5. 对象面板的 ⋯ 菜单：条上只留 ＋ 与 ⋯，其余 5 个动作在这里 ── */
-.lyr-bar .lyr-more {
-    margin-left: auto;          /* 主操作在左，溢出菜单贴右 */
-    font-size: 13px;            /* 11px 下 ⋯ 三个点会糊成一团 */
-    letter-spacing: 0.5px;
-}
-.lyr-bar .lyr-more[aria-expanded="true"] {
-    background: var(--surface);
-    border-color: var(--line);
-    color: var(--ink);
-}
-
-.lyr-menu {
-    position: fixed;
-    z-index: 92;                /* 压过时间通道浮层 .lyr-tp(90) */
-    min-width: 118px;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    padding: 3px;
-    border: 1px solid var(--line-2);
-    border-radius: var(--r-pop);
-    background: var(--panel);
-    box-shadow: var(--shadow-pop);
-}
-.lyr-menu[hidden] { display: none; }
-
-.lyr-menu .lyr-menu-item {
-    box-sizing: border-box;
-    height: var(--h-btn);
-    padding: 0 8px;
-    border: 0;
-    border-radius: var(--r-1);
-    background: transparent;
-    color: var(--ink-dim);
-    font-size: 11px;
-    line-height: 1;
-    text-align: left;
-    white-space: nowrap;
-    cursor: pointer;
-}
-.lyr-menu .lyr-menu-item:hover {
-    background: var(--surface);
-    color: var(--ink);
-}
-.lyr-menu .lyr-menu-item.is-danger:hover {
-    background: color-mix(in srgb, var(--danger) 16%, transparent);
-    color: var(--danger);
-}
-.lyr-menu .lyr-menu-item[aria-disabled="true"] {
-    color: var(--ink-faint);
+/* ── 5. 对象面板工具条：6 个动作全部常显（v8 第十六批把 ⋯ 菜单撤了，见 layers.mjs 的 BAR_ACTS） ── */
+.lyr-bar {
+    gap: var(--sp-1);
 }
 
 /* ── 6. 时间轴工具条：13 个按钮的数量与顺序不动，只切视觉段 ──
