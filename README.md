@@ -3,7 +3,7 @@
 **时间驱动的 2D 动画编辑器**：没有「帧」，只有秒与关键帧；画板只编辑一张纹理，编排只管时间与合成。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-4a7dff.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-603%20passing-2ea043.svg)](tests)
+[![Tests](https://img.shields.io/badge/tests-607%20passing-2ea043.svg)](tests)
 [![Runtime deps](https://img.shields.io/badge/runtime%20deps-0-brightgreen.svg)](package.json)
 [![Electron](https://img.shields.io/badge/shell-Electron%20%2B%20native%20ESM-47848f.svg)](main.js)
 
@@ -152,7 +152,7 @@ npm test        # node --test tests/*.test.mjs
 npm run check   # 静态一致性：帧概念残留 + 失效 import
 ```
 
-当前基线：**605 tests / 603 pass / 2 skipped / 0 fail**；静态检查扫描 65 个模块，残留 0、坏 import 0。改代码后两个都跑一遍。
+当前基线：**609 tests / 607 pass / 2 skipped / 0 fail**；静态检查扫描 65 个模块，残留 0、坏 import 0。改代码后两个都跑一遍。
 
 ## 设计原则
 
@@ -187,7 +187,7 @@ npm run check   # 静态一致性：帧概念残留 + 失效 import
 
 ```bash
 npm install && npm start     # Node 20+; Electron is the only dev dependency
-npm test                     # 603 passing / 2 skipped
+npm test                     # 607 passing / 2 skipped
 ```
 
 Early-stage software: file format and APIs still move. MIT licensed.

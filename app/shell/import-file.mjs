@@ -152,6 +152,51 @@ function stripExt(name) {
  * 优先 ImageData（Chromium 里最快），退回临时 canvas，最后退回裸像素描述；
  * 三层兜底是为了让同一份代码在渲染进程、node 测试、无 GPU 环境里都能走通。
  */
+/**
+ * 图层位图里「真正有内容」的包围盒。
+ * PSD 的图层矩形经常等于整张画布（尤其整层填色/从背景层派生的层），
+ * 直接按矩形导入会让每个对象都带一大圈透明留白——对象自己的“纸”被撑成整幅画布，
+ * 之后缩放、看缩略图、在画板里编辑都会被空白带偏。这里先算 alpha 包围盒。
+ *
+ * @returns {{x:number,y:number,w:number,h:number}|null} 全透明返回 null
+ */
+export function alphaBounds(pixels, width, height) {
+    const w = intOr(width, 0);
+    const h = intOr(height, 0);
+    if (!w || !h || !pixels || pixels.length < w * h * 4) return null;
+    let x0 = w;
+    let y0 = h;
+    let x1 = -1;
+    let y1 = -1;
+    for (let y = 0; y < h; y += 1) {
+        let rowHit = false;
+        const row = y * w * 4;
+        for (let x = 0; x < w; x += 1) {
+            if (pixels[row + x * 4 + 3] > 0) {
+                if (x < x0) x0 = x;
+                if (x > x1) x1 = x;
+                rowHit = true;
+            }
+        }
+        if (rowHit) {
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+        }
+    }
+    if (x1 < x0 || y1 < y0) return null;
+    return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+/** 把 rgba 缓冲裁到包围盒里，返回新的紧凑缓冲。 */
+function cropPixels(pixels, width, box) {
+    const out = new Uint8ClampedArray(box.w * box.h * 4);
+    for (let y = 0; y < box.h; y += 1) {
+        const src = ((box.y + y) * width + box.x) * 4;
+        out.set(pixels.subarray(src, src + box.w * 4), y * box.w * 4);
+    }
+    return out;
+}
+
 async function psdLayerImage(layer) {
     const w = intOr(layer.width, 0);
     const h = intOr(layer.height, 0);
@@ -160,11 +205,22 @@ async function psdLayerImage(layer) {
     const src = layer.rgba instanceof Uint8ClampedArray ? layer.rgba : new Uint8ClampedArray(layer.rgba || 0);
     if (src.length < need) return null;
     // 复制一份再交给 ImageData：解码是异步的，PSD 缓冲若被复用会画出花屏
-    const pixels = new Uint8ClampedArray(src.subarray(0, need));
+    let pixels = new Uint8ClampedArray(src.subarray(0, need));
+    // 裁到非透明包围盒：留白不进入对象，偏移交给调用方补到 transform 上
+    const box = alphaBounds(pixels, w, h) || { x: 0, y: 0, w, h };
+    const trimmed = box.x !== 0 || box.y !== 0 || box.w !== w || box.h !== h;
+    if (trimmed) {
+        pixels = cropPixels(pixels, w, box);
+        layer.__trim = { dx: box.x, dy: box.y, srcW: w, srcH: h };
+    } else {
+        layer.__trim = { dx: 0, dy: 0, srcW: w, srcH: h };
+    }
+    const tw = box.w;
+    const th = box.h;
 
     if (typeof ImageData === 'function' && typeof createImageBitmap === 'function') {
         try {
-            return await createImageBitmap(new ImageData(pixels, w, h));
+            return await createImageBitmap(new ImageData(pixels, tw, th));
         } catch (err) {
             // 某些环境里 createImageBitmap(ImageData) 会被拒，掉到 canvas 路径
         }
@@ -172,11 +228,11 @@ async function psdLayerImage(layer) {
     if (typeof ImageData === 'function' && typeof document !== 'undefined' && document.createElement) {
         try {
             const canvas = document.createElement('canvas');
-            canvas.width = w;
-            canvas.height = h;
+            canvas.width = tw;
+            canvas.height = th;
             const g = canvas.getContext('2d');
             if (g) {
-                g.putImageData(new ImageData(pixels, w, h), 0, 0);
+                g.putImageData(new ImageData(pixels, tw, th), 0, 0);
                 return canvas;
             }
         } catch (err) {
@@ -184,7 +240,7 @@ async function psdLayerImage(layer) {
         }
     }
     // node / 无 DOM：返回足够画图的数据描述，psdToObjects 仍可用于测试与预检
-    return { width: w, height: h, data: pixels, psd: true };
+    return { width: tw, height: th, data: pixels, psd: true };
 }
 
 /** 位图文件（PNG/JPEG/WebP）→ ImageBitmap；o.decode 可注入（测试用）。 */
@@ -237,8 +293,9 @@ function psdObject(layer, image, parent, report) {
         parentId: parent ? parent.id : undefined,
         transform: {
             keys: [createKey(0, {
-                x: intOr(layer.left, 0) - (parent ? parent.x : 0),
-                y: intOr(layer.top, 0) - (parent ? parent.y : 0),
+                // 位图被裁到内容包围盒后，原点要跟着偏移，位置才不会跑
+                x: intOr(layer.left, 0) + (layer.__trim ? layer.__trim.dx : 0) - (parent ? parent.x : 0),
+                y: intOr(layer.top, 0) + (layer.__trim ? layer.__trim.dy : 0) - (parent ? parent.y : 0),
             })],
         },
     });

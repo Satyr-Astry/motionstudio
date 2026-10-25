@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+    alphaBounds,
     extOf,
     kindOf,
     toBytes,
@@ -606,4 +607,116 @@ test('pickAndImport：没有 preload 桥时返回 {ok:false}，不抛', async ()
     const res = await pickAndImport({});
     assert.equal(res.ok, false);
     assert.match(res.error, /桌面版/);
+});
+
+// ── alpha 包围盒裁剪（图层矩形 ≠ 内容矩形） ───────────────────────────────────
+//
+// PSD 的图层矩形常常等于整幅画布，留白却全是 alpha=0。裁到内容包围盒能让对象
+// 自己的「纸」贴合内容（缩略图、画板编辑、缩放都不再被空白带偏），代价是原点
+// 要跟着偏移 dx/dy —— 这两件事必须成对成立，所以下面按「尺寸 + 坐标」一起断言。
+
+/** 4×4 里只有中间 2×2 有像素，alpha 只给 1：裁剪只认 alpha>0，不看 RGB。 */
+const INSET_4X4 = (() => {
+    const px = new Array(16 * 4).fill(0);
+    for (const [x, y] of [[1, 1], [2, 1], [1, 2], [2, 2]]) {
+        const at = (y * 4 + x) * 4;
+        px[at] = 200;
+        px[at + 1] = 100;
+        px[at + 2] = 50;
+        px[at + 3] = 1;
+    }
+    return px;
+})();
+
+const ALL_TRANSPARENT_4X4 = new Array(16 * 4).fill(0);
+
+test('alphaBounds：只认 alpha、四周留白收缩、全透明返回 null', () => {
+    assert.deepEqual(alphaBounds(INSET_4X4, 4, 4), { x: 1, y: 1, w: 2, h: 2 });
+
+    const one = new Uint8ClampedArray(3 * 3 * 4);
+    one[(1 * 3 + 2) * 4 + 3] = 255;
+    assert.deepEqual(alphaBounds(one, 3, 3), { x: 2, y: 1, w: 1, h: 1 });
+
+    // 全透明 → null（调用方据此保留原矩形，不裁）
+    assert.equal(alphaBounds(ALL_TRANSPARENT_4X4, 4, 4), null);
+    // 参数不成立时也返回 null，而不是抛
+    assert.equal(alphaBounds(INSET_4X4, 0, 4), null);
+    assert.equal(alphaBounds(null, 4, 4), null);
+    // 缓冲比 w*h*4 短 → 不猜，直接 null
+    assert.equal(alphaBounds(INSET_4X4.slice(0, 16 * 4 - 1), 4, 4), null);
+});
+
+test('psdToObjects：图层带透明留白 → 位图裁到内容，坐标补上 dx/dy', async () => {
+    const psd = buildPsd({
+        width: 40,
+        height: 30,
+        layers: [{
+            name: '留白层',
+            left: 10,
+            top: 6,
+            width: 4,
+            height: 4,
+            planes: planesOf(INSET_4X4),
+        }],
+    });
+    const res = await psdToObjects(psd);
+    assert.equal(res.ok, true);
+
+    const obj = res.doc.objects[0];
+    const img = obj.cels[0].image;
+    assert.deepEqual([img.width, img.height], [2, 2]);
+    // 世界位置不变：left + dx = 10 + 1，top + dy = 6 + 1
+    const state = obj.transform.keys[0].state;
+    assert.deepEqual([state.x, state.y], [11, 7]);
+    // 裁出来的像素就是原图中间那 4 个点（行优先，颜色与 alpha 原样保留）
+    assert.deepEqual(Array.from(img.data), [
+        200, 100, 50, 1, 200, 100, 50, 1,
+        200, 100, 50, 1, 200, 100, 50, 1,
+    ]);
+});
+
+test('psdToObjects：满内容层与全透明层都不改矩形，坐标不偏', async () => {
+    const full = await psdToObjects(buildPsd({
+        width: 8,
+        height: 8,
+        layers: [{ name: '满层', left: 3, top: 2, width: 2, height: 2, planes: planesOf(PIXELS) }],
+    }));
+    assert.equal(full.ok, true);
+    const a = full.doc.objects[0];
+    assert.deepEqual([a.cels[0].image.width, a.cels[0].image.height], [2, 2]);
+    assert.deepEqual([a.transform.keys[0].state.x, a.transform.keys[0].state.y], [3, 2]);
+
+    // alpha 全 0：alphaBounds 给 null，矩形原样保留，偏移补 0
+    const clear = await psdToObjects(buildPsd({
+        width: 8,
+        height: 8,
+        layers: [{ name: '全透明', left: 4, top: 5, width: 2, height: 2, planes: planesOf(ALL_TRANSPARENT_4X4) }],
+    }));
+    assert.equal(clear.ok, true);
+    const b = clear.doc.objects[0];
+    assert.deepEqual([b.cels[0].image.width, b.cels[0].image.height], [2, 2]);
+    assert.deepEqual([b.transform.keys[0].state.x, b.transform.keys[0].state.y], [4, 5]);
+});
+
+test('psdToObjects：组内的留白层，裁剪偏移与父对象偏移各算各的', async () => {
+    const psd = buildPsd({
+        width: 40,
+        height: 30,
+        layers: [
+            { name: '组', divider: 1 },
+            { name: '组内留白层', left: 10, top: 6, width: 4, height: 4, planes: planesOf(INSET_4X4) },
+            { name: '', divider: 3 },
+        ],
+    });
+    const res = await psdToObjects(psd);
+    assert.equal(res.ok, true);
+    assert.equal(res.report.groups, 1);
+
+    const child = res.doc.objects.find((o) => o.name === '组内留白层');
+    const group = res.doc.objects.find((o) => o.name === '组');
+    assert.ok(child && group);
+    assert.equal(child.parentId, group.id);
+    assert.deepEqual([child.cels[0].image.width, child.cels[0].image.height], [2, 2]);
+    // 组原点恒为 0（组自身不位移），所以子对象仍是文档坐标：left + dx
+    assert.deepEqual([child.transform.keys[0].state.x, child.transform.keys[0].state.y], [11, 7]);
 });
