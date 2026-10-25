@@ -12,22 +12,25 @@
  * 3. 落笔**直接写纹理位图**，坐标只用「本画布 rect + 私有相机 + 纹理尺寸」算出来，
  *    不经过对象变换矩阵、不经过合成管线、不经过舞台相机。
  *
- * 结构（v8 高密度单行工具条）：
+ * 结构（三段分区：工具 / 画板动作 / 参数）：
  *   .bd
  *     .bd-bar
- *       .bd-brushes(.bd-brush[data-brush] × 7)
- *       .bd-swatch                        当前色块（点开极小色板）
- *       .bd-field.bd-field-size           range + 数字
- *       .bd-field.bd-field-opacity        range + 数字
- *       button[data-act=pick]             取色器（E）
- *       button[data-act=bucket]           填充（G）—— 与取色器互斥的"点一下"模式
- *       select.bd-mirror                  镜像：无 / 左右 / 上下 / 四向
- *       button[data-act=undo|redo]        撤销 / 重做（引擎 history）
- *       button[data-act=settings]         （more-horizontal）笔刷设置
- *       .bd-acts(.bd-act[data-act=prev|next|new|unique|fit])   ← margin-left:auto 靠右
+ *       .bd-seg.bd-seg-tools              ①工具段
+ *         .bd-brushes(.bd-brush[data-brush] × 7)   图标 + 两字短名
+ *         .bd-swatch                      当前色块（点开极小色板）
+ *         button[data-act=pick]           取色器（E）
+ *         button[data-act=bucket]         填充（G）—— 与取色器互斥的"点一下"模式
+ *         select.bd-mirror                镜像：无 / 左右 / 上下 / 四向
+ *       .bd-seg.bd-seg-acts               ②画板动作段（靠右）
+ *         button[data-act=undo|redo]      撤销 / 重做（引擎 history）
+ *         button[data-act=stab]           稳定器（图标 + 档位 0–5）
+ *         .bd-acts(.bd-act[data-act=prev|next|new|unique|fit])
+ *     .bd-params                          ③参数段（常显，零折叠）
+ *       .bd-prow(.bd-lab + input[type=range] + input.bd-num) × 6
+ *         大小 / 不透明 / 硬度 / 间距 / 抖动 / 流量
+ *       button[data-act=reset]            恢复默认（rotate-ccw）
  *     .bd-stage > canvas.bd-canvas + canvas.bd-ovl(笔刷游标层)
  *     .bd-pal   极小色板浮层（最近 6 色 + 前景/背景交换）
- *     .bd-pop   笔刷设置浮层（硬度 / 间距 / 抖动 / 流量 + 恢复默认）
  *     .bd-hint
  *
  * 参数生效链路：localStorage['ms.brush.'+id] → resolveBrush() → makeTip() / spacingPx()。
@@ -52,9 +55,25 @@ const LS_MIRROR = 'ms.brush.mirror';   // none / x / y / both
 const LS_BG = 'ms.brush.bg';           // 前景/背景交换用的「背景色」
 const LS_STAB = 'ms.board.stabilizer';  // 稳定器档位 0–5（默认 0 = 直通）
 
-/** 笔刷 chip 上的单字缩写（7 个 chip 要挤在一行里，全名放 title）。 */
+/**
+ * 笔刷 chip 的显示：图标 + 两字短名（全名与快捷键放 title）。
+ * 早先是单字（像/圆/软/铅/晕/散/擦）——单字不构成词，「像」是像素还是图像、「晕」是晕染还是模糊
+ * 都得点了才知道。两字是「一眼读得懂」与「26px 工具条放得下」的折中点。
+ * 见 docs/画板图标与可读性计划-2026-10.md §0 与 §5 第 1–7 行。
+ */
 const BRUSH_SHORT = {
-    pixel: '像', round: '圆', soft: '软', pencil: '铅', smudge: '晕', scatter: '散', eraser: '擦',
+    pixel: '像素', round: '圆头', soft: '柔边', pencil: '铅笔', smudge: '晕染', scatter: '散点', eraser: '橡皮',
+};
+
+/** 笔刷 chip 的图标名（icon-system 交付；名字缺失时 icon() 自己回退默认图标，不会炸）。 */
+const BRUSH_ICON = {
+    pixel: 'brush-pixel',
+    round: 'brush-round',
+    soft: 'brush-soft',
+    pencil: 'pencil',
+    smudge: 'brush-smudge',
+    scatter: 'brush-scatter',
+    eraser: 'eraser',
 };
 
 const MIRROR_MODES = [
@@ -266,10 +285,13 @@ export function mount(el, ctx) {
     const brushes = mk('div', 'bd-brushes');
     const brushBtns = new Map();
     BRUSH_PRESETS.forEach((b, i) => {
-        const btn = mk('button', 'bd-brush', BRUSH_SHORT[b.id] || b.name.slice(0, 1));
+        const btn = mk('button', 'bd-brush');
         btn.type = 'button';
         btn.dataset.brush = b.id;
+        btn.innerHTML = icon(BRUSH_ICON[b.id] || 'circle')
+            + '<span>' + (BRUSH_SHORT[b.id] || b.name.slice(0, 2)) + '</span>';
         btn.title = b.name + '（快捷键 ' + (i + 1) + '）';
+        btn.setAttribute('aria-label', b.name + '（快捷键 ' + (i + 1) + '）');
         brushes.appendChild(btn);
         brushBtns.set(b.id, btn);
     });
@@ -279,10 +301,10 @@ export function mount(el, ctx) {
     swatch.type = 'button';
     swatch.title = '当前颜色（点击打开色板）';
 
-    // 大小：range + 数字
-    const sizeField = mk('label', 'bd-field bd-field-size');
+    // 大小：名称 + 滑杆 + 可手输数值（三段式，名称永不隐藏）
+    const sizeField = mk('label', 'bd-prow bd-prow-size');
     sizeField.title = '笔尖大小（像素，[ / ] 调整）';
-    sizeField.appendChild(mk('span', 'bd-lab', '大小'));
+    sizeField.appendChild(mk('span', 'bd-lab bd-plab', '大小'));
     const sizeRange = mk('input');
     sizeRange.type = 'range';
     sizeRange.min = '1';
@@ -300,10 +322,10 @@ export function mount(el, ctx) {
     sizeNum.title = '笔尖大小（像素）';
     sizeField.append(sizeRange, sizeNum);
 
-    // 不透明度：range + 数字（百分比）
-    const opacityField = mk('label', 'bd-field bd-field-opacity');
+    // 不透明度：名称 + 滑杆 + 数字（百分比）
+    const opacityField = mk('label', 'bd-prow bd-prow-opacity');
     opacityField.title = '笔刷不透明度（%）';
-    opacityField.appendChild(mk('span', 'bd-lab', '不透明'));
+    opacityField.appendChild(mk('span', 'bd-lab bd-plab', '不透明'));
     const opacityRange = mk('input');
     opacityRange.type = 'range';
     opacityRange.min = '5';
@@ -357,20 +379,13 @@ export function mount(el, ctx) {
     redoBtn.setAttribute('aria-label', '重做');
     redoBtn.title = '重做（引擎 history）';
 
-    const settingsBtn = mk('button', 'bd-ico');
-    settingsBtn.type = 'button';
-    settingsBtn.dataset.act = 'settings';
-    settingsBtn.innerHTML = icon('more-horizontal');
-    settingsBtn.setAttribute('aria-label', '笔刷设置');
-    settingsBtn.title = '笔刷设置：硬度 / 间距 / 抖动 / 流量';
-
-    // 稳定器：图标 + 档位数字（0–5）。纯图标按钮，文字只作 a11y，图形靠 icon()。
+    // 稳定器：图标 + 档位数字（0–5）。数字是读数，必须留（C 类，不许纯图标化）。
     const stabBtn = mk('button', 'bd-ico bd-stab');
     stabBtn.type = 'button';
     stabBtn.dataset.act = 'stab';
     stabBtn.setAttribute('aria-label', '笔迹稳定器档位');
     stabBtn.title = '笔迹稳定器（点击切换 0–5 档，Ctrl+滚轮 也能调）';
-    stabBtn.innerHTML = icon('adjust') + '<span class="bd-stab-n">0</span>';
+    stabBtn.innerHTML = icon('stabilizer') + '<span class="bd-stab-n">0</span>';
 
     const acts = mk('div', 'bd-acts');
     // 五个纹理动作：‹ › 是纯图标（翻页箭头，文字放不下也没必要），后三个保留中文并加前置图标。
@@ -391,10 +406,15 @@ export function mount(el, ctx) {
         acts.appendChild(btn);
     }
 
-    bar.append(
-        brushes, swatch, sizeField, opacityField,
-        pickBtn, bucketBtn, mirrorSel, undoBtn, redoBtn, settingsBtn, stabBtn, acts,
-    );
+    /* 三段分区（计划 §4）：①工具 ②画板动作 —— 两段同处 .bd-bar，靠 1px --line 竖线分隔；
+       ③参数在下一行 .bd-params。分组而不是靠 gap 猜，是这次重排的主线之一。 */
+    const segTools = mk('div', 'bd-seg bd-seg-tools');
+    segTools.append(brushes, swatch, pickBtn, bucketBtn, mirrorSel);
+
+    const segActs = mk('div', 'bd-seg bd-seg-acts');
+    segActs.append(undoBtn, redoBtn, stabBtn, acts);
+
+    bar.append(segTools, segActs);
 
     /* ── DOM：画布 + 游标层 ── */
 
@@ -418,47 +438,66 @@ export function mount(el, ctx) {
     palSwap.title = '前景 / 背景交换';
     pal.append(mk('div', 'bd-pop-title', '最近颜色'), palGrid, palSwap);
 
-    /* ── DOM：笔刷设置浮层 ── */
+    /* ── DOM：参数行（常显，零折叠）──
+       原先硬度/间距/抖动/流量藏在 .bd-pop 里：不点开就不知道有这四个参数，点开还挡画布。
+       现在 6 项平铺，每项同构三段式：名称 + 滑杆 + 可手输数值。名称常显，不随窗口宽度消失。 */
 
-    const pop = mk('div', 'bd-pop');
-    pop.hidden = true;
-    const popTitle = mk('div', 'bd-pop-title', '笔刷设置');
-    pop.appendChild(popTitle);
+    const params = mk('div', 'bd-params');
+    // 顺序即优先级：大小 / 不透明 在最常调，硬软类参数在后（与 Klecks 笔刷面板同一顺序）
+    params.append(sizeField, opacityField);
 
     const paramRows = [];
+    const applyParam = (entry, intValue) => {
+        const raw = Number(intValue);
+        const v = Math.min(entry.max, Math.max(entry.min, Math.round(Number.isFinite(raw) ? raw : entry.min)));
+        entry.range.value = String(v);
+        entry.num.value = String(v);
+        const next = Object.assign({}, overridesFor(brushId));
+        next[entry.key] = entry.from(v);
+        saveOverrides(brushId, next);
+        tipSig = '';
+        scheduleCursor();
+    };
+
     for (const ui of PARAM_UI) {
-        const row = mk('label', 'bd-set-row');
-        row.appendChild(mk('span', 'bd-set-lab', ui.label));
+        const row = mk('label', 'bd-prow');
+        row.title = ui.label;
+        row.appendChild(mk('span', 'bd-lab bd-plab', ui.label));
         const range = mk('input');
         range.type = 'range';
         range.min = String(ui.min);
         range.max = String(ui.max);
         range.step = String(ui.step);
         range.dataset.param = ui.key;
-        const num = mk('span', 'bd-set-num', '0');
+        range.setAttribute('aria-label', ui.label);
+        const num = mk('input', 'bd-num');
+        num.type = 'number';
+        num.min = String(ui.min);
+        num.max = String(ui.max);
+        num.step = String(ui.step);
+        num.value = String(ui.min);
+        num.title = ui.label;
         row.append(range, num);
-        pop.appendChild(row);
-        paramRows.push({ ...ui, range, num });
+        params.appendChild(row);
 
-        range.addEventListener('input', () => {
-            const value = Number(range.value);
-            const next = Object.assign({}, overridesFor(brushId));
-            next[ui.key] = ui.from(Number.isFinite(value) ? value : ui.to(Number(activeBrush()[ui.key])));
-            saveOverrides(brushId, next);
-            tipSig = '';
-            num.textContent = String(Math.round(ui.from(Number(range.value)) * 100));
-            scheduleCursor();
-        });
+        const entry = { ...ui, range, num };
+        paramRows.push(entry);
+        range.addEventListener('input', () => applyParam(entry, Number(range.value)));
+        num.addEventListener('change', () => applyParam(entry, Number(num.value)));
     }
-    const resetBtn = mk('button', 'bd-set-reset', '恢复默认');
+
+    // 「恢复默认」并进最后一项（流量）的行尾：它单独吃一整行会让 1000×620 的画布跌破 360px 红线。
+    const resetBtn = mk('button', 'bd-ico bd-params-reset');
     resetBtn.type = 'button';
     resetBtn.dataset.act = 'reset';
-    resetBtn.title = '清除这个笔刷的记忆参数';
-    pop.appendChild(resetBtn);
+    resetBtn.innerHTML = icon('rotate-ccw');
+    resetBtn.setAttribute('aria-label', '恢复这支笔的默认参数');
+    resetBtn.title = '恢复默认：清除这支笔的记忆参数';
+    (params.lastElementChild || params).appendChild(resetBtn);
 
     const hint = mk('div', 'bd-hint', '左键画 · 右键/Alt 取色 · E 取色器 · G 填充 · [ ] 笔尖 · 1–7 笔刷 · 滚轮缩放 · 空格/中键平移 · 0 适配');
 
-    root.append(bar, stage, pal, pop, hint);
+    root.append(bar, params, stage, pal, hint);
     el.appendChild(root);
     root.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -1021,7 +1060,7 @@ export function mount(el, ctx) {
         brushId = b.id;
         tipSig = '';
         tip = null;
-        if (pop.hidden === false) syncParams();
+        syncParams();
         paintChrome();
         scheduleCursor();
     }
@@ -1046,7 +1085,6 @@ export function mount(el, ctx) {
     }
 
     function openPal() {
-        closePop();
         paintRecent();
         placePop(pal, swatch);
     }
@@ -1055,24 +1093,16 @@ export function mount(el, ctx) {
         pal.hidden = true;
     }
 
-    function openPop() {
-        closePal();
-        syncParams();
-        placePop(pop, settingsBtn);
-    }
-
-    function closePop() {
-        pop.hidden = true;
-    }
+    /* 参数常显之后不再有「笔刷设置浮层」：openPop/closePop 随 .bd-pop 一起删掉，
+       syncParams 改为无条件同步（参数值任何时候都和当前笔刷一致）。 */
 
     function syncParams() {
         const b = activeBrush();
         for (const row of paramRows) {
             const v = Number(b[row.key]);
             row.range.value = String(row.to(Number.isFinite(v) ? v : 0));
-            row.num.textContent = String(Math.round((Number.isFinite(v) ? v : 0) * 100));
+            row.num.value = String(Math.round((Number.isFinite(v) ? v : 0) * 100));
         }
-        popTitle.textContent = brushById(brushId).name + ' · 参数';
     }
 
     function resetParams() {
@@ -1126,8 +1156,7 @@ export function mount(el, ctx) {
                 setBucketMode();
                 return;
             case 'settings':
-                if (pop.hidden) openPop();
-                else closePop();
+                // 参数已常显，这个入口不再需要（保留 case 只为吃掉旧 DOM 里可能残留的按钮）
                 return;
             case 'swap':
                 swapColors();
@@ -1217,7 +1246,6 @@ export function mount(el, ctx) {
         const t = e.target && e.target.closest ? e.target : null;
         if (!t) return;
         if (pal.hidden === false && !t.closest('.bd-pal') && !t.closest('.bd-swatch')) closePal();
-        if (pop.hidden === false && !t.closest('.bd-pop') && !t.closest('[data-act="settings"]')) closePop();
     };
     window.addEventListener('pointerdown', onOutsideDown, true);
 

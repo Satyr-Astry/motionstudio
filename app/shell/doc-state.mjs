@@ -34,6 +34,7 @@ import {
     patchObject,
 } from '../core/cel.mjs';
 import { createTrack } from '../core/transform.mjs';
+import { cleanPrefs } from '../core/prefs.mjs';
 import { filterStringAt } from '../paint/effects.mjs';
 import { createEngine, TOOLS } from '../paint/engine.mjs';
 import { ONION_DEFAULTS } from '../paint/onion.mjs';
@@ -947,7 +948,10 @@ export {
  * 为什么不直接 import 面板模块：那会让每个消费方都依赖设置模式的面板，
  * 还要在 doc-state ↔ project-io ↔ registry 的循环里再补一条边。
  */
-let prefSnap = Object.freeze({
+/** 偏好的缺省值与取值范围。范围来自面板的选项表（`editors/prop-prefs.mjs` 的 SAVE/UNDO/GRID/BG 选项），
+ *  但不 import 面板模块 —— 那会绕出循环依赖；这里只按范围校验，手改的合法新值也能用。
+ *  清洗逻辑本身在 `core/prefs.mjs`（纯函数，node 里可直跑测试）。 */
+const PREF_DEFAULTS = Object.freeze({
     autoSave: 0,
     undoLimit: 100,
     snapGrid: 0.1,
@@ -956,9 +960,14 @@ let prefSnap = Object.freeze({
     bg: 'checker',
 });
 
-/** 应用一份偏好快照（只合并已知键），返回生效后的完整快照。 */
+let prefSnap = Object.freeze(cleanPrefs(null, PREF_DEFAULTS));
+
+/** 应用一份偏好快照（只合并已知键并逐项校验），返回生效后的完整快照。 */
 export function setPrefs(next) {
-    if (next && typeof next === 'object') prefSnap = Object.freeze(Object.assign({}, prefSnap, next));
+    if (next && typeof next === 'object') {
+        // 合并完再过 cleanPrefs：坏值退回缺省，未知键根本进不来
+        prefSnap = Object.freeze(cleanPrefs(Object.assign({}, prefSnap, next), PREF_DEFAULTS));
+    }
     // 撤销步数真正落到引擎：只存不生效等于假开关
     if (engine && typeof engine.setHistoryLimit === 'function') engine.setHistoryLimit(prefSnap.undoLimit);
     return prefSnap;

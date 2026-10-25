@@ -70,8 +70,36 @@ test('图标尺寸统一走 board.css 的 --icon-sm，不在 JS 里逐个传 siz
     assert.equal(inline.length, 0, `board.mjs 还有 ${inline.length} 处给 icon() 传 size`);
 });
 
+test('参数段是网格、标签固定 44px 宽 —— 六项左边缘才能落在同一竖线', () => {
+    const css = read('../app/styles/board.css');
+    const params = css.match(/\.bd \.bd-params\s*\{([^}]*)\}/);
+    assert.ok(params, '找不到 .bd-params 规则');
+    assert.match(params[1], /display:\s*grid/, '参数段必须是 grid；flex run-on 会让标签与滑杆轮流占行');
+    assert.match(params[1], /minmax\(360px,\s*1fr\)/, '列数交给 minmax(360px, 1fr) 自己算，不写死断点');
+
+    const lab = css.match(/\.bd \.bd-prow > \.bd-lab\s*\{([^}]*)\}/);
+    assert.ok(lab, '找不到 .bd-lab 规则');
+    const body = lab[1];
+    // 固定宽是本轮验收的机器判据：`flex:0 0 auto` 会让宽度随字长变，六项左边缘就跑偏
+    assert.match(body, /flex:\s*0 0 44px/, '.bd-lab 必须 flex:0 0 44px，不能是 flex:0 0 auto');
+    assert.match(body, /width:\s*44px/, '.bd-lab 要显式 width: 44px');
+    assert.match(body, /text-align:\s*right/, '.bd-lab 要右对齐');
+    assert.ok(!/display:\s*none/.test(body), '.bd-lab 里出现了 display:none');
+
+    const range = css.match(/\.bd \.bd-prow input\[type="range"\]\s*\{([^}]*)\}/);
+    assert.match(range[1], /min-width:\s*60px/, '滑杆最小 60px，否则数值框会把杆压没');
+    const num = css.match(/\.bd \.bd-prow input\[type="number"\]\s*\{([^}]*)\}/);
+    assert.match(num[1], /flex:\s*0 0 44px/, '数值框固定 44px，六项的数值右边缘才会齐');
+
+    // 恢复默认并进最后一格的行尾；跨整行会让参数段多顶一行，1000×620 的画布直接破 360 红线
+    const reset = css.match(/\.bd \.bd-params-reset\s*\{([^}]*)\}/);
+    assert.ok(reset, '找不到 .bd-params-reset 规则');
+    assert.ok(!/grid-column/.test(reset[1]), '.bd-params-reset 不许跨整行（会多出一行参数高度）');
+    assert.match(reset[1], /width:\s*22px/, '恢复默认按钮固定 22px，和行里的图标按钮同档');
+});
+
 test('纯图标按钮都带 aria-label（title 之外的第二道可访问性）', () => {
-    for (const btn of ['pickBtn', 'undoBtn', 'redoBtn', 'settingsBtn', 'stabBtn']) {
+    for (const btn of ['pickBtn', 'bucketBtn', 'undoBtn', 'redoBtn', 'stabBtn', 'resetBtn']) {
         assert.match(
             board,
             new RegExp(`${btn}\\.setAttribute\\('aria-label'`),
@@ -80,9 +108,57 @@ test('纯图标按钮都带 aria-label（title 之外的第二道可访问性）
     }
     // .bd-act 用 title 当 aria（‹ › 是纯图标，没有可读文字）
     assert.match(board, /btn\.setAttribute\('aria-label', title\)/);
+    // 笔刷 chip 是「图标 + 两字短名」，窄屏收成纯图标时全靠这条 aria
+    assert.match(board, /btn\.setAttribute\('aria-label', b\.name \+ '（快捷键 '/);
+});
+
+test('笔刷 chip 用两字短名 + 图标，不再用单字', () => {
+    // 单字（像/圆/软/铅/晕/散/擦）不构成词，7 支笔等于没有名字 —— 见计划 §0。
+    const block = board.match(/const BRUSH_SHORT = \{([\s\S]*?)\};/);
+    assert.ok(block, 'board.mjs 里找不到 BRUSH_SHORT');
+    const names = [...block[1].matchAll(/:\s*'([^']+)'/g)].map((m) => m[1]);
+    assert.equal(names.length, 7, `BRUSH_SHORT 应有 7 支笔，实际 ${names.length}`);
+    for (const n of names) {
+        assert.equal([...n].length, 2, `笔刷短名「${n}」不是两字（三字会撑破一行，单字读不懂）`);
+    }
+    // 每支笔都必须配一枚图标名，并且都在 icons.mjs 里（缺了 icon() 会静默回退默认图标）
+    const icons = board.match(/const BRUSH_ICON = \{([\s\S]*?)\};/);
+    assert.ok(icons, 'board.mjs 里找不到 BRUSH_ICON');
+    const iconNames = [...icons[1].matchAll(/:\s*'([a-z][a-z0-9-]*)'/g)].map((m) => m[1]);
+    assert.equal(iconNames.length, 7, `BRUSH_ICON 应有 7 条，实际 ${iconNames.length}`);
+    for (const name of iconNames) {
+        assert.ok(known.has(name), `笔刷图标 ${name} 不在 icons.mjs 里`);
+    }
+});
+
+test('参数常显：六条滑杆都在主界面，不藏在浮层里', () => {
+    // 大小 / 不透明 走 .bd-prow，硬度/间距/抖动/流量走 PARAM_UI —— 共 6 条
+    assert.match(board, /params\.append\(sizeField, opacityField\)/);
+    assert.match(board, /for \(const ui of PARAM_UI\)/);
+    assert.match(board, /params\.appendChild\(row\)/);
+    // 笔刷设置浮层已下线
+    assert.ok(!/const pop = mk\('div', 'bd-pop'\)/.test(board), 'board.mjs 里还留着 .bd-pop 浮层');
+    assert.ok(!/function (openPop|closePop)\(/.test(board), 'board.mjs 里还留着 openPop/closePop');
+});
+
+test('窄窗口不靠 display:none 藏字（这是「文字不显示完全」的真凶）', () => {
+    const css = read('../app/styles/board.css');
+    // 只查作用于 .bd-act>span / .bd-lab 的 display:none —— 别处（浮层 [hidden]）允许有
+    assert.ok(
+        !/\.bd \.bd-act > span\s*\{[^}]*display:\s*none/.test(css),
+        'board.css 又把 .bd-act > span 藏起来了',
+    );
+    assert.ok(
+        !/\.bd \.bd-(field|prow) > \.bd-lab\s*\{[^}]*display:\s*none/.test(css),
+        'board.css 又把 .bd-lab 藏起来了',
+    );
+    // 换行是允许的降级手段：.bd-bar 必须能折行，宽度不够时不许横向滚动
+    assert.match(css, /\.bd \.bd-bar \{[^}]*flex-wrap: wrap/);
+    assert.match(css, /\.bd \.bd-bar \{[^}]*height: auto/);
 });
 
 test('工具表按钮的 title / aria-label 同时带名称与快捷键', () => {
     assert.match(toolbar, /b\.title = `\$\{t\.name\} \(\$\{t\.key\}\)`/);
     assert.match(toolbar, /b\.setAttribute\('aria-label', `\$\{t\.name\} \(\$\{t\.key\}\)`\)/);
 });
+

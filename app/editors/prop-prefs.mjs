@@ -106,8 +106,10 @@ function readPrefs() {
         undoLimit: hasVal(UNDO_OPTS, o.undoLimit) ? Number(o.undoLimit) : DEFAULTS.undoLimit,
         snapGrid: hasVal(GRID_OPTS, o.snapGrid) ? Number(o.snapGrid) : DEFAULTS.snapGrid,
         sizePreset,
-        sizeW: clampRound(o.sizeW, 16, 4096, DEFAULTS.sizeW),
-        sizeH: clampRound(o.sizeH, 16, 4096, DEFAULTS.sizeH),
+        // 优先新键（外壳偏好快照的键名），兜底旧版本只写过的 sizeW/sizeH，
+        // 老用户的设置不会在升级后归零。
+        sizeW: clampRound(o.objectW != null ? o.objectW : o.sizeW, 16, 4096, DEFAULTS.sizeW),
+        sizeH: clampRound(o.objectH != null ? o.objectH : o.sizeH, 16, 4096, DEFAULTS.sizeH),
         bg: hasVal(BG_OPTS, o.bg) ? String(o.bg) : DEFAULTS.bg,
     };
 }
@@ -220,7 +222,12 @@ export function mount(el, ctx) {
     /** 存盘 + 立刻应用：localStorage 失败也不能让界面与内存状态脱节。 */
     function commit() {
         try {
-            localStorage.setItem(KEY, JSON.stringify(prefs));
+            // 同时写一份外壳键名（objectW/objectH）：启动时 doc-state 的 loadPrefs 从
+            // 这个 key 读的正是那对键，只存 sizeW/sizeH 会让「重启后新对象尺寸悄悄回缺省」。
+            localStorage.setItem(KEY, JSON.stringify(Object.assign({}, prefs, {
+                objectW: prefs.sizeW,
+                objectH: prefs.sizeH,
+            })));
         } catch (err) {
             /* 无痕模式 / 配额满：本次会话内仍然生效 */
         }

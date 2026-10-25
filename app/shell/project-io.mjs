@@ -21,6 +21,7 @@ import { compositeFrame } from '../paint/composite.mjs';
 import { editorDef } from './registry.mjs';
 import * as ipc from './ipc.mjs';
 import { importBuffer, pickAndImport } from './import-file.mjs';
+import { canReplaceDoc, mergeImportedDoc } from '../core/import-merge.mjs';
 import * as store from './project-store.mjs';
 import { buildSpritesheet } from './spritesheet.mjs';
 import { icon } from '../core/icons.mjs';
@@ -494,7 +495,9 @@ const MODAL_CSS = [
     // 空库时的唯一主行动：放在列表区正中（grid 里跨满整行），而不是塞在工具栏上方当第二排按钮。
     '.ms-modal .ms-modal-cta{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;padding:46px 16px;text-align:center}',
     '.ms-modal .ms-modal-cta-icon{display:flex;color:var(--ink-faint)}',
-    '.ms-modal .ms-modal-cta-icon .ms-icon{width:var(--icon-lg);height:var(--icon-lg);stroke-width:1.4}',
+    // 尺寸与线宽一律交给 icons.css 的 data-size="lg" 档（28px / 渲染 1.3px）：
+    // 这里曾经用 width/height 直接把盒子写成 28px 并写死 stroke-width:1.4，
+    // 结果是全站唯一一处 28px 用例反而比别的图标粗（1.4 × 28/24 = 1.63px）。
     '.ms-modal .ms-modal-cta-tip{color:var(--ink-dim);font-size:13px}',
     '.ms-modal .ms-modal-cta-sub{color:var(--ink-faint);font-size:12px}',
     '.ms-modal .ms-modal-cta-btn{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;padding:7px 16px;border:1px solid var(--accent);border-radius:var(--r-2);background:rgba(74,125,255,.16);color:var(--ink);cursor:pointer;transition:background-color var(--t-fast)}',
@@ -546,7 +549,7 @@ function syncProjectsCta(m) {
             if (old) return;
             const cta = el('div', 'ms-modal-cta');
             const iconBox = el('div', 'ms-modal-cta-icon');
-            iconBox.innerHTML = icon('folder-open');
+            iconBox.innerHTML = icon('folder-open', { size: 'lg' });
             const tip = el('div', 'ms-modal-cta-tip', '项目库还是空的');
             const sub = el('div', 'ms-modal-cta-sub', '新建一个项目开始画；也可以把 .msp 存档或 PSD 拖进窗口导入');
             const btn = el('button', 'ms-modal-cta-btn');
@@ -690,10 +693,17 @@ function openProjectsPanel() {
  * 为什么不复用 applyDoc：导入是「往现有项目里加对象」，不是「换一个项目」，
  * 不能重置 project.id / file，也不能清掉撤销栈。setDoc 才是既有的就地修改入口。
  */
-function commitImportedDoc(next) {
+function commitImportedDoc(next, before) {
     const fn = CTX && typeof CTX.setDoc === 'function' ? CTX.setDoc : setDoc;
     try {
-        fn(next);
+        if (canReplaceDoc(state.doc, before)) {
+            // 快照就是当前文档（导入期间没人动过）：保持原来那条整体替换，行为零变化
+            fn(next);
+        } else {
+            // 快照已过期（对话框期间换了项目 / 文档被改过）：只把新对象并进去，
+            // 不拿旧快照覆盖用户这段时间的改动
+            fn((cur) => mergeImportedDoc(cur, next));
+        }
         if (CTX && typeof CTX.requestRender === 'function') CTX.requestRender();
         return true;
     } catch (err) {
@@ -723,9 +733,11 @@ function importSummary(report) {
  */
 async function importFileObjects(scope) {
     const exts = scope === 'psd' ? ['psd', 'psb'] : scope === 'image' ? ['png', 'jpg', 'jpeg', 'webp'] : null;
+    // 抓一次快照：既给 pickAndImport 算居中/插入位置，也用来判断落库时文档有没有被换掉
+    const before = state.doc;
     let res;
     try {
-        res = await pickAndImport({ doc: state.doc, exts });
+        res = await pickAndImport({ doc: before, exts });
     } catch (err) {
         console.error('[shell] 导入失败：', err);
         flash('导入失败：' + ((err && err.message) || err));
@@ -736,7 +748,7 @@ async function importFileObjects(scope) {
         if (!(res && res.canceled)) flash((res && res.error) || '导入失败');
         return false;
     }
-    if (!commitImportedDoc(res.doc)) {
+    if (!commitImportedDoc(res.doc, before)) {
         flash('导入失败：当前文档不可用');
         return false;
     }

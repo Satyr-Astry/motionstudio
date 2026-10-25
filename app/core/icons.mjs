@@ -15,7 +15,13 @@
  * 任何 CDN / 图标字体 / npm 包都进不来。这里的每条 path 都是手写的。
  */
 
-/** 线宽。14px 的小图标用它略粗，但和 16px 的按钮图标同一条线宽才整齐。 */
+/**
+ * 线宽基数（24 viewBox 内的 user unit）。
+ * 渲染出来的物理线宽由 icons.css 的 `.ms-icon { stroke-width: calc(1.3 * 24 / var(--icon-px)) }`
+ * 接管 —— 三档尺寸（14/16/28）的视觉归一住在那里，不在这里。
+ * 这个常量只作为 SVG presentation attribute 的 fallback：CSS 未加载、或这段 svg
+ * 被挪出 .ms-icon 类时，仍然有一条合理的线而不是 0。
+ */
 const STROKE_WIDTH = 1.6;
 
 /**
@@ -105,6 +111,32 @@ export const icons = Object.freeze({
     fit: '<path d="M9.2 4.4H5.6a1.2 1.2 0 0 0-1.2 1.2v3.6"/><path d="M14.8 4.4h3.6a1.2 1.2 0 0 1 1.2 1.2v3.6"/><path d="M19.6 14.8v3.6a1.2 1.2 0 0 1-1.2 1.2h-3.6"/><path d="M4.4 14.8v3.6a1.2 1.2 0 0 0 1.2 1.2h3.6"/>',
     sparkle: '<path d="M11.4 3.9l1.8 4.6 4.6 1.8-4.6 1.8-1.8 4.6-1.8-4.6L5 10.3l4.6-1.8z"/><path d="M17.9 14.2l.8 2.1 2.1.8-2.1.8-.8 2.1-.8-2.1-2.1-.8 2.1-.8z"/>',
 
+    // ── 笔刷家族（画板工具条的七支笔；第七支「橡皮」复用上面的 eraser） ──
+    // 这一组最容易在 14px 下糊，所以每枚都用「一个可指认的轮廓 + 一条方向线」的构成：
+    // round 是斜杆 + 圆头，soft 是同心双圈，smudge 是三段椭圆拖尾，scatter 是散点，
+    // pixel 是方格，pencil 是削尖笔身。对照截图见 ms-view/shots/icon-lab2-14.png。
+    'brush-round': '<path d="M12.6 11.4 19.6 4.4a2.3 2.3 0 0 1 3.2 3.2l-7 7"/><circle cx="9.2" cy="14.8" r="3.6"/>',
+    // 柔边的虚线边：dasharray 的缺口必须撑到 14px 下还看得见（3.2 缺口 ≈ 1.9px），
+    // 否则缩小后虚线糊成实线，与 'brush-round' 的实心圆几乎一样。
+    'brush-soft': '<circle cx="9.4" cy="14.6" r="5" stroke-dasharray="3.4 3.2"/><circle cx="9.4" cy="14.6" r="2.2"/><path d="M12.9 11.3 19.4 4.8a2.2 2.2 0 0 1 3.1 3.1l-6.5 6.5"/>',
+    pencil: '<path d="M16.1 3.9a1.9 1.9 0 0 1 2.7 0l1.3 1.3a1.9 1.9 0 0 1 0 2.7l-8.4 8.4-4.9 1.1 1.1-4.9z"/><path d="M14.7 5.3 18.7 9.3"/>',
+    'brush-pixel': '<path d="M4.2 4.2h5.2v5.2H4.2zM10.6 4.2h5.2v5.2h-5.2zM4.2 10.6h5.2v5.2H4.2z"/><rect x="15.6" y="15.6" width="4.4" height="4.4" fill="currentColor" stroke="none"/>',
+    // 晕染：三条由粗到细、由实到虚的竖条。14px 下靠「宽窄差 + 透明度差」两条线索同时读，
+    // 只靠透明度会因为 1px 抗锯齿而糊成三条一样粗的平行线。
+    'brush-smudge': '<ellipse cx="6.4" cy="12" rx="3" ry="5.8"/><ellipse cx="12.6" cy="12" rx="2.1" ry="4.3" opacity=".58"/><ellipse cx="18.6" cy="12" rx="1.6" ry="2.9" opacity=".32"/>',
+    'brush-scatter': '<circle cx="6.6" cy="7.4" r="1.65" fill="currentColor" stroke="none"/><circle cx="13.4" cy="5.2" r="1.05" fill="currentColor" stroke="none"/><circle cx="18.3" cy="9.5" r="1.5" fill="currentColor" stroke="none"/><circle cx="9.1" cy="13.1" r="1.15" fill="currentColor" stroke="none"/><circle cx="15.7" cy="14.7" r="1.8" fill="currentColor" stroke="none"/><circle cx="6.3" cy="18.1" r="1.05" fill="currentColor" stroke="none"/><circle cx="18.7" cy="18.3" r="1.3" fill="currentColor" stroke="none"/>',
+
+    // ── 镜像 / 参数 / 稳定器 / 图片（变换工具栏与画板浮层） ──
+    // 镜像三枚靠「虚线轴的方向」区分：h 竖轴、v 横轴、both 十字 + 中心点。
+    'flip-h': '<path d="M12 3.2v17.6" stroke-dasharray="2.6 2.6"/><path d="M8.4 8.2 4.2 12l4.2 3.8"/><path d="M15.6 8.2 19.8 12l-4.2 3.8"/>',
+    'flip-v': '<path d="M3.2 12h17.6" stroke-dasharray="2.6 2.6"/><path d="M8.2 8.4 12 4.2l3.8 4.2"/><path d="M8.2 15.6 12 19.8l3.8-4.2"/>',
+    'flip-both': '<circle cx="12" cy="12" r="2.2"/><path d="M9.4 6.8 12 4.2l2.6 2.6M9.4 17.2 12 19.8l2.6-2.6M6.8 9.4 4.2 12l2.6 2.6M17.2 9.4 19.8 12l-2.6 2.6"/>',
+    // 与既有 adjust 的差别：adjust 是「两段断开的线 + 两个把手」，sliders 是「三条满宽线 + 三个错位把手」。
+    // 14px 下靠「线是否贯通」区分，这条边界比图形数量更稳。
+    sliders: '<path d="M3.4 6.4h18.2M3.4 12h18.2M3.4 17.6h18.2"/><circle cx="15.6" cy="6.4" r="2.1"/><circle cx="8.4" cy="12" r="2.1"/><circle cx="17" cy="17.6" r="2.1"/>',
+    stabilizer: '<path d="M3.6 9.4l2.2-3.2 2.4 4.6 2.2-5.4 2.4 5 2.2-3.6 2 4.4"/><path d="M3.6 17.8h16.8"/>',
+    'image-plus': '<path d="M4.2 5.4h13.2a1 1 0 0 1 1 1v6.6"/><path d="M4.2 5.4a1 1 0 0 0-1 1v11.2a1 1 0 0 0 1 1h8.2"/><path d="M4.4 16.4 8.6 12.2l3.2 3.2"/><circle cx="14.1" cy="9.1" r="1.35"/><path d="M18.3 15.2v5.6M15.5 18h5.6"/>',
+
     // ── 兜底：icon() 收到不存在的名字时用它，绝不返回空串（空串 = 空白按钮） ──
     help: '<circle cx="12" cy="12" r="8.4"/><path d="M9.6 9.5a2.5 2.5 0 1 1 3.7 2.2c-.8.5-1.3 1.1-1.3 2v.4"/><circle cx="12" cy="17.1" r=".95" fill="currentColor" stroke="none"/>',
     // 命令面板（Ctrl+Shift+P）：放大镜，Lucide 的 search 同一构成
@@ -141,7 +173,9 @@ function sizeAttrs(size) {
     const n = Number(size);
     if (!Number.isFinite(n) || n <= 0) return '';
     const px = Math.round(Math.min(96, Math.max(6, n)) * 100) / 100;
-    return ' style="--icon-size:' + px + 'px"';
+    // --icon-px 必须和 --icon-size 一起给：只给尺寸时 CSS 会按默认 16 算 stroke，
+    // 同一个图标换个尺寸就变粗/变细（这正是三档线宽不一致的成因）。
+    return ' style="--icon-size:' + px + 'px;--icon-px:' + px + '"';
 }
 
 /**

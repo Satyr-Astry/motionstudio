@@ -451,7 +451,7 @@ input.pal-hue:focus-visible::-webkit-slider-thumb {
 .lyr-row:hover { background: var(--panel-2); }
 
 .lyr-row.is-active {
-    background: var(--surface); box-shadow: inset 2px 0 0 var(--accent);
+    background: var(--sel-bg-strong); box-shadow: inset 2px 0 0 var(--sel-bar);
 }
 
 /* 可见性圆点：实心=可见，空心=隐藏 */
@@ -562,7 +562,9 @@ input.pal-hue:focus-visible::-webkit-slider-thumb {
 }
 
 .prop-title {
-    height: var(--h-bar); display: flex; align-items: center;
+    /* 与 .area-head 同高（--h-head 24）而不是 --h-bar(26)：
+       面板顶边是全站唯一基准，次级分组标题比它还高 2px 会让两个层次看起来像两种东西。 */
+    height: var(--h-head); display: flex; align-items: center;
     padding-left: 8px; background: var(--panel-2); border-bottom: 1px solid var(--line);
     color: var(--ink-dim); font-size: 11px; font-weight: 500; letter-spacing: 0.3px;
     white-space: nowrap; overflow: hidden;
@@ -865,8 +867,11 @@ input.lyr-rename {
 /* ── 图层面板：元素选中态与类型徽章 ── */
 
 .lyr-row.is-sel {
-    background: rgba(74, 125, 255, 0.16); box-shadow: inset 2px 0 0 var(--accent);
+    background: var(--sel-bg); box-shadow: inset 2px 0 0 var(--sel-bar);
 }
+
+/* 既是多选成员、又是当前编辑对象：取强的那一档 */
+.lyr-row.is-sel.is-active { background: var(--sel-bg-strong); }
 
 .lyr-row.is-sel .lyr-name, .tline-row.is-active .tline-label { color: var(--ink); }
 
@@ -1314,7 +1319,7 @@ input.lyr-rename {
 .cv-ob-menu[hidden] { display: none; }
 
 .cv-ob-mi:hover {
-    background: var(--accent); color: #fff;
+    background: var(--accent-2); color: #fff;
 }
 
 /* 效果参数关键帧开关：◆ 表示该参数有轨道（拖滑杆会逐帧改） */
@@ -1428,7 +1433,7 @@ input.lyr-rename {
 }
 
 .lyr-tp-mode.is-on {
-    border-color: var(--accent); background: var(--accent); color: #fff;
+    border-color: var(--accent-2); background: var(--accent-2); color: #fff;
 }
 
 .lyr-tp-hold {
@@ -1921,7 +1926,7 @@ input.tline-total {
     cursor: pointer; -webkit-user-select: none; user-select: none;
 }
 .lyr-cel:hover { background: var(--panel-2); }
-.lyr-cel.is-cur { background: var(--surface); box-shadow: inset 2px 0 0 var(--accent); }
+.lyr-cel.is-cur { background: var(--sel-bg-strong); box-shadow: inset 2px 0 0 var(--sel-bar); }
 
 /* 画格缩略图：canvas 位图就是 34×22（layers.mjs 的 CEL_THUMB_W/H），与 CSS 尺寸 1:1，不缩放 */
 .lyr-cel-thumb {
@@ -2108,6 +2113,28 @@ body.is-dropping #ws-host::after {
         columns: 3;
         column-gap: 18px;
     }
+}
+
+/* ═══════════════ 区域标题条的窗口按钮：悬停显现 ═══════════════
+每个区域标题条右端有 3 个按钮（上下分割 / 左右分割 / 关闭），13 个区域 = 39 个常驻字形。
+它们是「布局定下来之后几乎不再点」的低频操作，却和标题（用户真正在找的东西）抢同一行的注意力。
+改为：默认隐去，鼠标进入标题条或键盘聚焦时显现。
+
+为什么用 opacity 而不是 display:none —— 按钮仍在 tab 序里、仍可点，只是不占视觉重量；
+`@media (hover: none)` 下常显（触屏没有 hover，不能把入口藏掉）。 */
+.area-head .area-btn {
+    opacity: 0;
+    transition: opacity var(--t-fast), background-color var(--t-fast), border-color var(--t-fast);
+}
+
+.area-head:hover .area-btn,
+.area-head:focus-within .area-btn,
+.area-head .area-btn:focus-visible {
+    opacity: 1;
+}
+
+@media (hover: none) {
+    .area-head .area-btn { opacity: 1; }
 }
 
 /* ═══════════════ v8：区域折叠（双击标题栏） ═══════════════

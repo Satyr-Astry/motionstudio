@@ -402,3 +402,45 @@ test('E 键的语义分裂：编排是橡皮，画板是取色器', () => {
         assert.ok(board.items.some((i) => i.keys === shared), '画板缺共性键：' + shared);
     }
 });
+
+// ── task-24：12 枚新图标 + 三档 stroke 视觉归一 ──────────────────────────
+const NEW_ICONS = ['brush-round', 'brush-soft', 'pencil', 'brush-pixel', 'brush-smudge', 'brush-scatter',
+                    'flip-h', 'flip-v', 'flip-both', 'sliders', 'stabilizer', 'image-plus'];
+
+test('task-24：12 枚新图标都在表里，总数锁死 64', () => {
+    for (const name of NEW_ICONS) {
+        assert.ok(hasIcon(name), '缺少新图标：' + name);
+        const svg = icon(name);
+        assert.ok(svg.includes('viewBox="0 0 24 24"'), name + ' 的 viewBox 不是 24×24');
+        assert.ok(svg.includes('stroke="currentColor"'), name + ' 没有继承文字色');
+    }
+    // 52 旧 + 12 新。数量锁死是为了防「悄悄加一枚又删一枚」的净零漂移。
+    assert.equal(ICON_NAMES.length, 64, '图标表应为 52 旧 + 12 新 = 64，实际 ' + ICON_NAMES.length);
+    // 第七支笔复用既有键，不许再新建一个橡皮语义
+    assert.ok(hasIcon('eraser'), 'eraser 必须还在（第七支笔用它，不新建）');
+});
+
+test('task-24：图标表里不许留同义别名', () => {
+    // 一个动作一个名字。这几个最容易复发（画板工具条与工具面板容易各叫一套）。
+    for (const alias of ['pen', 'fill', 'picker', 'hand']) {
+        assert.ok(!hasIcon(alias), '别名「' + alias + '」不该出现在表里，应复用工具条那套名字');
+    }
+    // 'brush'（画板工具条那支画笔）与 'brush-*'（六支笔刷预设）是两个层级，不算别名
+    assert.ok(hasIcon('brush'), '工具条的 brush 必须还在');
+    assert.ok(hasIcon('brush-round'), '笔刷预设的 brush-round 必须还在');
+});
+
+test('task-24：三档 stroke 必须由尺寸算出，不许回退成常数', () => {
+    const css = read('../app/styles/icons.css');
+    assert.match(css, /stroke-width: calc\(1\.3 \* 24 \/ var\(--icon-px\)\)/,
+        'stroke 必须写成尺寸的函数（1.3 × 24 / --icon-px），否则三档粗细各不相同');
+    for (const px of ['14', '16', '28']) {
+        assert.match(css, new RegExp('--icon-px: ' + px + ';'),
+            '缺少 --icon-px: ' + px + '（要与 tokens.css 的 --icon-sm/--icon/--icon-lg 对应）');
+    }
+    // 主规则里一旦出现写死的 stroke-width 数字，那一档就会独立跑偏
+    const block = /\.ms-icon \{[^}]*\}/.exec(css);
+    assert.ok(block, '找不到 .ms-icon 主规则');
+    assert.ok(!/stroke-width: *[0-9.]+;/.test(block[0]),
+        '.ms-icon 主规则里不许写死 stroke-width 常数（会让某一档粗细跑偏）');
+});

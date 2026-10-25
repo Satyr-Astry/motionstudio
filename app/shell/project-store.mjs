@@ -64,6 +64,14 @@ const LS_CURRENT = 'klm-project';
 /** 缺省文档尺寸：与外壳 DEFAULT_W/DEFAULT_H/DEFAULT_FPS 对齐，仅用于坏数据的兜底。 */
 const FALLBACK = { width: 900, height: 640, fps: 12, loopMode: 'cycle' };
 
+/**
+ * 读入时画布边长的上限。与仓库其它尺寸出口保持一致（`core/doc-model.mjs` 的
+ * `Math.min(4096, …)`、画板 `BOARD_MAX = 4096`、属性输入框 `input.max = 4096`）：
+ * 手改过或第三方生成的存档不再能把画布开到 10 万，害得 `fitView` 把画面缩成一个点。
+ * 下限保持 1 —— 历史文件里有 1×1 的，抬到 16 会让它们打不开。
+ */
+const MAX_DIM = 4096;
+
 let idSeq = 0;
 let dbPromise = null;
 
@@ -520,8 +528,8 @@ function elementShell(src, i) {
 /** 文档外壳：尺寸/循环/时长/标签/洋葱皮/时间轴分段（objects 由调用方造好）。 */
 function docShell(node, objects, opts) {
     const doc = {
-        width: Math.max(1, Math.round(posNumber(node.width, FALLBACK.width))),
-        height: Math.max(1, Math.round(posNumber(node.height, FALLBACK.height))),
+        width: Math.max(1, Math.min(MAX_DIM, Math.round(posNumber(node.width, FALLBACK.width)))),
+        height: Math.max(1, Math.min(MAX_DIM, Math.round(posNumber(node.height, FALLBACK.height)))),
         fps: Number.isFinite(node.fps) && node.fps > 0 ? node.fps : FALLBACK.fps,
         loopMode: node.loopMode || FALLBACK.loopMode,
         objects: objects,

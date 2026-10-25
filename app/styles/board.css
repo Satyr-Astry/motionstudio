@@ -47,10 +47,21 @@
 }
 
 .bd .bd-brush {
-    min-width: 22px;
-    padding: 0 5px;
+    min-width: 60px;
+    padding: 0 6px;
     font-size: 11px;
     letter-spacing: 0;
+    white-space: nowrap;
+}
+
+/* 笔刷 chip 的图标：与图标按钮同一档 14px */
+.bd .bd-brush > .ms-icon {
+    --icon-size: var(--icon-sm);
+    flex: 0 0 auto;
+}
+
+.bd .bd-brush > span {
+    white-space: nowrap;
 }
 
 /* ── 当前色块 ── */
@@ -70,35 +81,98 @@
     border-color: var(--accent);
 }
 
-/* ── 大小 / 不透明度：range + 数字 ── */
+/* ── 三段分区：工具段 / 画板动作段（同处 .bd-bar）+ 参数段（下一行） ──
+   段与段之间用 1px --line 竖线分隔，与顶栏 .top-file 的分隔风格一致。
+   分组而不是靠 gap 猜，是这次重排的主线之一（见 docs/画板图标与可读性计划-2026-10.md §4）。 */
 
-.bd .bd-field {
+.bd .bd-seg {
     display: flex;
     align-items: center;
-    gap: 3px;
-    /* 10px 的「大小 / 不透明」是这行的唯一说明，压 --ink-faint 只有 4.47:1 → 升到 --ink-dim */
+    gap: 2px;
+    min-width: 0;
+}
+
+.bd .bd-seg + .bd-seg {
+    margin-left: 6px;
+    padding-left: 8px;
+    border-left: 1px solid var(--line);
+}
+
+/* 动作段整体靠右（原来靠 .bd-acts 的 margin-left:auto，现在由段接管） */
+.bd .bd-seg-acts {
+    margin-left: auto;
+}
+
+.bd .bd-seg-acts .bd-acts {
+    margin-left: 0;
+}
+
+/* ── 参数段：常显、零折叠。6 项同构「名称 + 滑杆 + 可手输数值」 ──
+   用网格而不是 flex run-on：run-on 会让「标签 滑杆 数值」三者轮流出现在同一行，
+   六项的标签左边缘不在同一列，眼睛没法竖着扫 —— 那就是用户说的「排版混乱」。
+   列数交给 minmax(360px) 自己算，不写死断点：1680 三列、1280 与 1000 各两列。 */
+
+.bd .bd-params {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    column-gap: 16px;
+    row-gap: 2px;
+    align-items: center;
+    /* 底部只留 1px：参数段高 = 行数×22 + row-gap + 1(border) + 1(padding)。
+       2 行 → 48、3 行 → 72，正好卡住验收上界（48 / 74）。 */
+    padding: 0 6px 1px;
+    border-top: 1px solid var(--line);
+}
+
+.bd .bd-prow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    height: var(--h-btn);
     color: var(--ink-dim);
     font-size: 10px;
     line-height: 1;
 }
 
-.bd .bd-field > .bd-lab {
+/* 名称永不隐藏（C 类）：固定 44px、右对齐。
+   盒宽固定 → 六项的标签左边缘必然落在同一竖线（机器判据见 tests/board-icons.test.mjs）。 */
+.bd .bd-prow > .bd-lab {
+    flex: 0 0 44px;
+    width: 44px;
     color: var(--ink-dim);
     font-size: 10px;
+    text-align: right;
     white-space: nowrap;
 }
 
-.bd .bd-field input[type="range"] {
-    width: 56px;
+/* 滑杆用原生 input[type=range] + accent-color，不自绘：自绘要自己处理键盘、触屏、RTL */
+.bd .bd-prow input[type="range"] {
+    flex: 1 1 auto;
+    min-width: 60px;
     height: var(--h-btn);
     margin: 0;
+    accent-color: var(--accent);
 }
 
-.bd .bd-field input[type="number"] {
-    width: 38px;
+.bd .bd-prow input[type="number"] {
+    flex: 0 0 44px;
+    width: 44px;
     height: var(--h-field);
     padding: 0 3px;
     font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+/* 恢复默认：并进最后一格的行尾（不是跨整行的第 7 项）。跨整行会多顶出一行参数高度，
+   1000×620 下画布就只剩 367px —— 离 360 红线 7px，那是留给下一个人踩的坑。 */
+.bd .bd-params-reset {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    margin-left: auto;
+    padding: 0;
 }
 
 /* ── 图标按钮：取色器 / 撤销 / 重做 / 更多 / 稳定器 ── */
@@ -187,11 +261,11 @@
     gap: 2px;
 }
 
-/* ── 浮层基座：色板 / 笔刷设置 ──
+/* ── 浮层基座：色板 ──
  * position:absolute 挂在 .bd 上（根元素是 relative），由 JS 算 left/top；
- * 注意必须显式处理 [hidden]：下面 display:flex 会盖掉浏览器默认的 display:none。 */
+ * 注意必须显式处理 [hidden]：下面 display:flex 会盖掉浏览器默认的 display:none。
+ * 笔刷设置浮层（.bd-pop）已随「参数常显」下线，这里只剩色板。 */
 
-.bd .bd-pop,
 .bd .bd-pal {
     position: absolute;
     z-index: 30;
@@ -206,13 +280,8 @@
     box-shadow: var(--shadow-pop);
 }
 
-.bd .bd-pop[hidden],
 .bd .bd-pal[hidden] {
     display: none;
-}
-
-.bd .bd-pop {
-    width: 208px;
 }
 
 .bd .bd-pop-title {
@@ -222,56 +291,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-
-/* ── 笔刷设置：四条滑杆 + 恢复默认 ── */
-
-.bd .bd-set-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    height: var(--h-btn);
-    color: var(--ink-dim);
-    font-size: 11px;
-    line-height: 1;
-}
-
-.bd .bd-set-lab {
-    flex: 0 0 26px;
-    color: var(--ink-dim);
-    white-space: nowrap;
-}
-
-.bd .bd-set-row input[type="range"] {
-    flex: 1 1 auto;
-    width: auto;
-    min-width: 0;
-    height: var(--h-btn);
-    margin: 0;
-}
-
-.bd .bd-set-num {
-    flex: 0 0 24px;
-    text-align: right;
-    color: var(--ink);
-    font-variant-numeric: tabular-nums;
-    font-size: 10px;
-}
-
-.bd .bd-set-reset {
-    height: var(--h-btn);
-    margin-top: 2px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-1);
-    background: var(--surface);
-    color: var(--ink-dim);
-    font-size: 11px;
-}
-
-.bd .bd-set-reset:hover {
-    border-color: var(--line-2);
-    color: var(--ink);
-    background: var(--line-2);
 }
 
 /* ── 色板：最近 6 色 + 前景/背景交换 ── */
@@ -343,25 +362,29 @@
     pointer-events: none;
 }
 
-/* ── 窄窗口：带字动作收成纯图标 ──
-   实测方式要当心：`.bd-bar` 是 `overflow-x:auto` 的 flex，内容装得下时 `scrollWidth`
-   恒等于 `clientWidth`，「1440/1440」不代表余量为 0。要看真实余量得把子项宽度加总：
-   1680 下 11 个子项共 901px、容器 1440px（余 539）；1280 下容器 1040px、同样内容 901px
-   （余 139）。所以 1280 并不缺地方 —— 只有 1100 以下才真溢出，这里才收字。
-   与时间轴工具条 `@media (max-width:1279px)` 同源：宁可少个字，不许挤到要滚动。 */
-@media (max-width: 1100px) {
-    .bd .bd-act > span {
-        display: none;
-    }
+/* ── 窄窗口：只换行，不藏字 ──
+   这里原来是两条 `display:none`（`.bd .bd-act > span` 与 `.bd .bd-field > .bd-lab`），
+   为的是让 1000×620 的 760px 容器「不溢出」。代价是窗口一窄就只剩三个无字图标
+   和两根没有名字的滑杆 —— 用户的原话是「即便用文字也不显示完全」。
+   **能放下 ≠ 可读**：判据缺了「藏掉之后还认不认得」这一半。
+/* 现在改成允许换行：`.bd-bar` 在窄窗口折成两行（第二行放动作段），一个字都不删。 */
+.bd .bd-bar {
+    flex-wrap: wrap;
+    flex-basis: auto;
+    height: auto;
+    min-height: var(--h-bar);
+    row-gap: 4px;
+    overflow-x: visible;
+}
 
+@media (max-width: 1100px) {
+    /* 唯一保留的收紧：动作按钮的内边距，纯尺寸压缩，不去掉任何文字 */
     .bd .bd-act {
         padding: 0 var(--sp-1);
-        min-width: var(--h-btn);
     }
 
-    /* 笔尖 / 不透明度的文字标签也收进 aria：1000×620（最小窗口）下 .bd-bar 只有 760px，
-       收掉「笔尖」「不透明度」两串字刚好回正（实测内容 782 → 距容器还差 22px）。 */
-    .bd .bd-field > .bd-lab {
-        display: none;
+    .bd .bd-seg-acts {
+        margin-left: 0;
     }
 }
+

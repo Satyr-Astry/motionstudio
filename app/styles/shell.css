@@ -202,8 +202,10 @@ body {
     color: var(--ink);
 }
 
+/* 选中态底色用 --accent-2 而不是 --accent：11px 白字压 #4a7dff 只有 4.24:1，
+   压 #2f5fd0 是 5.73:1。--accent 留给「身份色」（关键帧菱形、播放头、分割线悬停）。 */
 .top-ws-tab.is-on {
-    background: var(--accent);
+    background: var(--accent-2);
     border-color: var(--accent-2);
     color: #fff;
     font-weight: 600;
@@ -228,7 +230,7 @@ body {
 }
 
 .top-tr-btn.is-on {
-    background: var(--accent);
+    background: var(--accent-2);
     border-color: var(--accent-2);
     color: #fff;
 }

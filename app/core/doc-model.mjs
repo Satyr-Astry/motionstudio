@@ -131,9 +131,12 @@ export function createDoc(o) {
     for (const l of list) objects.push(makeObject(l));
     if (!objects.length) objects.push(makeObject({ name: '对象 1' }));
 
+    // 上限 4096：与 doc-model 自身的 `Math.min(4096, …)`（:297-298）、画板 BOARD_MAX、
+    // 属性面板 input.max 三处既有限制一致 —— 让「从任何入口造出来的文档」都不可能超过它。
+    // 下限保持 1：历史文件里有 1×1 的。
     const doc = {
-        width: Math.max(1, Math.round(isNum(src.width) && src.width > 0 ? src.width : 900)),
-        height: Math.max(1, Math.round(isNum(src.height) && src.height > 0 ? src.height : 640)),
+        width: Math.max(1, Math.min(4096, Math.round(isNum(src.width) && src.width > 0 ? src.width : 900))),
+        height: Math.max(1, Math.min(4096, Math.round(isNum(src.height) && src.height > 0 ? src.height : 640))),
         fps: isNum(src.fps) ? clampNum(src.fps, 1, 120) : 12,
         loopMode: typeof src.loopMode === 'string' ? src.loopMode : 'cycle',
         objects,
@@ -808,7 +811,12 @@ export function migrateFromFrames(old) {
     }
     const frames = Array.isArray(old.frames) ? old.frames : [];
     const srcLayers = Array.isArray(old.layers) ? old.layers : Array.isArray(old.elements) ? old.elements : [];
-    const fps = clampNum(old.fps, 1, 120) || 12;
+    // clampNum 对「非有限数」返回的是**下限**（这里 = 1），所以老写法
+    // `clampNum(old.fps, 1, 120) || 12` 里的 `|| 12` 是死代码：缺 fps 时拿到的是 1，
+    // v1–v3 老存档会被按 1 fps 打开（播放慢 12 倍、刻度与导出时长全错）。
+    // 先判「有没有一个正的 fps」，再交给 clampNum —— 缺省走 12。
+    const fpsRaw = Number(old.fps);
+    const fps = Number.isFinite(fpsRaw) && fpsRaw > 0 ? clampNum(fpsRaw, 1, 120) : 12;
 
     // 帧序号 → 起始秒（考虑 duration 倍率与分段帧率；这里只按 doc.fps 累加，
     // 分段帧率由 timebase 在求值时叠加，不影响画格归属）

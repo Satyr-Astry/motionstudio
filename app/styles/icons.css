@@ -24,10 +24,25 @@
     /* 2px 描边外扩时不被裁掉（眼睛、网格这类贴边图形） */
     overflow: visible;
     pointer-events: none;   /* 点图标 = 点按钮，别让 svg 自己接事件 */
+
+    /* ── 三档尺寸的物理线宽归一 ──────────────────────────────────────
+       stroke 是 24 viewBox 里的长度，渲染出来要乘 (实际尺寸 / 24)：
+         14px 配 1.6 → 0.93px（偏细）· 16px 配 1.6 → 1.07px · 28px 配 1.6 → 1.87px（偏粗）
+       同一套图形在三档尺寸下粗细不一，看起来就像三套图标库拼起来的。
+       目标统一到渲染 1.3px，所以 stroke 必须写成尺寸的函数：
+         stroke = 1.3 × 24 / --icon-px
+       --icon-px 必须与 --icon-size 的实际像素一一对应。tokens.css 的
+       --icon-sm/--icon/--icon-lg 是 14/16/28（tokens 属 Lead 域，这里写字面
+       数字，来源即此处注释）。CSS 属性优先于 SVG 的 presentation attribute，
+       所以 64 枚图标的数据一个都不用改。
+       注意：任何「只改 --icon-size 不改 --icon-px」的宿主规则都会让粗细跑偏，
+       tests/icons.test.mjs 里有断言守着这件事。 */
+    --icon-px: 16;
+    stroke-width: calc(1.3 * 24 / var(--icon-px));
 }
 
-.ms-icon[data-size="sm"] { --icon-size: var(--icon-sm); }
-.ms-icon[data-size="lg"] { --icon-size: var(--icon-lg); }
+.ms-icon[data-size="sm"] { --icon-size: var(--icon-sm); --icon-px: 14; }
+.ms-icon[data-size="lg"] { --icon-size: var(--icon-lg); --icon-px: 28; }
 
 /* ── 2. 纯图标按钮：22×22 方盒，图标居中 ───────────────────────
    全站 button 的 --h-btn = 22px，所以 22×22 正好等于行内按钮高度，
@@ -67,6 +82,7 @@ button.ms-icon-label:focus-visible {
 .top-file-btn .ms-icon,
 .top-back .ms-icon {
     --icon-size: var(--icon);
+    --icon-px: 16;
 }
 
 /* ── 5. 对象面板行内：可见性 / 折叠 / 时间通道 ─────────────────
@@ -101,12 +117,14 @@ button.ms-icon-label:focus-visible {
 
 .lyr-vis.ms-icon-btn .ms-icon {
     --icon-size: var(--icon-sm);
+    --icon-px: 14;
 }
 
 /* 行内图标统一 14px（与 10px 副标题、11px 名称同一视觉节奏） */
 .lyr-time.ms-icon-btn .ms-icon,
 .lyr-caret.ms-icon-btn .ms-icon {
     --icon-size: var(--icon-sm);
+    --icon-px: 14;
 }
 
 /* 折叠箭头原本是 ▾ 文本，靠全局 button 样式（有边框有底色）显示；
@@ -135,6 +153,7 @@ button.ms-icon-label:focus-visible {
 .xf-btn .ms-icon,
 .xf-warp-btn .ms-icon {
     --icon-size: var(--icon-sm);
+    --icon-px: 14;
 }
 
 .xf-btn.ms-icon-label,
@@ -182,6 +201,7 @@ button.ms-icon-label:focus-visible {
 .area-btn .ms-icon,
 .tline-legend .ms-icon {
     --icon-size: var(--icon-sm);
+    --icon-px: 14;
 }
 
 /* 图标 + 短文字：只加 gap，宽度照旧由内容决定（不设 width，不许省略号） */
