@@ -311,10 +311,11 @@ test('段帧率条：字号回到 10 档，窄段阈值与字号匹配', () => {
 test('帮助表：分组顺序固定，键位与图例的图标名都真实存在', () => {
     // 钉分组 id 而不是中文标题：标题是会改的文案（「画板」拆成「编排画布 / 画板工作区」），
     // id 是契约。canvas 与 board 必须分开 —— E 键在两个语境语义不同（橡皮 vs 取色器）。
+    // layer 是 L4 的层级键（Alt+↑↓/←→），作用对象是对象面板的层级，自成一类语境。
     assert.deepEqual(
         SHORTCUT_GROUPS.map((g) => g.id),
-        ['file', 'time', 'keyframe', 'canvas', 'board', 'view'],
-        '分组顺序必须是 file / time / keyframe / canvas / board / view'
+        ['file', 'time', 'keyframe', 'layer', 'canvas', 'board', 'view'],
+        '分组顺序必须是 file / time / keyframe / layer / canvas / board / view'
     );
     let rows = 0;
     for (const g of SHORTCUT_GROUPS) {
@@ -417,7 +418,7 @@ test('task-24：12 枚新图标都在表里，总数锁死 68', () => {
     // 52 旧 + 12 新 + 2（v8 第十六批：对象栈工具条的 chevron-up / merge-down）
     // + 2（v8 第二十批：画板纹理尺寸控件的 crop-content / canvas-resize）。
     // 数量锁死是为了防「悄悄加一枚又删一枚」的净零漂移。
-    assert.equal(ICON_NAMES.length, 68, '图标表应为 52 旧 + 12 新 + 2 对象栈 + 2 尺寸控件 = 68，实际 ' + ICON_NAMES.length);
+    assert.equal(ICON_NAMES.length, 69, '图标表应为 52 旧 + 12 新 + 2 对象栈 + 2 尺寸控件 + 1 unlink = 69，实际 ' + ICON_NAMES.length);
     for (const name of ['chevron-up', 'merge-down']) {
         assert.ok(hasIcon(name), '对象栈工具条要用：' + name);
     }

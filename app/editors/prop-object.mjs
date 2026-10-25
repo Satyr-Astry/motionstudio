@@ -3,7 +3,7 @@
 // 组的顺序与显隐由外壳 properties.mjs 统一控制：没有选中对象时「对象」与「效果」整组隐藏。
 
 import { effectAt } from '../paint/effects.mjs';
-import { objectSize, setObjectSize } from '../core/doc-model.mjs';
+import { objectSize, setObjectSize, objectById } from '../core/doc-model.mjs';
 import { patchLayer } from '../core/cel.mjs';
 import { createSurface } from '../paint/surface.mjs';
 import { createXformPanel } from './xform.mjs';
@@ -116,6 +116,37 @@ export function mount(el, ctx) {
             if (e.key === 'Enter') { e.preventDefault(); commitAnchor(); }
         });
     }
+
+    // ── 父对象 / 脱离父级（L5：属性面板承认父子关系。只加这两行，不改 ORDER 顺序）
+    //    「父对象」是可点的链接：点一下把选中跳到父对象（ctx.setSelection）。
+    //    「脱离父级」走 ctx.setLayerParent(id, null)：它内部已经做环检测并 flash 失败原因，
+    //    所以这里返回 false 就什么都不做 —— 不允许先改 UI 再回滚。
+    const parentField = makeRow(objBody, '父对象');
+    const parentLink = document.createElement('button');
+    parentLink.type = 'button';
+    parentLink.className = 'prop-link';
+    parentLink.textContent = '无（顶层）';
+    parentLink.addEventListener('click', () => {
+        const layer = activeObj(ctx, ctx.doc());
+        if (!layer || !layer.parentId) return;
+        ctx.setSelection({ id: layer.parentId });
+    });
+    parentField.appendChild(parentLink);
+
+    const detachField = makeRow(objBody, '父级');
+    const detachBtn = document.createElement('button');
+    detachBtn.type = 'button';
+    detachBtn.className = 'prop-seg ms-icon-label';
+    detachBtn.innerHTML = icon('unlink') + '<span>脱离</span>';
+    // 稳定标识：它和「居中」共用 .prop-seg.ms-icon-label，靠类名定位会抓错（真实踩过）
+    detachBtn.setAttribute('data-act', 'detach');
+    detachBtn.addEventListener('click', () => {
+        const layer = activeObj(ctx, ctx.doc());
+        if (!layer || !layer.parentId) return;
+        if (!ctx.setLayerParent(layer.id, null)) return;   // 失败原因由 ctx 提示，UI 保持原状
+        refresh();
+    });
+    detachField.appendChild(detachBtn);
 
     // ── 变换（xform 内嵌）
     const xformBody = makeGroup(el, '变换', 'xform');
@@ -287,6 +318,10 @@ export function mount(el, ctx) {
             visText.textContent = '可见';
             anchorX.value = '';
             anchorY.value = '';
+            // 没有对象时父子行也回到「顶层 + 禁用」，否则会留着上一个对象的父对象名
+            parentLink.disabled = true;
+            parentLink.textContent = '无（顶层）';
+            detachBtn.disabled = true;
             return;
         }
         // 显示开关：与对象列表的眼睛按钮同源，这里只做镜像
@@ -317,6 +352,22 @@ export function mount(el, ctx) {
         if (document.activeElement !== opacityInput) {
             opacityInput.value = String(Math.round((layer.opacity == null ? 1 : layer.opacity) * 100));
         }
+
+        // 父子关系（L5）：父对象行可点击跳到父对象；顶层时禁用并说明。
+        // 悬停说明写清「跟随什么」，因为这五个继承项在界面上没有其它地方会讲。
+        const parent = layer.parentId ? objectById(doc, layer.parentId) : null;
+        const parentName = parent ? (parent.name || parent.id) : '';
+        parentLink.disabled = !parent;
+        parentLink.textContent = parent ? parentName : '无（顶层）';
+        parentLink.title = parent
+            ? '跳到父对象「' + parentName + '」：该对象跟随父对象的时间通道、不透明度、显示、混合模式与变换'
+            : '顶层对象没有父对象';
+        parentLink.setAttribute('aria-label', parentLink.title);
+        detachBtn.disabled = !parent;
+        detachBtn.title = parent
+            ? '脱离父级：该对象不再跟随父对象的时间通道与变换'
+            : '已经是顶层，没有父级可脱离';
+        detachBtn.setAttribute('aria-label', detachBtn.title);
     }
 
     let fxSig = '';

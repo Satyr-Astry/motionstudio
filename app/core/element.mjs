@@ -1,7 +1,7 @@
 // 对象（部件）几何层：内容尺寸、变换矩阵（含锚点）、世界/局部换算、手柄位置、点击命中。
 // 依赖：doc-model.mjs（按时间取画格位图）、transform.mjs（取轨道状态 / 矩阵 / warp 四角）。
 // 约定：doc 空间 = 画布像素坐标；变换在 doc 空间内进行；屏幕换算留给画布叠加层。
-import { imageAt } from './doc-model.mjs';
+import { imageAt, objectById } from './doc-model.mjs';
 import { stateAt, matrixOf, warpQuad } from './transform.mjs';
 import { normalizeLattice, createLattice, latticeOffset, latticeInverse, latticeInverseRaw } from './lattice.mjs';
 import { alphaMaskOf } from './hit-mask.mjs';
@@ -154,6 +154,97 @@ export function elementQuad(doc, el, time, parentM) {
 export function elementWorldMatrix(el, time, size, parentM) {
     const own = elementMatrix(el, time, size);
     return parentM ? mulMatrix(parentM, own) : own;
+}
+
+/** 祖先链矩阵（不含自身，自根向下累乘）；父链有环或超深时截断，不抛错。 */
+function chainMatrix(doc, el, time, sizeOf) {
+    const chain = [];
+    let cur = el && el.parentId != null ? objectById(doc, el.parentId) : null;
+    let guard = 0;
+    while (cur && guard < 64) {
+        chain.push(cur);
+        cur = cur.parentId != null ? objectById(doc, cur.parentId) : null;
+        guard++;
+    }
+    let M = null;
+    for (let i = chain.length - 1; i >= 0; i--) {
+        const p = chain[i];
+        const size = sizeOf ? sizeOf(p, time) : elementSize(doc, p, time);
+        M = elementWorldMatrix(p, time, size, M);
+    }
+    return M;
+}
+
+/**
+ * 换父级时为了让对象「在世界里不动」所需的 x/y 增量（纯矩阵推导）。
+ *
+ * 推导：设 E 为元素自身矩阵（`elementMatrix`，已含锚点），W 为世界矩阵。
+ * 换父只允许改 x/y，所以新旧两个 E 的**线性部分必须相同**、只有平移变。
+ * 于是 `E_new = inverse(W_新父) * W_旧`、`E_old = inverse(W_旧父) * W_旧`，
+ * 增量就是两者平移之差 —— 不需要反解锚点，也天然支持父级带旋转/缩放/斜切
+ * （斜切导致父矩阵不可逆时才拒绝，见下）。
+ *
+ * `x/y` 对 `E.e/E.f` 是一比一的（平移增量不随锚点变化），所以直接加到 x/y 上即可。
+ *
+ * @param {object} doc 文档
+ * @param {object} el 要换父的对象（用**旧** parentId 取祖先链）
+ * @param {string|null} parentId 新父 id
+ * @param {number} time 时刻（父级可能带关键帧，必须按该时刻算）
+ * @param {(el: object, time: number) => {w:number,h:number}} [sizeOf] 尺寸取法，缺省走 `elementSize`
+ * @returns {{ok: boolean, dx: number, dy: number, reason: string}}
+ */
+export function reparentOffset(doc, el, parentId, time, sizeOf) {
+    if (!doc || !el) return { ok: false, dx: 0, dy: 0, reason: '没有对象' };
+    const t = Number(time);
+    if (!Number.isFinite(t)) return { ok: false, dx: 0, dy: 0, reason: '时刻无效' };
+    const size = sizeOf ? sizeOf(el, t) : elementSize(doc, el, t);
+    if (!size || !(Number(size.w) > 0) || !(Number(size.h) > 0)) {
+        return { ok: false, dx: 0, dy: 0, reason: '对象尺寸无效' };
+    }
+    const newParent = parentId == null ? null : objectById(doc, parentId);
+    if (parentId != null && !newParent) return { ok: false, dx: 0, dy: 0, reason: '父对象不存在' };
+    const oldParentM = chainMatrix(doc, el, t, sizeOf);
+    const W_old = elementWorldMatrix(el, t, size, oldParentM);
+    const newParentM = newParent ? chainMatrix(doc, newParent, t, sizeOf) : null;
+    const newParentSize = newParent
+        ? (sizeOf ? sizeOf(newParent, t) : elementSize(doc, newParent, t))
+        : null;
+    const W_newParent = newParent ? elementWorldMatrix(newParent, t, newParentSize, newParentM) : IDENTITY;
+    const invNew = invertMatrix(W_newParent);
+    if (!invNew) {
+        return { ok: false, dx: 0, dy: 0, reason: '新父级的变换无法求逆（斜切或零缩放），换父会让画面跳位，已取消' };
+    }
+    const invOld = oldParentM ? invertMatrix(oldParentM) : null;
+    if (oldParentM && !invOld) {
+        return { ok: false, dx: 0, dy: 0, reason: '原父级的变换无法求逆，换父会让画面跳位，已取消' };
+    }
+    /**
+     * 只改 x/y 时能保住的是「锚点在世界上不动」，不能连姿态一起保 ——
+     * 父级带旋转/缩放时，子对象的姿态必然随父改变（这是父子层级的定义）。
+     * 所以解的是：让 E 的**线性部分不变**、平移取到某个值，使
+     *   newParent * E_new * anchor === oldWorld * anchor
+     * 记 k = E_linear * anchor（线性部分不随 x/y 变），则
+     *   (x', y') = inverse(newParent) * (oldWorld * anchor) - k
+     */
+    const anchor = anchorPoint(el, size);
+    const E_old = oldParentM ? mulMatrix(invOld, W_old) : W_old;
+    const k = {
+        x: E_old.a * anchor.x + E_old.c * anchor.y,
+        y: E_old.b * anchor.x + E_old.d * anchor.y,
+    };
+    const q = applyMatrix(invNew, applyMatrix(W_old, anchor));
+    const xNew = q.x - k.x;
+    const yNew = q.y - k.y;
+    const cur = stateAt(el.transform, t) || {};
+    const xOld = Number(cur.x) || 0;
+    const yOld = Number(cur.y) || 0;
+    const dx = xNew - xOld;
+    const dy = yNew - yOld;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+        return { ok: false, dx: 0, dy: 0, reason: '换父时位置换算失败' };
+    }
+    // 「|| 0」把 -0 归一成 0，避免 deepEqual / 序列化出岔子
+    return { ok: true, dx: dx || 0, dy: dy || 0, reason: '' };
 }
 
 /**

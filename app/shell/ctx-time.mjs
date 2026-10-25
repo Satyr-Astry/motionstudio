@@ -20,6 +20,8 @@ import {
     collectSubtree,
     describeTime,
     localTimeOf,
+    isDescendant,
+    moveSubtreeDoc,
     normalizeTime,
     setParent as setParentDoc,
     subtreeSize,
@@ -39,7 +41,7 @@ import {
     setSegmentAt as setTimeSegmentAt,
     setSegmentFps as setTimeSegmentFps,
 } from '../core/timebase.mjs';
-import { elementLattice, elementQuad, hitTest } from '../core/element.mjs';
+import { elementLattice, elementQuad, hitTest, reparentOffset } from '../core/element.mjs';
 import { latticeIsZero, resizeLattice } from '../core/lattice.mjs';
 import { matrixObject } from '../core/evaluator.mjs';
 import { totalSeconds } from '../core/doc-model.mjs';
@@ -134,7 +136,10 @@ export function timeCtx(deps) {
     setLayerParent(id, parentId) {
         const doc = getDoc();
         if (!doc) return false;
-        const res = setParentDoc(doc, id, parentId == null ? null : parentId);
+        // 换父要「在世界里不动」：按当下这一刻算一次位移，加到该对象所有关键帧上。
+        // 矩阵推导在 core/element.mjs 的 reparentOffset，这里只注入当下的时间取法。
+        const res = setParentDoc(doc, id, parentId == null ? null : parentId,
+            (el, pid) => reparentOffset(doc, el, pid, typeof now === 'function' ? now() : 0));
         if (!res || !res.ok) {
             if (res && res.reason) flash(res.reason);
             return false;
@@ -155,6 +160,39 @@ export function timeCtx(deps) {
         const idx = Math.max(0, Math.min(list.length - 1, raw));
         if (idx === from) return false;
         setDoc((d) => reorderObject(d, id, idx), { label: '调整对象顺序' });
+        return true;
+    },
+    /**
+     * 整棵子树搬家（对象面板三区拖拽用）：换父 + 重排，**一次 setDoc、一条撤销**。
+     *
+     * 为什么不能拼现有两个写入口：`setLayerParent` 与 `moveLayerTo` 各写一次文档，
+     * 拼起来就是两条撤销记录，中间态还会让子对象短暂挂在旧位置 —— 拖父对象时那半帧很显眼。
+     * 失败一律返回 false 并 flash 原因，不静默。
+     *
+     * **换父的位移按 `now()`（当前播放头）算**：`into` / `rootEnd` 用这一刻的父子矩阵换算 x/y，
+     * 所以在「非当前帧的上下文」里调用会按播放头换算，而不是按调用方心里想的那一帧 ——
+     * 用户会在切到那一帧时看到差异。现有三个换父入口（面板按钮、属性面板父级字段、
+     * 三区拖拽）都发生在当前帧，所以这是对的。真要「按指定帧换父」，得先把侧栏/时间轴
+     * 统一到「一次操作绑定一个时刻」的模型（v9 的事），不该在这里偷渡一个 `opts.time`。
+     *
+     * @param {string} id 被移动的对象
+     * @param {{mode:'before'|'after'|'into'|'rootEnd', targetId?:string, coalesce?:string}} opts
+     *   `coalesce` 是撤销合并键：不传就走默认的「手势合并」（350ms 内的连续写入算一步，
+     *   拖拽就该这样）；键盘逐次移动要「一次一个撤销步」，调用方传一个每次不同的键即可。
+     * @returns {boolean}
+     */
+    moveSubtree(id, opts) {
+        const doc = getDoc();
+        if (!doc) return false;
+        const o = opts && typeof opts === 'object' ? opts : {};
+        const t = typeof now === 'function' ? now() : 0;
+        const res = moveSubtreeDoc(doc, id, o.mode, o.targetId,
+            (el, pid) => reparentOffset(doc, el, pid, t));
+        if (!res.ok) {
+            flash(res.reason || '移动失败');
+            return false;
+        }
+        setDoc(() => res.doc, { label: '移动对象', coalesce: typeof o.coalesce === 'string' ? o.coalesce : undefined });
         return true;
     },
     /** 全局时间 → 该对象的局部时间（曲线编辑器按对象时间显示用）。 */

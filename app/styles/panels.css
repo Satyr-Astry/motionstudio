@@ -439,10 +439,14 @@ input.pal-hue:focus-visible::-webkit-slider-thumb {
 }
 
 .lyr-list {
+    /* L3：拖拽插入线（.lyr-drop-line）以列表为定位系 */
+    position: relative;
     flex: 1 1 auto; min-height: 0; overflow-x: hidden; overflow-y: auto;
 }
 
 .lyr-row {
+    /* L2：引导线用 ::before 绝对定位画，不带 position 就会飞到面板左上角 */
+    position: relative;
     display: flex; align-items: center; gap: 6px; height: var(--h-row);
     padding: 0 6px; border-bottom: 1px solid var(--line);
     cursor: pointer; -webkit-user-select: none; user-select: none;
@@ -454,22 +458,31 @@ input.pal-hue:focus-visible::-webkit-slider-thumb {
     background: var(--sel-bg-strong); box-shadow: inset 2px 0 0 var(--sel-bar);
 }
 
-/* 可见性圆点：实心=可见，空心=隐藏 */
+/* 可见性圆点：实心=可见，空心=隐藏。
+   视觉仍是 10px 圆点，但按钮本体撑到 20×20 —— 10px 的点击目标太难点中（验收要求 ≥20×20）。 */
 .lyr-vis {
-    flex: 0 0 10px; width: 10px; min-width: 10px; height: 10px;
-    padding: 0; border: 1px solid var(--ink-dim); border-radius: 50%;
-    background-color: var(--ink-dim); cursor: pointer;
+    flex: 0 0 20px; width: 20px; min-width: 20px; height: 20px;
+    padding: 0; border: 0; border-radius: 50%;
+    background: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
 }
 
-.lyr-vis:not(.is-off):hover {
+.lyr-vis::before {
+    content: '';
+    width: 10px; height: 10px;
+    border: 1px solid var(--ink-dim); border-radius: 50%;
+    background-color: var(--ink-dim);
+}
+
+.lyr-vis:not(.is-off):hover::before {
     background-color: var(--ink); border-color: var(--ink);
 }
 
-.lyr-vis.is-off {
+.lyr-vis.is-off::before {
     background-color: transparent; border-color: var(--ink-faint);
 }
 
-.lyr-vis.is-off:hover { border-color: var(--ink-dim); }
+.lyr-vis.is-off:hover::before { border-color: var(--ink-dim); }
 
 /* 缩略图：棋盘格底 + 像素化放大。canvas 位图仍是 40×30，这里按 4:3 微缩到行高里
    （34×26 ≈ 1.308，误差 1.8%，肉眼不可分辨），否则 30px 的图塞不进 28px 的行 */
@@ -1375,16 +1388,87 @@ input.lyr-rename {
 
 /* ── v5：对象层级缩进 / 时间通道徽章 / 时间通道浮层 ───────────── */
 
-.lyr-row.is-child { box-shadow: inset 1px 0 0 var(--line-2); }
+/* ── L2：树形显示 ── */
 
-.lyr-row.is-dragging { opacity: .45; }
-
-.lyr-row.drop-child {
-    outline: 1px solid var(--accent); outline-offset: -1px;
-    background: color-mix(in srgb, var(--accent) 16%, transparent);
+/* 竖向引导线：每级一条 1px 竖线，画在行左侧 padding 区里（::before 不吃 pointer 事件）。
+   宽度由 JS 写进 --guide-w（depth*12），所以在任何层级都只画到「自己的父链」为止。 */
+.lyr-row.is-child::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: var(--guide-w, 12px);
+    background-image: repeating-linear-gradient(
+        to right,
+        var(--line) 0, var(--line) 1px,
+        transparent 1px, transparent 12px
+    );
+    pointer-events: none;
 }
 
-.lyr-row.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+/* 子行缩略图小一档（26 → 22 高，按 4:3 收到 29 宽）：
+   子对象在树里是「附属」的，视觉重量不该和根对象一样重。 */
+.lyr-row.is-child .lyr-thumb {
+    flex: 0 0 29px; width: 29px; height: 22px;
+}
+
+/* 「N 个子对象」胶囊：行尾，10px + tabular-nums，只说明数量不抢名字宽度 */
+.lyr-kids {
+    flex: 0 0 auto;
+    padding: 0 4px; height: 14px; line-height: 14px;
+    font-size: 10px; font-variant-numeric: tabular-nums;
+    color: var(--ink-dim); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: var(--r-1);
+    white-space: nowrap;
+}
+
+/* 空态：一个对象都没有时给一句话，别留一片空白 */
+.lyr-empty {
+    padding: 16px 12px;
+    font-size: 11px; line-height: 1.6; color: var(--ink-dim);
+    text-align: center;
+}
+
+/* 超过 6 级的行尾标记：+N 说明还有 N 级没缩进出来（缩进停在第 6 级，名字要给够宽度） */
+.lyr-row[data-deep]::after {
+    content: attr(data-deep);
+    margin-left: 4px; padding: 0 3px;
+    font-size: 9px; line-height: 14px; font-variant-numeric: tabular-nums;
+    color: var(--ink-faint);
+    border: 1px solid var(--line); border-radius: var(--r-1);
+    flex: 0 0 auto;
+}
+
+/* ── L3：三区拖拽的落点视觉 ── */
+
+/* 源行拖起时降到 45%；不要幽灵图（JS 侧 setDragImage 用 1×1 空图抑制） */
+.lyr-row.is-dragging { opacity: .45; }
+
+/* 插入线：2px accent + 左端 3px 圆点，起点按目标层级缩进（JS 写 --drop-indent） */
+.lyr-drop-line {
+    position: absolute; left: 0; right: 8px; height: 2px;
+    margin-left: var(--drop-indent, 6px);
+    background: var(--accent); border-radius: 1px;
+    pointer-events: none; z-index: 3;
+}
+
+.lyr-drop-line::before {
+    content: '';
+    position: absolute; left: -1.5px; top: -0.5px;
+    width: 3px; height: 3px; border-radius: 50%;
+    background: var(--accent);
+}
+
+/* 投进这一行：整行高亮 + 1px 虚线框（和「插到前后」的横线区分开） */
+.lyr-row.drop-into {
+    background-color: var(--sel-bg-strong);
+    outline: 1px dashed var(--accent); outline-offset: -2px;
+}
+
+/* 非法目标（自身 / 自己的后代）：danger 淡底 + 禁止光标 */
+.lyr-row.drop-invalid {
+    background-color: color-mix(in srgb, var(--danger) 14%, transparent);
+    outline: 1px dashed var(--danger); outline-offset: -2px;
+    cursor: not-allowed;
+}
 
 .lyr-time {
     flex: 0 0 auto; width: var(--h-btn); height: var(--h-btn);
@@ -1987,9 +2071,10 @@ body.is-dropping #ws-host::after {
 
 /* ── v8：对象树的折叠箭头（只影响面板显示） ───────────────────────── */
 .lyr-row > .lyr-caret {
-    flex: 0 0 12px;
-    width: 12px;
-    height: 18px;
+    /* 图标本身 12px，盒子撑到 20×20 让箭头好点中（验收要求可点区 ≥20×20） */
+    flex: 0 0 20px;
+    width: 20px;
+    height: 20px;
     margin-right: 1px;
     padding: 0;
     border: 0;

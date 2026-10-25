@@ -536,7 +536,11 @@ function docShell(node, objects, opts) {
         tags: Array.isArray(node.tags) ? plain(node.tags) || [] : [],
     };
     const declared = Number(node.duration);
-    if (Number.isFinite(declared) && declared > 0) doc.duration = declared;
+    // 老存档可能根本没有 duration 字段。以前这里是「有值才写」，读进来的文档连
+    // duration 这个键都没有，与 createDocument 的形状不一致（那边一定是 number）。
+    // 补成 0 而不是编一个时长：0 表示「没有声明」，用时由 docDuration 按内容兜底，
+    // 行为与以前完全一样。
+    doc.duration = Number.isFinite(declared) && declared > 0 ? declared : 0;
     const o = opts || {};
     const onion = plain(o.onion !== undefined ? o.onion : node.onion);
     if (onion) doc.onion = onion;

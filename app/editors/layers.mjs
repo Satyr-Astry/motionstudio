@@ -54,6 +54,89 @@ const BAR_ACTS = [
 // 动作全集：状态同步（置灰）与守卫提示都按这一份走
 const ACTS = BAR_ACTS;
 
+/* ───────────────────── 树形显示与拖拽落点：纯逻辑，零 DOM ─────────────────────
+ * 单测在 tests/layers-tree.test.mjs。约定：
+ * - objects 数组顺序 = 绘制顺序（composite 按它画），parentId 只表达归属；
+ * - 深度优先遍历保证「父在前、子紧随」，同层内部仍按数组相对顺序；
+ * - 环由 maxDepth / seen 兜住（core 的 setParent 已做环检测，这里只防脏数据）。 */
+
+const MAX_TREE_DEPTH = 64;
+
+/** 深度优先展开：返回 [{ layer, depth }]。根 = parentId 为空或指向不存在的对象。 */
+export function treeOrder(all) {
+    const list = Array.isArray(all) ? all.filter((o) => o && o.id != null) : [];
+    const ids = new Set(list.map((o) => o.id));
+    const byParent = new Map();
+    for (const o of list) {
+        if (o.parentId == null || !ids.has(o.parentId)) continue;
+        const arr = byParent.get(o.parentId);
+        if (arr) arr.push(o);
+        else byParent.set(o.parentId, [o]);
+    }
+    const out = [];
+    const seen = new Set();
+    const walk = (o, depth) => {
+        if (!o || seen.has(o.id) || depth > MAX_TREE_DEPTH) return;
+        seen.add(o.id);
+        out.push({ layer: o, depth });
+        const kids = byParent.get(o.id);
+        if (kids) for (const k of kids) walk(k, depth + 1);
+    };
+    for (const o of list) {
+        if (o.parentId == null || !ids.has(o.parentId)) walk(o, 0);
+    }
+    // 父链成环的孤岛遍历不到，按原顺序补到最后（depth 记 0，至少让人看得见）
+    for (const o of list) {
+        if (!seen.has(o.id)) {
+            seen.add(o.id);
+            out.push({ layer: o, depth: 0 });
+        }
+    }
+    return out;
+}
+
+/** 自身 + 全部后代的 id（深度优先，含自身）。 */
+export function subtreeIds(all, id) {
+    const list = Array.isArray(all) ? all : [];
+    if (id == null) return [];
+    const out = [];
+    const seen = new Set();
+    const queue = [id];
+    while (queue.length) {
+        const cur = queue.shift();
+        if (cur == null || seen.has(cur)) continue;
+        seen.add(cur);
+        if (!list.some((o) => o && o.id === cur)) continue;
+        out.push(cur);
+        for (const o of list) if (o && o.parentId === cur) queue.push(o.id);
+    }
+    return out;
+}
+
+/** id 是否落在 ancestorId 的子树里（含 ancestorId 自身）。 */
+export function isDescendantId(all, id, ancestorId) {
+    if (id == null || ancestorId == null) return false;
+    return subtreeIds(all, ancestorId).includes(id);
+}
+
+/** 三区判定：上缘 25% = 插到前、中间 50% = 投进去、下缘 25% = 插到后。 */
+export function dropZone(ratio) {
+    const r = Number.isFinite(ratio) ? ratio : 0.5;
+    if (r < 0.25) return 'before';
+    if (r > 0.75) return 'after';
+    return 'into';
+}
+
+/** 落点合法性：非法时 reason 直接进 title / 光标提示，不弹窗。 */
+export function dropVerdict(all, fromId, targetId, mode) {
+    if (fromId == null) return { ok: false, reason: '没有可拖动的对象' };
+    if (mode === 'rootEnd') return { ok: true, reason: '' };
+    if (targetId == null) return { ok: false, reason: '没有落点' };
+    if (fromId === targetId) return { ok: false, reason: '不能拖到自身' };
+    if (isDescendantId(all, targetId, fromId)) return { ok: false, reason: '不能拖进自己的子对象里' };
+    return { ok: true, reason: '' };
+}
+
 export function mount(el, ctx) {
     // 布局由 styles/panels.css 的 .lyr* 规则承担，这里不写内联样式
     const root = document.createElement('div');
@@ -145,12 +228,173 @@ export function mount(el, ctx) {
     root.append(bar, alphaWrap, list, cels, foot);
     el.appendChild(root);
 
+    /* ── L3：列表空白区 = 移到根层末尾（拖到列表下方松手就提起父级） ── */
+    function visibleRows() {
+        return [...list.querySelectorAll('.lyr-row')].filter((r) => r.style.display !== 'none');
+    }
+
+    list.addEventListener('dragover', (e) => {
+        if (!dragId) return;
+        const rowEl = e.target && e.target.closest ? e.target.closest('.lyr-row') : null;
+        if (rowEl) return;   // 行内的落点由行自己处理
+        e.preventDefault();
+        dropState = { targetId: null, mode: 'rootEnd', ok: true };
+        clearDropMarks();
+        const last = visibleRows().pop() || null;
+        if (last) showDropLine(last, 'after', indentOf(0));
+        else {
+            dropLine.style.setProperty('--drop-indent', indentOf(0) + 'px');
+            dropLine.style.top = '0px';
+            dropLine.hidden = false;
+        }
+        autoScroll(e);
+    });
+
+    list.addEventListener('drop', (e) => {
+        if (!dragId) return;
+        const rowEl = e.target && e.target.closest ? e.target.closest('.lyr-row') : null;
+        if (rowEl) return;
+        e.preventDefault();
+        const from = dragId;
+        dragId = null;
+        endDropHover();
+        if (from) commitDrop(from, { mode: 'rootEnd', targetId: null });
+    });
+
     // layerId → 行内对象引用，避免每次重绘重建 DOM
     const rows = new Map();
 
     const notify = (msg) => {
         if (typeof ctx.notify === 'function') ctx.notify(msg);
     };
+
+    /* ── L3：拖拽落点状态与视觉 ──
+       只在「目标 / 模式」变化时重绘；dragover 每帧都会来，改 class 比重建 DOM 便宜得多。 */
+    let dropState = { targetId: null, mode: null, ok: false };
+    let tempExpandedId = null;   // 「投进去」时临时展开的折叠行，离开后原样收起
+
+    const dropLine = document.createElement('div');
+    dropLine.className = 'lyr-drop-line';
+    dropLine.hidden = true;
+    list.appendChild(dropLine);
+
+    // L2 空态：一个对象都没有时列表不能只是一片空白（用户会以为面板坏了）
+    const emptyEl = document.createElement('div');
+    emptyEl.className = 'lyr-empty';
+    emptyEl.hidden = true;
+    emptyEl.textContent = '还没有对象。点上方 ＋ 新建，或用「导入」放一张图进来。';
+    list.appendChild(emptyEl);
+
+    // 超过 6 级不再继续缩进（12px×7 就把名字挤没了），改用行尾的 +N 标记说明还剩几层
+    const MAX_VISIBLE_DEPTH = 6;
+    const indentOf = (depth) => 6 + Math.min(MAX_VISIBLE_DEPTH, Math.max(0, Number(depth) || 0)) * 12;
+
+    /** 「N 个子对象」：优先用 ctx 现成的子树计数，没有就自己按 parentId 数（不重复造轮子，但要能降级）。 */
+    function kidCountOf(all, id) {
+        if (typeof ctx.subtreeCount === 'function') return Math.max(0, Number(ctx.subtreeCount(id)) || 0);
+        return Math.max(0, subtreeIds(all, id).length - 1);
+    }
+
+    function depthOf(id) {
+        return typeof ctx.layerDepth === 'function' ? Number(ctx.layerDepth(id)) || 0 : 0;
+    }
+
+    function clearDropMarks() {
+        for (const rec of rows.values()) {
+            rec.row.classList.remove('drop-before', 'drop-after', 'drop-into', 'drop-invalid');
+        }
+        dropLine.hidden = true;
+    }
+
+    function showDropLine(rowEl, where, indent) {
+        if (!rowEl) return;
+        const r = rowEl.getBoundingClientRect();
+        const lr = list.getBoundingClientRect();
+        const y = (where === 'before' ? r.top : r.bottom) - lr.top - 1;
+        dropLine.style.setProperty('--drop-indent', indent + 'px');
+        dropLine.style.top = y + 'px';
+        dropLine.hidden = false;
+    }
+
+    function endDropHover() {
+        clearDropMarks();
+        dropState = { targetId: null, mode: null, ok: false };
+        if (tempExpandedId) {
+            collapsedIds.add(tempExpandedId);
+            tempExpandedId = null;
+            saveCollapsed();
+            paint();
+        }
+    }
+
+    function hoverRow(targetId, mode) {
+        const doc = ctx.doc();
+        const all = doc ? objectsOf(doc) : [];
+        const v = dropVerdict(all, dragId, targetId, mode);
+        dropState = { targetId, mode, ok: v.ok };
+        clearDropMarks();
+        const rec = rows.get(targetId);
+        if (!rec) return;
+        if (!v.ok) {
+            rec.row.classList.add('drop-invalid');
+            return;
+        }
+        if (mode === 'into') {
+            rec.row.classList.add('drop-into');
+            // 折叠的目标临时展开：不然「投进去」之后东西凭空消失，用户会以为丢了
+            if (collapsedIds.has(targetId) && tempExpandedId !== targetId) {
+                tempExpandedId = targetId;
+                collapsedIds.delete(targetId);
+                paint();
+            }
+            return;
+        }
+        const indent = indentOf(depthOf(targetId));
+        rec.row.classList.add(mode === 'before' ? 'drop-before' : 'drop-after');
+        showDropLine(rec.row, mode, indent);
+    }
+
+    /** 列表上/下边缘 24px 内自动滚动：拖长列表时不必先松手再滚。 */
+    function autoScroll(e) {
+        const lr = list.getBoundingClientRect();
+        const EDGE = 24;
+        if (e.clientY < lr.top + EDGE) list.scrollTop -= 10;
+        else if (e.clientY > lr.bottom - EDGE) list.scrollTop += 10;
+    }
+
+    /** 一次落点 = 一条撤销记录。优先原子接口 `ctx.moveSubtree`（L1 线提供），
+        没有时降级成「改父 + 移动」两步 —— 撤销会变两步，但功能不丢。 */
+    function commitDrop(fromId, opts) {
+        const doc = ctx.doc();
+        if (!doc) return;
+        const all = objectsOf(doc);
+        const v = dropVerdict(all, fromId, opts.targetId, opts.mode);
+        if (!v.ok) {
+            notify(v.reason);
+            return;
+        }
+        if (typeof ctx.moveSubtree === 'function') {
+            if (ctx.moveSubtree(fromId, { mode: opts.mode, targetId: opts.targetId }) === false) notify('移动失败');
+            paint();
+            return;
+        }
+        // 降级路径：L1 的 moveSubtree 落地前，撤销会多一步
+        const target = opts.targetId == null ? null : all.find((o) => o.id === opts.targetId) || null;
+        if (opts.mode === 'rootEnd') {
+            if (typeof ctx.setLayerParent === 'function') ctx.setLayerParent(fromId, null);
+            if (typeof ctx.moveLayerTo === 'function') ctx.moveLayerTo(fromId, all.length - 1);
+        } else if (opts.mode === 'into') {
+            if (typeof ctx.setLayerParent === 'function') ctx.setLayerParent(fromId, opts.targetId);
+        } else if (target) {
+            const parentId = target.parentId == null ? null : target.parentId;
+            if (typeof ctx.setLayerParent === 'function') ctx.setLayerParent(fromId, parentId);
+            const ti = all.findIndex((o) => o.id === opts.targetId);
+            if (ti >= 0 && typeof ctx.moveLayerTo === 'function') {
+                ctx.moveLayerTo(fromId, opts.mode === 'before' ? ti : ti + 1);
+            }
+        }
+        paint();
+    }
 
     // 当前对象：activeLayerId 可能指向已删除的对象，回落到最上层
     function activeId(doc) {
@@ -226,7 +470,14 @@ export function mount(el, ctx) {
             openTimePopover(layer.id, timeBadge);
         });
 
-        // v5：拖到另一个对象的右半区 = 成为它的子对象；拖到左半区 = 调整顺序
+        // L2：有子对象的行尾一颗「N 个子对象」胶囊。10px + tabular-nums，
+        // 它是「这行下面还压着多少东西」的提示，不该抢名字的宽度。
+        const kids = document.createElement('span');
+        kids.className = 'lyr-kids';
+        kids.hidden = true;
+
+        // L3：三区拖拽 —— 上缘 25% 插到该行前 / 中间 50% 投进去当子对象 / 下缘 25% 插到该行后。
+        // 不再用「左 45% 调顺序、右 55% 当子对象」那种靠猜的分区。
         row.draggable = true;
         row.addEventListener('dragstart', (e) => {
             dragId = layer.id;
@@ -238,38 +489,50 @@ export function mount(el, ctx) {
                 } catch (err) {
                     /* setData 受限时忽略，dragId 已够 */
                 }
+                // 不要原生幽灵图：它会盖住插入线，也会挡住「投进哪一行」的判断
+                try {
+                    const ghost = document.createElement('canvas');
+                    ghost.width = 1;
+                    ghost.height = 1;
+                    e.dataTransfer.setDragImage(ghost, 0, 0);
+                } catch (err) {
+                    /* 个别环境不支持 setDragImage，忽略 */
+                }
             }
         });
         row.addEventListener('dragend', () => {
             dragId = null;
             row.classList.remove('is-dragging');
-            row.classList.remove('drop-child', 'drop-before');
+            endDropHover();
         });
         row.addEventListener('dragover', (e) => {
             if (!dragId || dragId === layer.id) return;
             e.preventDefault();
             const r = row.getBoundingClientRect();
-            const rightHalf = e.clientX - r.left > r.width * 0.45;
-            row.classList.toggle('drop-child', rightHalf);
-            row.classList.toggle('drop-before', !rightHalf);
+            const ratio = r.height > 0 ? (e.clientY - r.top) / r.height : 0.5;
+            hoverRow(layer.id, dropZone(ratio));
+            autoScroll(e);
         });
-        row.addEventListener('dragleave', () => row.classList.remove('drop-child', 'drop-before'));
+        row.addEventListener('dragleave', (e) => {
+            // 进入行内子元素也会触发 dragleave，只有真离开这一行才清
+            const to = e.relatedTarget;
+            if (to && row.contains(to)) return;
+            if (dropState.targetId === layer.id) endDropHover();
+        });
         row.addEventListener('drop', (e) => {
             e.preventDefault();
-            const asChild = row.classList.contains('drop-child');
-            row.classList.remove('drop-child', 'drop-before');
             const from = dragId;
+            const mode = dropState.mode;
+            const targetId = dropState.targetId;
             dragId = null;
-            if (!from || from === layer.id) return;
-            if (asChild) {
-                if (typeof ctx.setLayerParent === 'function') ctx.setLayerParent(from, layer.id);
-            } else if (typeof ctx.moveLayerTo === 'function') {
-                ctx.moveLayerTo(from, layer.id);
-            }
+            row.classList.remove('is-dragging');
+            endDropHover();
+            if (!from || from === layer.id || !mode) return;
+            commitDrop(from, { mode, targetId });
         });
 
-        row.append(caret, vis, thumb, meta, timeBadge);
-        return { row, caret, vis, thumb, name, sub, timeBadge };
+        row.append(caret, vis, thumb, meta, kids, timeBadge);
+        return { row, caret, vis, thumb, name, sub, timeBadge, kids };
     }
 
     // ── 时间通道浮层（v5）
@@ -488,7 +751,8 @@ const TIME_MODE_TEXT = [
             }
             return false;
         };
-        all.forEach((layer) => {
+        // L2：按父子链深度优先渲染 —— 父在前、子紧随。同层内部仍按数组相对顺序。
+        treeOrder(all).forEach(({ layer, depth }) => {
             let rec = rows.get(layer.id);
             if (!rec) {
                 rec = makeRow(layer);
@@ -546,13 +810,32 @@ const TIME_MODE_TEXT = [
             const tip = layer.name + ' · 不透明度 ' + pct + '% · ' + sub + ' · 曝光 ' + expoCount + ' 处';
             if (rec.row.title !== tip) rec.row.title = tip;
 
-            // v5：父子缩进 + 时间通道徽章
-            const depth = typeof ctx.layerDepth === 'function' ? ctx.layerDepth(layer.id) : 0;
-            // 基础缩进 6px 跟 .lyr-row 的 padding 对齐，层级每深一层再加 12px。
-            // 只内联 padding-left 会覆盖 CSS 里的 6px，所以这里把它算进去。
-            const pad = 6 + (depth > 0 ? depth * 12 : 0);
+            // L2：父子缩进沿用已有实现（6 + depth*12），引导线宽度交给 CSS 的 --guide-w
+            const capped = Math.min(MAX_VISIBLE_DEPTH, Math.max(0, Number(depth) || 0));
+            const pad = indentOf(depth);
             if (rec.row.style.paddingLeft !== pad + 'px') rec.row.style.paddingLeft = pad + 'px';
             rec.row.classList.toggle('is-child', depth > 0);
+            const guide = capped > 0 ? capped * 12 + 'px' : '0px';
+            rec.row.style.setProperty('--guide-w', guide);
+            // 超过 6 级：行尾标 +N，说明「这行还有 N 级没被缩进出来」
+            const extra = Math.max(0, Number(depth) - capped);
+            const deepTxt = extra > 0 ? '+' + extra : '';
+            if ((rec.row.dataset.deep || '') !== deepTxt) {
+                if (deepTxt) rec.row.dataset.deep = deepTxt;
+                else delete rec.row.dataset.deep;
+            }
+            // L2：行尾「N 个子对象」胶囊 —— 拖父对象时整棵子树都会跟着走，先让人看见有多少
+            const hasKids = hasChild.has(layer.id);
+            rec.kids.hidden = !hasKids;
+            if (hasKids) {
+                const kidCount = kidCountOf(all, layer.id);
+                // 面板只有 230px 宽：胶囊写全称「N 个子对象」会把名字挤成省略号，
+                // 所以面板里只放「N 子」，完整说法进 title
+                const ktxt = kidCount + ' 子';
+                if (rec.kids.textContent !== ktxt) rec.kids.textContent = ktxt;
+                const ktip = '含 ' + kidCount + ' 个子对象（拖动这一行会整棵子树一起移动）';
+                if (rec.kids.title !== ktip) rec.kids.title = ktip;
+            }
             const ident = typeof ctx.isLayerTimeIdentity === 'function' ? ctx.isLayerTimeIdentity(layer.id) : true;
             rec.timeBadge.classList.toggle('is-off', ident);
             const timeTip =
@@ -567,6 +850,9 @@ const TIME_MODE_TEXT = [
             rec.row.remove();
             rows.delete(id);
         }
+
+        // L2 空态：没有对象时列表不能只剩一片空白
+        if (emptyEl) emptyEl.hidden = all.length > 0;
     }
 
     // 不可用动作只做视觉置灰，但仍可点击：让守卫路径向 ctx.notify 报中文提示
@@ -924,7 +1210,16 @@ const TIME_MODE_TEXT = [
         const id = row.dataset.id;
         const caret = e.target.closest ? e.target.closest('.lyr-caret') : null;
         if (caret) {
-            if (collapsedIds.has(id)) collapsedIds.delete(id);
+            // 点箭头 = 只折这一支（后代的折叠状态各自保留）；
+            // Alt+点 = 整支收起 / 整支展开（深层树上一次收拢，再点一次全部放回来）
+            if (e.altKey) {
+                const ids = subtreeIds(objectsOf(ctx.doc()), id);
+                const allFolded = ids.every((x) => collapsedIds.has(x));
+                for (const x of ids) {
+                    if (allFolded) collapsedIds.delete(x);
+                    else collapsedIds.add(x);
+                }
+            } else if (collapsedIds.has(id)) collapsedIds.delete(id);
             else collapsedIds.add(id);
             saveCollapsed();
             paint();

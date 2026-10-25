@@ -78,6 +78,27 @@ export const SHORTCUT_GROUPS = [
             { icon: 'copy', name: '复制 / 粘贴关键帧', keys: 'Ctrl+C / Ctrl+V', hint: '时间轴里选中的那些' },
         ],
     },
+    // L4 层级键：作用对象是「对象面板的层级结构」，语境与画布工具键、时间轴键都不同，
+    // 所以单独成组 —— 上轮「E 键同时写着橡皮和取色器」的教训：不同语境挤进一组就会自相矛盾。
+    //
+    // 计算侧已落地：app/core/layer-order.mjs 的 layerKeyFromEvent / layerKeyTarget
+    // （纯函数，tests/layers-keys.test.mjs 覆盖：兄弟换位、升级/降级目标、首兄弟/根对象不动作）。
+    // 接线侧（layers.mjs 的 keydown 调 layerKeyFromEvent → ctx.setLayerParent + ctx.moveLayerTo）
+    // 由 Lead 在图层线合并时完成；接线前这两个键位不生效。
+    {
+        id: 'layer',
+        title: '对象层级',
+        icon: 'rows',
+        items: [
+            { icon: 'rows', name: '同级上移 / 下移', keys: 'Alt+↑ / Alt+↓', hint: '只在兄弟之间换位，不跨越父级' },
+            {
+                icon: 'chevron-right',
+                name: '降级 / 升级',
+                keys: 'Alt+← / Alt+→',
+                hint: '左 = 成为前一个兄弟的子对象；右 = 成为父的兄弟、插在父之后',
+            },
+        ],
+    },
     // 下面两组是**两个不同的键位语境**，不能合并：
     //   编排画布 = app.mjs 的全局 keydown（`[`/`]` 1078-1087、`0` 1088-1094、工具键 1095-1101）
     //              → TOOL_KEYS（shell/doc-state.mjs:80）→ engine.setTool，工具名来自 paint/engine.mjs:27-32 的 TOOLS；

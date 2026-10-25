@@ -34,6 +34,7 @@ import {
     patchObject,
 } from '../core/cel.mjs';
 import { createTrack } from '../core/transform.mjs';
+import { cycleIds } from '../core/timegraph.mjs';
 import { cleanPrefs } from '../core/prefs.mjs';
 import { filterStringAt } from '../paint/effects.mjs';
 import { createEngine, TOOLS } from '../paint/engine.mjs';
@@ -325,10 +326,32 @@ function pixelsDiffer(a, b) {
 }
 
 /** 直接把文档落到状态里（不压栈）。撤销/重做回放与 setDoc 都走它。 */
+/**
+ * 父子链成环时说一句（只说不改）：环上的对象在渲染/求值层只能被跳过，
+ * 不提示的话用户只会看到「对象不见了」。同一状态只提醒一次，环消失后重置。
+ */
+let cycleWarned = false;
+function warnCycle(doc) {
+    let bad = [];
+    try {
+        bad = cycleIds(doc);
+    } catch (err) {
+        return;
+    }
+    if (!bad.length) {
+        cycleWarned = false;
+        return;
+    }
+    if (cycleWarned) return;
+    cycleWarned = true;
+    flash('文档里有循环的父子关系（' + bad.length + ' 个对象），它们不会被绘制');
+}
+
 function commitDoc(next) {
     const prev = state.doc;
     state.doc = next;
     clampSelection();
+    warnCycle(next);
     // 只有会改变画面的改动才排重绘；面板刷新照旧（名字要立刻显示出来）
     if (pixelsDiffer(prev, next)) engine.scheduleRender();
     scheduleRefresh();
@@ -350,6 +373,9 @@ function setDoc(updater, opts) {
         next = typeof updater === 'function' ? updater(prev) : updater;
     } catch (err) {
         console.error('[shell] setDoc 的 updater 抛异常：', err);
+        // 以前这里只进控制台：用户看到的是「点了没反应」，而控制台没人看。
+        // 文档保持不变（下面 return prev），但必须让人知道这次操作没生效。
+        flash('这次修改没有生效（内部出错），文档保持原样');
         return prev;
     }
     if (!next || typeof next !== 'object' || next === prev) return prev;

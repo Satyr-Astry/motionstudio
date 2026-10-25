@@ -38,7 +38,8 @@
  */
 
 import {
-    BRUSH_PARAM_KEYS, BRUSH_PRESETS, brushById, makeTip, resolveBrush, spacingPx, tipDiameter,
+    BRUSH_PARAM_KEYS, BRUSH_PRESETS, brushById, makeTip, marchStamps, resolveBrush, spacingPx, tipDiameter,
+    alphaScaleAt, migrateBrushOverrides, pointerPressure, sizeScaleAt, SPACING_VERSION,
 } from '../paint/brush.mjs';
 import { captureRegion, makeRegionCommand } from '../paint/patch.mjs';
 import { MAX_LEVEL, clampLevel, createStabilizer } from '../paint/stabilizer.mjs';
@@ -54,6 +55,7 @@ const LS_RECENT = 'ms.brush.recent';   // 最近用过的颜色
 const LS_MIRROR = 'ms.brush.mirror';   // none / x / y / both
 const LS_BG = 'ms.brush.bg';           // 前景/背景交换用的「背景色」
 const LS_STAB = 'ms.board.stabilizer';  // 稳定器档位 0–5（默认 0 = 直通）
+const LS_BRUSH_MIGRATE = 'ms.brush.migrate';  // 间距重标定的迁移版本（= SPACING_VERSION 就不再迁）
 
 /**
  * 笔刷 chip 的显示：图标 + 两字短名（全名与快捷键放 title）。
@@ -246,6 +248,35 @@ export function mount(el, ctx) {
         }
         return brushCache;
     }
+
+    /**
+     * 一次性迁移：间距重标定（0.12 → 0.42445 等）之后，旧默认值已经写进 localStorage 的
+     * 覆写表里，会让用户「一打开就还是老手感」。这里把**恰好等于旧默认值**的那一条删掉，
+     * 让新默认生效；用户自己拖过的值原样保留。版本号写进 `ms.brush.migrate`，只迁一次。
+     */
+    function migrateSpacingPrefs() {
+        const done = lsGet(LS_BRUSH_MIGRATE);
+        if (done === String(SPACING_VERSION)) return;
+        for (const preset of BRUSH_PRESETS) {
+            const key = LS_BRUSH + preset.id;
+            const raw = lsGet(key);
+            if (!raw) continue;
+            let parsed = null;
+            try {
+                parsed = JSON.parse(raw);
+            } catch (err) {
+                parsed = null;
+            }
+            const next = migrateBrushOverrides(parsed, preset.id);
+            if (!next) continue;
+            if (Object.keys(next).length) lsSet(key, JSON.stringify(next));
+            else lsDel(key);
+            overrideCache.delete(preset.id);
+        }
+        lsSet(LS_BRUSH_MIGRATE, String(SPACING_VERSION));
+    }
+
+    migrateSpacingPrefs();
 
     /* ── 私有相机（与舞台无关） ── */
 
@@ -818,27 +849,45 @@ export function mount(el, ctx) {
         return out;
     }
 
-    function stamp(g, img, x, y, alpha) {
+    /**
+     * 落一个笔尖。
+     *
+     * `pressure` 是 0..1 的指针压力（鼠标 / 无压感设备恒为 1，见 brush.mjs:pointerPressure）。
+     * 只有开了 `sizePressure` 的笔刷会按压力缩直径；`k === 1` 时**走原来的 3 参 drawImage**
+     * （不缩放、不重采样），保证「压感关」的笔迹与改动前逐像素一致。
+     * 抖动、散点散布半径、镜像偏移都按缩放后的半宽算，压感笔的纹理才等比缩小。
+     */
+    function stamp(g, img, x, y, alpha, pressure) {
         const b = activeBrush();
         const t = currentTip();
         if (!t) return;
+        const k = sizeScaleAt(b, pressure);
         const half = t.width / 2;
+        const hw = half * k;                       // 本次落点的半宽（压感缩放后）
+        const w = t.width * k;
+        const a0 = alpha * alphaScaleAt(b, pressure);
         const centers = mirrorCenters(img, x, y);
-        const jitter = clamp(b.jitter, 0, 1, 0) * half;
+        const jitter = clamp(b.jitter, 0, 1, 0) * hw;
+        /** 画一个笔尖位图；k === 1 走快路径（与原实现完全同一句）。 */
+        const put = (src, cx, cy) => {
+            if (k === 1) g.drawImage(src, cx - half, cy - half);
+            else g.drawImage(src, cx - hw, cy - hw, w, w);
+        };
         g.save();
         g.globalCompositeOperation = b.erase ? 'destination-out' : 'source-over';
+        if (k !== 1) g.imageSmoothingEnabled = true;   // 缩小重采样需要平滑，否则边缘有锯齿
         if (b.scatter) {
             const n = Math.max(1, Math.round(b.scatter.count));
-            const rad = half * Math.max(0, b.scatter.spread);
+            const rad = hw * Math.max(0, b.scatter.spread);
             const dots = [];
             for (let i = 0; i < n; i += 1) {
                 const a = Math.random() * Math.PI * 2;
                 const rr = Math.sqrt(Math.random()) * rad;
                 dots.push({ x: Math.cos(a) * rr, y: Math.sin(a) * rr });
             }
-            g.globalAlpha = clamp(alpha / Math.sqrt(n), 0.02, 1, 0.02);
+            g.globalAlpha = clamp(a0 / Math.sqrt(n), 0.02, 1, 0.02);
             for (const center of centers) {
-                for (const d of dots) g.drawImage(t, center.x + d.x - half, center.y + d.y - half);
+                for (const d of dots) put(t, center.x + d.x, center.y + d.y);
             }
         } else if (b.smudge && stroke && stroke.last) {
             const d = Math.max(1, Math.round(t.width));
@@ -851,16 +900,16 @@ export function mount(el, ctx) {
             bg.drawImage(img, stroke.last.x - half, stroke.last.y - half, d, d, 0, 0, d, d);
             bg.globalCompositeOperation = 'destination-in';
             bg.drawImage(t, 0, 0);
-            g.globalAlpha = clamp(alpha * (b.strength == null ? 0.55 : b.strength), 0.02, 1, 0.02);
-            for (const center of centers) g.drawImage(smudgeBuf, center.x - half, center.y - half);
-            g.globalAlpha = clamp(alpha * 0.25, 0.02, 1, 0.02);
-            for (const center of centers) g.drawImage(t, center.x - half, center.y - half);
+            g.globalAlpha = clamp(a0 * (b.strength == null ? 0.55 : b.strength), 0.02, 1, 0.02);
+            for (const center of centers) put(smudgeBuf, center.x, center.y);
+            g.globalAlpha = clamp(a0 * 0.25, 0.02, 1, 0.02);
+            for (const center of centers) put(t, center.x, center.y);
         } else {
-            g.globalAlpha = clamp(alpha, 0.02, 1, 0.02);
+            g.globalAlpha = clamp(a0, 0.02, 1, 0.02);
             for (const center of centers) {
                 const jx = jitter ? (Math.random() * 2 - 1) * jitter : 0;
                 const jy = jitter ? (Math.random() * 2 - 1) * jitter : 0;
-                g.drawImage(t, center.x + jx - half, center.y + jy - half);
+                put(t, center.x + jx, center.y + jy);
             }
         }
         g.restore();
@@ -881,6 +930,7 @@ export function mount(el, ctx) {
         stab = createStabilizer(stabLevel);
         stabTail = { x: p.x, y: p.y };
         const head = stab.push(p.x, p.y);   // 起笔不滞后：首点就是笔尖位置
+        const pr = pointerPressure(e);      // 鼠标 / 无压感设备恒 1 → 下面 k=1，笔迹不变
         const s = {
             img,
             g,
@@ -890,11 +940,36 @@ export function mount(el, ctx) {
             before,
             points: [{ x: head.x, y: head.y }],
             moved: false,
+            pp: pr,                          // 上一个落点的压力（段内插值的起点）
         };
         stroke = s;
-        stamp(g, img, head.x, head.y, paintAlpha());
+        stamp(g, img, head.x, head.y, paintAlpha(), pr);
         draw();
         return s;
+    }
+
+    /**
+     * 从一个落点走到目标点，沿途按间距（跟着压感缩放）补落点。
+     * 落点算子在 `brush.mjs` 的 `marchStamps`（纯函数、有测试），这里只管画。
+     */
+    function walkTo(s, tx, ty, pr) {
+        const prev = s.points[s.points.length - 1];
+        if (Math.hypot(tx - prev.x, ty - prev.y) < 0.01) return;   // 亚像素抖动：不落笔
+        const r = marchStamps(prev, { x: tx, y: ty }, {
+            brush: activeBrush(),
+            gap: s.gap,
+            carry: s.carry,
+            pressureFrom: Number.isFinite(s.pp) ? s.pp : 1,
+            pressureTo: pr,
+        });
+        s.carry = r.carry;
+        s.pp = pr;
+        for (const st of r.stamps) {
+            stamp(s.g, s.img, st.x, st.y, paintAlpha(), st.p);
+            s.last = { x: st.x, y: st.y };
+            s.points.push({ x: st.x, y: st.y });
+            s.moved = true;
+        }
     }
 
     function extendStroke(e) {
@@ -906,25 +981,7 @@ export function mount(el, ctx) {
             : { x: raw.x, y: raw.y, moved: true, target: { x: raw.x, y: raw.y } };
         stabTail = { x: r.target.x, y: r.target.y };
         if (!r.moved) return;   // 没跨过最小移动阈值（亚像素抖动）：这一步不落笔
-        const p = { x: r.x, y: r.y };
-        const prev = s.points[s.points.length - 1];
-        const dx = p.x - prev.x;
-        const dy = p.y - prev.y;
-        const dist = Math.hypot(dx, dy);
-        if (dist < 0.01) return;
-        const step = Math.max(0.5, s.gap);
-        let travelled = s.carry;
-        while (travelled + step <= dist) {
-            travelled += step;
-            const k = travelled / dist;
-            const x = prev.x + dx * k;
-            const y = prev.y + dy * k;
-            stamp(s.g, s.img, x, y, paintAlpha());
-            s.last = { x, y };
-            s.points.push({ x, y });
-            s.moved = true;
-        }
-        s.carry = Math.max(0, travelled - dist);
+        walkTo(s, r.x, r.y, pointerPressure(e));
         draw();
     }
 
@@ -938,11 +995,15 @@ export function mount(el, ctx) {
         }
         stabTail = null;
         if (!s) return;
-        // 松手追平：平滑点天然滞后于笔尖，线尾必须落在真正的笔尖处（Klecks 的 finishOnUp）
+        // 松手追平：平滑点天然滞后于笔尖，线尾必须落在真正的笔尖处（Klecks 的 finishOnUp）。
+        // 沿途也要按间距补点 —— 稳定器档位越高滞后越远，只落一个点会把尾巴断成一截空白。
         if (s.moved && tail && Math.hypot(tail.x - s.last.x, tail.y - s.last.y) >= 0.5) {
-            stamp(s.g, s.img, tail.x, tail.y, paintAlpha());
-            s.points.push({ x: tail.x, y: tail.y });
-            s.last = { x: tail.x, y: tail.y };
+            walkTo(s, tail.x, tail.y, Number.isFinite(s.pp) ? s.pp : 1);
+            if (Math.hypot(tail.x - s.last.x, tail.y - s.last.y) >= 0.5) {
+                stamp(s.g, s.img, tail.x, tail.y, paintAlpha(), s.pp);
+                s.points.push({ x: tail.x, y: tail.y });
+                s.last = { x: tail.x, y: tail.y };
+            }
         }
         if (s.moved) {
             const after = captureRegion(s.img, { x: 0, y: 0, w: s.img.width, h: s.img.height });

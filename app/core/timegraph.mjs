@@ -18,6 +18,11 @@ function objectsOf(doc) {
     return [];
 }
 
+function byId(doc, id) {
+    const key = id == null ? '' : String(id);
+    return objectsOf(doc).find((o) => o && String(o.id) === key) || null;
+}
+
 /** 按文档自己的字段名写回对象数组（v6 用 objects，旧文档用 layers）。 */
 function withObjects(doc, list) {
     return Array.isArray(doc.objects) ? { ...doc, objects: list } : { ...doc, layers: list };
@@ -260,28 +265,164 @@ export function isDescendant(doc, maybeChild, maybeAncestor) {
  * 设置父对象（不可变）。成环 / 父不存在 → 返回原 doc 且 ok:false。
  * @returns {{doc: any, ok: boolean, reason: string}}
  */
-export function setParent(doc, id, parentId) {
+export function setParent(doc, id, parentId, offsetOf) {
     if (!doc || !objectsOf(doc).length) return { doc, ok: false, reason: '没有文档' };
     const child = layerById(doc, id);
     if (!child) return { doc, ok: false, reason: '找不到该对象' };
     if (parentId == null) {
         if (child.parentId == null) return { doc, ok: true, reason: '' };
-        return {
-            doc: withObjects(doc, objectsOf(doc).map((l) => (l.id === id ? { ...l, parentId: null } : l))),
-            ok: true,
-            reason: '',
-        };
+    } else {
+        const parent = layerById(doc, parentId);
+        if (!parent) return { doc, ok: false, reason: '父对象不存在' };
+        if (parentId === id) return { doc, ok: false, reason: '不能把自己设为父对象' };
+        if (isDescendant(doc, parent, child)) return { doc, ok: false, reason: '会形成父子环' };
+        if (child.parentId === parentId) return { doc, ok: true, reason: '' };
     }
-    const parent = layerById(doc, parentId);
-    if (!parent) return { doc, ok: false, reason: '父对象不存在' };
-    if (parentId === id) return { doc, ok: false, reason: '不能把自己设为父对象' };
-    if (isDescendant(doc, parent, child)) return { doc, ok: false, reason: '会形成父子环' };
-    if (child.parentId === parentId) return { doc, ok: true, reason: '' };
+    const nextParentId = parentId == null ? null : parentId;
+    const shifted = shiftKeysForReparent(child, nextParentId, offsetOf);
+    if (!shifted.ok) return { doc, ok: false, reason: shifted.reason };
     return {
-        doc: withObjects(doc, objectsOf(doc).map((l) => (l.id === id ? { ...l, parentId } : l))),
+        doc: withObjects(doc, objectsOf(doc).map((l) => (l.id === id ? { ...shifted.el, parentId: nextParentId } : l))),
         ok: true,
         reason: '',
     };
+}
+
+/**
+ * 换父时按「当下这一刻」算一次 x/y 位移，并把它加到**所有**关键帧上。
+ *
+ * 为什么不逐帧各算一次：换父之后子对象会跟随父运动，这是父子层级的定义
+ * （父带关键帧时子当然跟着动）。要保的是「换父这一刻画面不跳」，同时不改变
+ * 子对象自身的动画形态 —— 整体平移不改变任何两帧之间的相对关系。
+ * 逐帧各算一次会把子对象自己的动画曲线也改写掉，那是另一种损坏。
+ *
+ * 没有 `offsetOf` 时原样返回（旧行为，给不关心几何的调用方与老测试留后路）。
+ */
+function shiftKeysForReparent(el, parentId, offsetOf) {
+    if (typeof offsetOf !== 'function') return { ok: true, el };
+    const tr = el && el.transform;
+    const keys = tr && Array.isArray(tr.keys) ? tr.keys : [];
+    if (!keys.length) return { ok: true, el };
+    const r = offsetOf(el, parentId);
+    if (!r || r.ok !== true) {
+        return { ok: false, reason: (r && r.reason) || '换父时无法换算位置，已取消' };
+    }
+    const dx = Number(r.dx) || 0;
+    const dy = Number(r.dy) || 0;
+    if (!dx && !dy) return { ok: true, el };
+    const next = keys.map((k) => {
+        const st = k && k.state && typeof k.state === 'object' ? k.state : {};
+        const x = Number(st.x) || 0;
+        const y = Number(st.y) || 0;
+        // 「|| 0」把 -0 归一成 0
+        return { ...k, state: { ...st, x: (x + dx) || 0, y: (y + dy) || 0 } };
+    });
+    return { ok: true, el: { ...el, transform: { ...tr, keys: next } } };
+}
+
+/**
+ * 整棵子树搬家（纯函数）：换父 + 重排，一次产出新文档 —— 对象面板三区拖拽用。
+ *
+ * 为什么要有它：`setParent` 与 `reorderObject` 各写一次文档，拼起来是两条撤销记录，
+ * 中间态还会让子对象短暂挂在旧位置。拖父对象时那半帧很显眼。
+ *
+ * 不变量：①换父走 `offsetOf`（保位置，见 setParent）②子树连续且「父在子前」
+ * ③`before` 插在目标之前、`after`/`into` 插在**目标整棵子树**之后、`rootEnd` 落根层末尾。
+ *
+ * @param {object} doc
+ * @param {string} id 被移动的对象
+ * @param {'before'|'after'|'into'|'rootEnd'} mode
+ * @param {string|null} targetId
+ * @param {(el:object, parentId:string|null) => {ok:boolean, dx?:number, dy?:number, reason?:string}} [offsetOf]
+ * @returns {{ok:boolean, doc?:object, reason?:string}}
+ */
+export function moveSubtreeDoc(doc, id, mode, targetId, offsetOf) {
+    if (!doc || !id) return { ok: false, reason: '没有可移动的对象' };
+    if (mode !== 'before' && mode !== 'after' && mode !== 'into' && mode !== 'rootEnd') {
+        return { ok: false, reason: '移动方式不合法' };
+    }
+    const el = byId(doc, id);
+    if (!el) return { ok: false, reason: '找不到要移动的对象' };
+    const tid = targetId == null ? null : String(targetId);
+    let parentId = null;
+    if (mode !== 'rootEnd') {
+        if (!tid) return { ok: false, reason: '没有指定目标对象' };
+        if (tid === String(id)) return { ok: false, reason: '不能把对象移动到它自己身上' };
+        const target = byId(doc, tid);
+        if (!target) return { ok: false, reason: '目标对象不存在' };
+        if (isDescendant(doc, target, el)) {
+            return { ok: false, reason: '不能把对象移动到自己的子对象里' };
+        }
+        parentId = mode === 'into' ? target.id : (target.parentId == null ? null : target.parentId);
+    }
+    // 1) 先换父（L1 的保位置换算），不传 offsetOf 时退化为只改 parentId
+    const curParent = el.parentId == null ? null : el.parentId;
+    let base = doc;
+    if (parentId !== curParent) {
+        const r = setParent(doc, id, parentId, offsetOf);
+        if (!r.ok) return r;
+        base = r.doc;
+    }
+    // 2) 再按「父先子后」的既有顺序把整棵子树搬过去
+    const subIds = collectSubtree(base, id);
+    const subSet = new Set(subIds);
+    const moving = subIds.map((sid) => byId(base, sid)).filter(Boolean);
+    if (!moving.length || String(moving[0].id) !== String(id)) {
+        return { ok: false, reason: '对象结构异常，已取消' };
+    }
+    const rest = objectsOf(base).filter((x) => x && !subSet.has(x.id));
+    let at;
+    if (mode === 'rootEnd') {
+        at = rest.length;
+    } else {
+        // 目标自己可能也带着子树：插在它整棵子树之后，别插进它和它孩子中间
+        const tSet = new Set(collectSubtree(base, tid));
+        let last = -1;
+        rest.forEach((x, i) => { if (tSet.has(x.id)) last = i; });
+        if (last < 0) return { ok: false, reason: '目标对象不在可插入的位置' };
+        if (mode === 'before') {
+            const ti = rest.findIndex((x) => x && String(x.id) === tid);
+            if (ti < 0) return { ok: false, reason: '目标对象不在可插入的位置' };
+            at = ti;
+        } else {
+            at = last + 1;
+        }
+    }
+    const next = rest.slice(0, at).concat(moving, rest.slice(at));
+    return { ok: true, doc: withObjects(base, next) };
+}
+
+/**
+ * 找出「父子链上成环」的对象 id。
+ *
+ * 手改存档、外部工具生成的文件、或两个对象互相把对方设成父级时会出现环。
+ * 渲染与求值层遇到环只能跳过（否则无限递归），于是那些对象静默消失 ——
+ * 用户看到的是「对象不见了」而没有任何解释。这里把环上的 id 找出来交给 UI 提示，
+ * **不改任何层级语义**，只是把「静默」变成「说一句」。
+ */
+export function cycleIds(doc) {
+    const list = objectsOf(doc);
+    const map = new Map();
+    for (const o of list) if (o && o.id != null) map.set(String(o.id), o);
+    const out = [];
+    for (const o of list) {
+        if (!o || o.id == null) continue;
+        const start = String(o.id);
+        const seen = new Set([start]);
+        let node = o;
+        let depth = 0;
+        while (node && node.parentId != null && depth < MAX_DEPTH) {
+            const key = String(node.parentId);
+            if (seen.has(key)) {
+                out.push(start);
+                break;
+            }
+            seen.add(key);
+            node = map.get(key) || null;
+            depth += 1;
+        }
+    }
+    return out;
 }
 
 /** 直接子对象（保持 layers 数组顺序）。 */

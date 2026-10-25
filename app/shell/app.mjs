@@ -90,6 +90,7 @@ import { createPalette } from './command-palette.mjs';
 import { createShortcutsOverlay } from './shortcuts-overlay.mjs';
 // 键位/图例的唯一数据源：设置里的键位表、帮助面板、`?` 浮层都读它
 import { overlayGroups } from '../editors/help.mjs';
+import { installLayerKeys } from '../editors/layer-keys.mjs';
 import { loadLayout } from './persist.mjs';
 import * as canvasEditor from '../editors/canvas.mjs';
 import * as DS from './doc-state.mjs';
@@ -1466,6 +1467,9 @@ function boot() {
     syncActiveTree();
     render();
     window.addEventListener('keydown', onKeyDown);
+    // 对象层级：Alt+↑/↓ 同级上下移、Alt+→ 缩进、Alt+← 提升（一次 setDoc、一条撤销）。
+    // 方向翻译与目标计算都在 core/layer-order.mjs，写入走 ctx.moveSubtree。
+    installLayerKeys(ctx);
     installDropImport();
     window.addEventListener('resize', () => render());
     expose();
