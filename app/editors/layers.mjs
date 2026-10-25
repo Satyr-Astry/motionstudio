@@ -137,6 +137,26 @@ export function dropVerdict(all, fromId, targetId, mode) {
     return { ok: true, reason: '' };
 }
 
+/**
+ * 插入线的 `top`（内容坐标）。
+ *
+ * `.lyr-list` 是 `overflow-y: auto` + `position: relative`，插入线是它的绝对定位子元素 ——
+ * 子元素的 top 跟**内容**一起滚，而 `getBoundingClientRect()` 给的是**视口**坐标。
+ * 少加 `scrollTop` 就会出现「列表滚过之后，插入线还画在滚动前的位置」。
+ *
+ * @param {number} rowTop 目标行的 rect.top（视口坐标）
+ * @param {number} rowBottom 目标行的 rect.bottom（视口坐标）
+ * @param {number} listTop 列表的 rect.top（视口坐标）
+ * @param {number} scrollTop 列表当前 scrollTop
+ * @param {'before'|'after'} where 插在行的上缘还是下缘
+ * @returns {number} 可直接写进 `style.top` 的像素值（不小于 0）
+ */
+export function dropLineTop(rowTop, rowBottom, listTop, scrollTop, where) {
+    const edge = where === 'before' ? rowTop : rowBottom;
+    const y = edge - listTop + (Number(scrollTop) || 0) - 1;
+    return Number.isFinite(y) ? Math.max(0, Math.round(y)) : 0;
+}
+
 export function mount(el, ctx) {
     // 布局由 styles/panels.css 的 .lyr* 规则承担，这里不写内联样式
     const root = document.createElement('div');
@@ -310,7 +330,8 @@ export function mount(el, ctx) {
         if (!rowEl) return;
         const r = rowEl.getBoundingClientRect();
         const lr = list.getBoundingClientRect();
-        const y = (where === 'before' ? r.top : r.bottom) - lr.top - 1;
+        // 列表是滚动容器：rect 是视口坐标，插入线的 top 是内容坐标，必须补 scrollTop
+        const y = dropLineTop(r.top, r.bottom, lr.top, list.scrollTop, where);
         dropLine.style.setProperty('--drop-indent', indent + 'px');
         dropLine.style.top = y + 'px';
         dropLine.hidden = false;

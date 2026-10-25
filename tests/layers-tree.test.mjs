@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { treeOrder, subtreeIds, isDescendantId, dropZone, dropVerdict } from '../app/editors/layers.mjs';
+import { treeOrder, subtreeIds, isDescendantId, dropZone, dropVerdict, dropLineTop } from '../app/editors/layers.mjs';
 
 const obj = (id, parentId) => ({ id, parentId, name: id });
 
@@ -87,4 +87,26 @@ test('dropVerdict：正常落点与「移到根层末尾」都允许', () => {
 test('dropVerdict：没有源对象时直接拒绝', () => {
     assert.equal(dropVerdict([], null, 'a', 'into').ok, false);
     assert.equal(dropVerdict([obj('a')], 'a', null, 'into').ok, false);
+});
+
+// 插入线坐标（用户报的「列表下滚后插入线留在滚动前的位置」）
+test('dropLineTop：未滚动时就是「行边 - 列表顶 - 1」', () => {
+    assert.equal(dropLineTop(100, 128, 50, 0, 'after'), 77);
+    assert.equal(dropLineTop(100, 128, 50, 0, 'before'), 49);
+});
+
+test('dropLineTop：滚动后必须加上 scrollTop，否则线会留在滚动前的位置', () => {
+    // 同一个行、同一个视口位置，滚了 240px 之后它在内容里就高了 240px
+    assert.equal(dropLineTop(100, 128, 50, 240, 'after'), 317);
+    assert.equal(dropLineTop(100, 128, 50, 240, 'before'), 289);
+    // 差值恒等于 scrollTop，与行列位置无关
+    const a = dropLineTop(300, 328, 50, 0, 'after');
+    const b = dropLineTop(300, 328, 50, 512, 'after');
+    assert.equal(b - a, 512);
+});
+
+test('dropLineTop：非法/缺失输入不产生 NaN，且不给出负数 top', () => {
+    assert.equal(dropLineTop(10, 20, 50, 0, 'before'), 0);
+    assert.equal(dropLineTop(NaN, 20, 50, 0, 'after'), 0);
+    assert.equal(dropLineTop(100, 128, 50, undefined, 'after'), 77);
 });
