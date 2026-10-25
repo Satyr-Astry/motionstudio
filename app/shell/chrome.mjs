@@ -18,6 +18,8 @@
  * 这里不碰文档、不碰引擎：只通过 api 读状态、发命令，方便单独测试。
  */
 
+import { icon, escapeAttr } from '../core/icons.mjs';
+
 /** 三个工作区：id 与外壳共用（app.mjs 直接 import 这份清单做校验）。 */
 export const WS_TABS = Object.freeze([
     { id: 'animate', title: '编排' },
@@ -28,18 +30,21 @@ export const WS_TABS = Object.freeze([
 export const WS_IDS = WS_TABS.map((t) => t.id);
 
 /**
- * 文件按钮：act / 字形 / 中文标题（标题里带快捷键，鼠标悬停即可看到）。
+ * 文件按钮：[act, 图标名, 按钮文字（null = 纯图标）, 中文标题（带快捷键）]。
+ * 图标来自 core/icons.mjs（自绘 24×24 线性图标，无第三方依赖）。
+ * 文字一个都不删：图标解决「扫描成本」，文字解决「这个按钮到底是什么」，
+ * 纯图标只用在「＋ / 撤销 / 重做」这种全行业已有共识的动作上。
  * 放在品牌与工作区 tab 之间：左边「文件」是项目级操作，右边才是视图级切换。
  */
 const FILE_ACTIONS = [
-    ['new', '＋', '新建项目'],
-    ['save', '保存', '保存项目（Ctrl+S）'],
-    ['open', '打开', '打开项目库（Ctrl+O）'],
-    ['import', '导入', '导入 PSD / PNG / JPG / WebP 到当前项目'],
-    ['export', '导出', '导出 PNG 序列（Ctrl+Shift+E）'],
+    ['new', 'plus', null, '新建项目'],
+    ['save', 'save', '保存', '保存项目（Ctrl+S）'],
+    ['open', 'folder-open', '打开', '打开项目库（Ctrl+O）'],
+    ['import', 'import', '导入', '导入 PSD / PNG / JPG / WebP 到当前项目'],
+    ['export', 'export', '导出', '导出 PNG 序列（Ctrl+Shift+E）'],
     // 撤销/重做原本在「工具」区里，编排模式不显示工具条后它们会消失，所以上移到这里。
-    ['undo', '↶', '撤销（Ctrl+Z）'],
-    ['redo', '↷', '重做（Ctrl+Shift+Z）'],
+    ['undo', 'undo', null, '撤销（Ctrl+Z）'],
+    ['redo', 'redo', null, '重做（Ctrl+Shift+Z）'],
 ];
 
 function el(tag, cls, text) {
@@ -76,11 +81,14 @@ export function buildTopbar(host, api) {
 
     const brand = el('div', 'top-brand', 'MotionStudio');
 
-    // 文件组：新建 / 保存 / 打开 / 导出。act 由外壳的 onFileAct 分发。
+    // 文件组：新建 / 保存 / 打开 / 导入 / 导出。act 由外壳的 onFileAct 分发。
     const file = el('div', 'top-file');
-    for (const [act, glyph, title] of FILE_ACTIONS) {
-        const b = el('button', 'top-file-btn', glyph);
+    for (const [act, iconName, text, title] of FILE_ACTIONS) {
+        const b = document.createElement('button');
         b.type = 'button';
+        // 纯图标 → ms-icon-btn（22×22 方按钮 + 20×20 热区）；图标 + 文字 → ms-icon-label
+        b.className = 'top-file-btn ' + (text ? 'ms-icon-label' : 'ms-icon-btn');
+        b.innerHTML = icon(iconName) + (text ? '<span>' + escapeAttr(text) + '</span>' : '');
         b.dataset.act = act;
         b.title = title;
         b.setAttribute('aria-label', title);
@@ -94,9 +102,11 @@ export function buildTopbar(host, api) {
     const project = el('div', 'top-project', '未命名项目');
 
     // 返回编排：画板 / 设置是从编排「进去」的子视图，必须有一条显眼的回路。
-    const back = el('button', 'top-back', '← 编排');
+    const back = el('button', 'top-back ms-icon-label');
     back.type = 'button';
+    back.innerHTML = icon('arrow-left') + '<span>编排</span>';
     back.title = '回到编排工作区（Esc 也可以）';
+    back.setAttribute('aria-label', back.title);
     back.addEventListener('click', () => {
         if (typeof a.setWorkspace === 'function') a.setWorkspace('animate');
     });

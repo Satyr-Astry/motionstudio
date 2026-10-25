@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createShortcutGroups, groupsFromCommands } from '../app/shell/shortcuts-overlay.mjs';
+import { overlayGroups, SHORTCUT_GROUPS } from '../app/editors/help.mjs';
+
+const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 
 test('createShortcutGroups：按结构过滤空组、空条目，并补默认组名', () => {
     const g = createShortcutGroups({
@@ -51,4 +56,40 @@ test('groupsFromCommands：忽略脏条目', () => {
     const groups = groupsFromCommands([null, 42, { keys: 'A' }, { title: 'ok', keys: 'B', group: 'G' }]);
     assert.equal(groups.length, 2, '空标题也会进组（keys 存在就算一条）');
     assert.equal(groups[1].items[0].title, 'ok');
+});
+
+test('overlayGroups：把 SHORTCUT_GROUPS 原样搬成浮层 spec', () => {
+    const groups = overlayGroups();
+    assert.deepEqual(groups.map((g) => g.title), ['文件', '时间', '关键帧', '画板', '视图']);
+    assert.equal(groups.length, SHORTCUT_GROUPS.length);
+    let rows = 0;
+    for (const g of groups) {
+        assert.ok(g.items.length > 0, '每组至少一行：' + g.title);
+        for (const it of g.items) {
+            rows += 1;
+            assert.ok(it.title, '条目必须有动作名');
+            assert.ok(it.keys, '条目必须有键位（缺省兜「鼠标」）');
+            assert.equal(it.icon, undefined, '浮层列表不吃 icon，映射时要丢掉');
+        }
+    }
+    assert.ok(rows >= 35, '键位条目太少：' + rows);
+    // 缺 keys / hint 的条目要有兜底，浮层才不会出现空键位列
+    const soft = overlayGroups([{ title: 'G', items: [{ name: '拖拽' }] }]);
+    assert.equal(soft[0].items[0].keys, '鼠标');
+    assert.equal(soft[0].items[0].hint, '');
+});
+
+test('浮层只读 help.mjs 那一份：app.mjs 不再从命令表派生', () => {
+    const app = read('../app/shell/app.mjs');
+    assert.match(app, /import \{ overlayGroups \} from '\.\.\/editors\/help\.mjs'/, 'app.mjs 要从 help.mjs 取浮层数据');
+    assert.match(app, /createShortcutsOverlay\(\{ groups: overlayGroups\(\) \}\)/, '浮层要用 overlayGroups()');
+    assert.ok(!/groupsFromCommands\(/.test(app), 'app.mjs 不许再从命令表派生浮层');
+    assert.ok(!/title: '全局'/.test(app), "手补的「全局」组应已并入 help 表");
+});
+
+test('help 表接住了原来手补的全局键位', () => {
+    const keys = SHORTCUT_GROUPS.flatMap((g) => g.items.map((i) => i.keys));
+    for (const k of ['Ctrl+Shift+P', 'Esc', '↑ / ↓', 'Shift+拖', 'Ctrl+滚轮']) {
+        assert.ok(keys.includes(k), 'help 表缺键位：' + k);
+    }
 });

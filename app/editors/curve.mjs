@@ -19,6 +19,7 @@ import {
     stateAt, addKey, removeKey, setKeyEase, autoTangents as applyAutoTangents,
     channelOf, clearChannel, setChannelKey, removeChannelKey, setChannelKeyEase,
 } from '../core/transform.mjs';
+import { icon } from '../core/icons.mjs';
 import { normalizeLattice, latticeIsZero } from '../core/lattice.mjs';
 import { patchLayer, layerById, celTimes, objectsOf } from '../core/cel.mjs';
 import {
@@ -55,20 +56,20 @@ export function mount(el, ctx) {
 
     /* ── 缓动预设：选中关键帧后一键换线型（比拖柄快得多）。图标化，语义留在 title 里 ── */
     const PRESETS = [
-        ['linear', '线', '线性', 'linear', null],
-        ['in', '入', '缓入', 'bezier', [[0.42, 0], [1, 1]]],
-        ['out', '出', '缓出', 'bezier', [[0, 0], [0.58, 1]]],
-        ['inout', '双', '缓入缓出', 'bezier', [[0.42, 0], [0.58, 1]]],
-        ['back', '冲', '过冲', 'bezier', [[0.34, 1.56], [0.64, 1]]],
+        ['linear', 'curve-line', '线', '线性', 'linear', null],
+        ['in', 'curve-in', '入', '进入', 'bezier', [[0.42, 0], [1, 1]]],
+        ['out', 'curve-out', '出', '退出', 'bezier', [[0, 0], [0.58, 1]]],
+        ['inout', 'curve-both', '双', '双向', 'bezier', [[0.42, 0], [0.58, 1]]],
+        ['back', 'curve-overshoot', '冲', '回弹', 'bezier', [[0.34, 1.56], [0.64, 1]]],
     ];
     const presets = document.createElement('div');
     presets.className = 'curve-presets';
-    for (const [key, glyph, label, ease, hs] of PRESETS) {
+    for (const [key, iconName, glyph, label, ease, hs] of PRESETS) {
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = 'curve-preset';
+        b.className = 'curve-preset ms-icon-label';
         b.dataset.preset = key;
-        b.textContent = glyph;
+        b.innerHTML = icon(iconName, { size: 'sm' }) + '<span>' + glyph + '</span>';
         b.title = ease === 'linear' ? label + '：选中关键帧 → 这一段改为线性'
             : label + '：选中关键帧 → 这一段改为贝塞尔「' + label + '」';
         b.addEventListener('click', (ev) => {
@@ -80,9 +81,9 @@ export function mount(el, ctx) {
     // v5：自动切线 —— 按相邻关键帧的斜率生成平滑曲线（Catmull-Rom 风格）
     const autoBtn = document.createElement('button');
     autoBtn.type = 'button';
-    autoBtn.className = 'curve-preset is-auto';
-    autoBtn.textContent = '自';
-    autoBtn.title = '自动切线：选中关键帧 → 按相邻点的斜率自动摆平切线（再按一次保持手动）';
+    autoBtn.className = 'curve-preset is-auto ms-icon-label';
+    autoBtn.innerHTML = icon('curve-auto', { size: 'sm' }) + '<span>自</span>';
+    autoBtn.title = '自由：自动切线 —— 按相邻关键帧的斜率自动摆平切线（再按一次回到手动，曲线可自由拖）';
     autoBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         applyAuto();

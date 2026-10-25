@@ -16,9 +16,14 @@ export function mount(el, ctx, opts) {
     // ── 画布（场景尺寸）
     // 之前这里只有总时长/帧率/循环，画布宽高根本没有入口，「场景画布尺寸无法调整」就是这个坑。
     const canvasBody = makeGroup(el, '画布', 'canvas');
-    const sizePair = makeNumPair(canvasBody, '尺寸', { min: 16, max: 8192, step: 1, key: 'canvas-size' });
+    const sizePair = makeNumPair(canvasBody, '尺寸', { min: 16, max: 8192, step: 1, key: 'canvas-size', placeholder: '宽' });
     const widthInput = sizePair.w;
     const heightInput = sizePair.h;
+    // 与对象面板的「尺寸」同一个坑：空值时两个框只剩占位符，分不出谁宽谁高。
+    // placeholder + aria-label 把方向写死（Lead 的审计里这两个框正落在 emptyFields 里）。
+    heightInput.placeholder = '高';
+    widthInput.setAttribute('aria-label', '文档宽度（像素）');
+    heightInput.setAttribute('aria-label', '文档高度（像素）');
     const presetWrap = document.createElement('div');
     presetWrap.className = 'prop-inline prop-canvas-presets';
     for (const [label, w, h] of [['16:9', 1920, 1080], ['9:16', 1080, 1920], ['1:1', 1080, 1080], ['4:3', 1440, 1080]]) {

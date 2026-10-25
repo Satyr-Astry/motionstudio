@@ -1,0 +1,279 @@
+/**
+ * 图标层 —— 只做三件事：
+ *   1) 给 core/icons.mjs 生成的 <svg class="ms-icon"> 定尺寸（可变，宿主可局部覆盖）；
+ *   2) 给「纯图标按钮」定盒子，保证可点区域 ≥ 20×20（--h-btn = 22）；
+ *   3) 给「图标 + 文字按钮」兜住溢出：文字可省略，图标永不被压扁。
+ *
+ * 不重定义任何布局令牌（--h-* / --r-* 都在 tokens.css），也不改宿主按钮的
+ * 边框/底色/悬停色 —— 那属于各自的 panels/shell 规则，这里只在必要时收口。
+ * 加载顺序在最后（index.html），所以下面用「宿主类 + 装配类」的双类选择器
+ * 就能盖掉单类规则，不需要 !important，也不需要 Lead 去改 panels.css。
+ */
+
+/* ── 1. 图标本体 ──────────────────────────────────────────────────
+   尺寸走 --icon-size → --icon（16px），宿主可以局部覆盖：
+     .xxx .ms-icon { --icon-size: var(--icon-sm) }   ← 不改盒子只改图
+   data-size="sm|lg" 是 icon() 的快捷方式，落在同一套变量上。
+   垂直居中靠宿主按钮的 inline-flex + align-items:center（tokens.css 的 button 基础），
+   所以这里不需要 vertical-align 那套补偿。 */
+.ms-icon {
+    display: block;
+    flex: 0 0 auto;
+    width: var(--icon-size, var(--icon));
+    height: var(--icon-size, var(--icon));
+    /* 2px 描边外扩时不被裁掉（眼睛、网格这类贴边图形） */
+    overflow: visible;
+    pointer-events: none;   /* 点图标 = 点按钮，别让 svg 自己接事件 */
+}
+
+.ms-icon[data-size="sm"] { --icon-size: var(--icon-sm); }
+.ms-icon[data-size="lg"] { --icon-size: var(--icon-lg); }
+
+/* ── 2. 纯图标按钮：22×22 方盒，图标居中 ───────────────────────
+   全站 button 的 --h-btn = 22px，所以 22×22 正好等于行内按钮高度，
+   不会把任何工具条撑高；Lead 要求的 ≥20×20 命中区由这个盒子保证。 */
+button.ms-icon-btn {
+    padding: 0;
+    width: var(--h-btn);
+    min-width: var(--h-btn);
+    height: var(--h-btn);
+}
+
+/* ── 3. 图标 + 文字：图标是前缀，文字永远是完整的 ────────────────
+   这里刻意不写 text-overflow: ellipsis —— 一旦允许省略，窄面板里的
+   「删关键帧」会变成「删…」，等于把文字换成了字幕。宁可按钮变宽或被
+   换行推到第二行（实测 1680/1280 都放得下），也不裁字。 */
+button.ms-icon-label > span {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+/* 键盘焦点：图标按钮没有文字可比对，焦点环是唯一的「我在这」提示 */
+button.ms-icon-btn:focus-visible,
+button.ms-icon-label:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: 1px;
+}
+
+/* ── 4. 顶栏文件组（shell.css 的 .top-file-btn / .top-back） ─────
+   宿主给的是 padding: 0 8px 的文字按钮内边距；纯图标按钮要收回成方盒，
+   否则「＋ / ↶ / ↷」三个按钮会比文字按钮宽一倍。 */
+.top-file-btn.ms-icon-btn,
+.top-back.ms-icon-btn {
+    padding: 0;
+}
+
+/* 顶栏图标比正文大一档：16px 与 11px 中文并排时视觉重量才对得上文字 */
+.top-file-btn .ms-icon,
+.top-back .ms-icon {
+    --icon-size: var(--icon);
+}
+
+/* ── 5. 对象面板行内：可见性 / 折叠 / 时间通道 ─────────────────
+   .lyr-vis 原本是 10×10 的实心圆点（panels.css:412），现在换成 14px 眼睛。
+   关键约束：行内宽度预算（.lyr-sub 只有约 134px，见 layers.mjs 的副标题注释）。
+   所以「占位仍是 10px，热区 20px」—— 用 20px 盒子 + 左右各 -5px 负外边距，
+   多出来的宽度不参与 flex 分配，.lyr-meta 一点都不会变窄。 */
+.lyr-vis.ms-icon-btn {
+    flex: 0 0 10px;
+    width: 20px;
+    min-width: 20px;
+    height: 20px;
+    margin: 0 -5px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-1);
+    background-color: transparent;
+    color: var(--ink-dim);
+}
+
+/* 原圆点的「实心 = 可见」语义换成图标本身：eye / eye-off。
+   悬停给一层底色而不是把整个按钮涂实，否则浅灰底上的灰眼睛看不清。 */
+.lyr-vis.ms-icon-btn:hover {
+    background-color: var(--surface);
+    border-color: transparent;
+    color: var(--ink);
+}
+
+.lyr-vis.ms-icon-btn.is-off {
+    color: var(--ink-faint);
+}
+
+.lyr-vis.ms-icon-btn .ms-icon {
+    --icon-size: var(--icon-sm);
+}
+
+/* 行内图标统一 14px（与 10px 副标题、11px 名称同一视觉节奏） */
+.lyr-time.ms-icon-btn .ms-icon,
+.lyr-caret.ms-icon-btn .ms-icon {
+    --icon-size: var(--icon-sm);
+}
+
+/* 折叠箭头原本是 ▾ 文本，靠全局 button 样式（有边框有底色）显示；
+   换成图标后底色/边框都该消失，只留箭头本身。 */
+.lyr-caret.ms-icon-btn {
+    width: var(--h-btn);
+    min-width: var(--h-btn);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink-dim);
+}
+
+/* ── 6. 纹理库小工具条（＋ 复制 上一个 下一个 删除） ─────────────
+   宿主是 min-width:22 + padding:0 4px 的单字按钮（「复」「删」），
+   换图标后 padding 归零 = 22×22 方盒，一行五个仍放得下。 */
+.lyr-cels-btn.ms-icon-btn {
+    padding: 0;
+}
+
+/* ── 7. 变换面板（xform.mjs）────────────────────────────────────
+   .xf-actions 是 grid 四等分（panels.css:755），每格约 66px 宽、22px 高。
+   宿主 .xf-btn 的 padding 是 0，加图标后内容会顶到边，所以这里给回内边距。
+   硬规则：宁可把按钮顶出去，也不许出现省略号 —— text-overflow 一律不写，
+   overflow: visible 让超宽内容溢出而不是裁成「删…」。 */
+.xf-btn .ms-icon,
+.xf-warp-btn .ms-icon {
+    --icon-size: var(--icon-sm);
+}
+
+.xf-btn.ms-icon-label,
+.xf-warp-btn.ms-icon-label {
+    gap: 4px;
+    padding: 0 var(--sp-2);
+    white-space: nowrap;
+    overflow: visible;
+}
+
+/* 「网格变形」是整行按钮（274px），图标 + 文字靠左，与面板里其它标签同一竖线 */
+.xf-warp-btn.ms-icon-label {
+    justify-content: flex-start;
+}
+
+/* 纯图标格（上一个 / 下一个关键帧）：图标居中即可，格宽由 grid 决定 */
+.xf-btn.ms-icon-btn {
+    padding: 0;
+}
+
+/* ── 8. 窄屏退化 ───────────────────────────────────────────────
+   1680 与 1280 下顶栏都放得下「图标 + 文字」；再窄（手机 / 半屏分栏）
+   就必须二选一。选择保留图标 + tooltip：图标至少还能认出「这是个动作」，
+   文字留着会把整条顶栏挤成两行。这个断点由 Lead 定调，随时可撤。 */
+@media (max-width: 860px) {
+    .top-file-btn.ms-icon-label > span,
+    .top-back.ms-icon-label > span {
+        display: none;
+    }
+
+    .top-file-btn.ms-icon-label,
+    .top-back.ms-icon-label {
+        padding: 0;
+        width: var(--h-btn);
+        min-width: var(--h-btn);
+    }
+}
+
+/* ── 9. 阶段二宿主（时间轴 / 曲线 / 区域头 / 命令面板） ───────────────
+   这四个宿主都自带高度与配色（.tline-btn / .curve-preset / .area-btn / .cmd-item），
+   所以这里只补两件它们没有的事：图标尺寸、图标与文字之间的间距。
+   尺寸本身一个都不重定义 —— 工具条宽度的账在各自的样式里算过了。 */
+.tline-btn .ms-icon,
+.curve-preset .ms-icon,
+.area-btn .ms-icon,
+.tline-legend .ms-icon {
+    --icon-size: var(--icon-sm);
+}
+
+/* 图标 + 短文字：只加 gap，宽度照旧由内容决定（不设 width，不许省略号） */
+.tline-btn.ms-icon-label,
+.curve-preset.ms-icon-label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    white-space: nowrap;
+    overflow: visible;
+}
+
+/* 纯图标按钮：宿主自己的左右 padding 要归零，否则 22px 的方盒里塞 14px 图标会偏 */
+.tline-btn.ms-icon-btn,
+.area-btn.ms-icon-btn {
+    padding: 0;
+}
+
+/* 图例入口（? → help 图标）：图标在 26px 的按钮里居中 */
+.tline-legend {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* 命令面板一行：图标不进 flex 收缩，标题才有空间被省略 */
+.cmd-glyph {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    color: var(--ink-faint);
+}
+
+.cmd-item[data-active="true"] .cmd-glyph {
+    color: var(--ink);
+}
+
+/* ── 设置工作区的帮助行：图标 + 动作名 + 键位 ─────────────────────────
+ * 放在 icons.css 而不是 panels.css：这几行的结构由图标系统决定（icon + 名字 + kbd），
+ * 不属于 Lead 的面板视觉收敛范围。宽度两端对齐，动作名允许折行但绝不用省略号。
+ */
+.pref-help-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-2);
+}
+
+.pref-help-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+}
+
+.pref-help-keys {
+    flex: 0 0 auto;
+    font: inherit;
+    font-size: 10px;
+    line-height: 1.6;
+    padding: 0 5px;
+    border-radius: var(--r-1);
+    border: 1px solid var(--line);
+    background: var(--panel-2);
+    color: var(--ink-dim);
+    white-space: nowrap;
+}
+
+.pref-help-mark {
+    flex: 0 0 auto;
+    font-size: 10px;
+    line-height: 1;
+    color: var(--ink-dim);
+}
+
+.pref-help-mark.is-cel { color: var(--ok); }
+.pref-help-mark.is-kf { color: var(--accent); }
+
+/* ── 帮助面板（.hlp）键位行前的小图标 ───────────────────────────────
+ * .hlp-item 的行布局由 panels.css 管，这里只负责图标的盒与色，不碰行高。
+ */
+.hlp-ico {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    color: var(--ink-faint);
+}
+
+.hlp-item:hover .hlp-ico {
+    color: var(--ink-dim);
+}

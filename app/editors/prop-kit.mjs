@@ -132,6 +132,9 @@ export function makeSeg(body, labelText, items, current) {
         b.className = 'prop-seg';
         b.dataset.val = val;
         b.textContent = text;
+        // 两字的选项（循环 / 往返 / 淡化）本身没有更多文字可读，
+        // 悬停给一条「分组名：选项」的完整说法 —— 零行为变更，只是补信息。
+        b.title = labelText + '：' + text;
         b.classList.toggle('is-on', val === current);
         field.appendChild(b);
         btns.set(val, b);

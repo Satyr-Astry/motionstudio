@@ -21,7 +21,10 @@ export const SEC_PX = 28;
 export const ROW_H = 28;
 export const LABEL_W = 96;
 export const RULER_H = 30;
-export const FPS_H = 9;
+// 段帧率条的高度。曾经是 9：10px 的「12fps」在 9px 条里靠 overflow:hidden 侥幸不裁，
+// 但行高与字号只差 1px 时字形上下沿会贴边（升部被削）。12 给 10px 字留出上下各 1px 的呼吸，
+// 且仍在刻度数字带（RULER_H 30 的下部）之上 —— 见 timeline-paint.mjs 的 fpsLane 定位。
+export const FPS_H = 12;
 export const CEL_SIZE = 8;
 export const CEL_TOP = 4;
 export const KF_SIZE = 7;

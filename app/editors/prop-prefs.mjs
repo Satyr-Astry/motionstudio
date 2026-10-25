@@ -19,6 +19,9 @@
  */
 
 import { makeGroup, makeRow, makeNum, makeSeg } from './prop-kit.mjs';
+// 键位表与图例的唯一数据源：设置里这份、时间轴「?」浮层、帮助面板读的是同一份常量
+import { SHORTCUT_GROUPS, LEGEND_ITEMS } from './help.mjs';
+import { icon } from '../core/icons.mjs';
 import { engine, project, setPrefs } from '../shell/doc-state.mjs';
 import { autoSaveProject } from '../shell/project-io.mjs';
 
@@ -109,6 +112,43 @@ function readPrefs() {
     };
 }
 
+/**
+ * 一行「图标 + 动作名 + 键位」。
+ * 动作名走 text node、只有图标走 icon() 的 innerHTML —— 名字里出现 < 或 & 也不会破结构。
+ */
+function makeHelpRow(item) {
+    const row = document.createElement('div');
+    row.className = 'prop-row pref-help-row';
+    if (item.hint) row.title = item.hint;
+    const name = document.createElement('span');
+    name.className = 'pref-help-name';
+    name.innerHTML = icon(item.icon, { size: 'sm' });
+    name.appendChild(document.createTextNode(item.name));
+    const keys = document.createElement('kbd');
+    keys.className = 'pref-help-keys';
+    keys.textContent = item.keys && String(item.keys).trim() ? item.keys : '鼠标';
+    row.append(name, keys);
+    return row;
+}
+
+/** 图例一行：形状标记 + 名字 + 「离散 / 插值」。文案与时间轴「?」浮层同源。 */
+function makeLegendRow(item) {
+    const row = document.createElement('div');
+    row.className = 'prop-row pref-help-row';
+    row.title = item.text;
+    const name = document.createElement('span');
+    name.className = 'pref-help-name';
+    const mark = document.createElement('span');
+    mark.className = 'pref-help-mark is-' + item.kind;
+    mark.textContent = item.mark;
+    name.append(mark, document.createTextNode(item.name));
+    const keys = document.createElement('kbd');
+    keys.className = 'pref-help-keys';
+    keys.textContent = item.kind === 'cel' ? '离散' : '插值';
+    row.append(name, keys);
+    return row;
+}
+
 export function mount(el, ctx) {
     const prefs = readPrefs();
     const groups = [];
@@ -151,6 +191,22 @@ export function mount(el, ctx) {
         btn.style.setProperty('--pref-swatch', BG_SWATCH[val]);
     }
     addNote(lookBody, '三档都改画布视口底色；画板内部的透明棋盘由引擎绘制，改它要动 paint/engine.mjs。');
+
+    /* ─────────────────── 快捷键 / 图例（唯一权威表） ─────────────────── */
+
+    for (const group of SHORTCUT_GROUPS) {
+        const body = makeGroup(el, group.title, 'help-' + group.id);
+        groups.push(body);
+        for (const item of group.items) body.appendChild(makeHelpRow(item));
+    }
+
+    const legendBody = makeGroup(el, '图例', 'help-legend');
+    groups.push(legendBody);
+    for (const item of LEGEND_ITEMS) legendBody.appendChild(makeLegendRow(item));
+    addNote(
+        legendBody,
+        '画格是离散的（到点换图），关键帧是插值的（中间有过渡）。这张表与时间轴「?」浮层读同一份数据（editors/help.mjs），改一处即两处同步。'
+    );
 
     /* ─────────────────── 写入 ─────────────────── */
 

@@ -85,7 +85,9 @@ import { editorIds } from './registry.mjs';
 import { timeCtx } from './ctx-time.mjs';
 import { buildTopbar, buildStatusbar } from './chrome.mjs';
 import { createPalette } from './command-palette.mjs';
-import { createShortcutsOverlay, groupsFromCommands } from './shortcuts-overlay.mjs';
+import { createShortcutsOverlay } from './shortcuts-overlay.mjs';
+// 键位/图例的唯一数据源：设置里的键位表、帮助面板、`?` 浮层都读它
+import { overlayGroups } from '../editors/help.mjs';
 import { loadLayout } from './persist.mjs';
 import * as canvasEditor from '../editors/canvas.mjs';
 import * as DS from './doc-state.mjs';
@@ -1178,22 +1180,9 @@ function boot() {
     ctx = buildCtx();
     // 命令面板：模块自己挂 body、自己管焦点，外壳只给命令表并按键
     palette = createPalette({ commands: buildCommands() });
-    // 快捷键浮层与命令面板同源：命令表里带 keys 的条目自动进浮层
-    shortcuts = createShortcutsOverlay({
-        groups: groupsFromCommands(buildCommands()).concat([
-            {
-                // 面板/浮层自己的键不在命令表里（命令表只收「命令 + 快捷键」），单独补一组
-                title: '全局',
-                items: [
-                    { keys: 'Ctrl+Shift+P', title: '命令面板' },
-                    { keys: 'Esc', title: '取消 / 失焦 / 关闭浮层' },
-                    { keys: '↑ ↓', title: '在列表里换行' },
-                    { keys: 'Shift+拖', title: '关键帧临时自由拖动（忽略磁铁）' },
-                    { keys: 'Ctrl+滚轮', title: '时间轴以指针为锚缩放' },
-                ],
-            },
-        ]),
-    });
+    // 快捷键浮层与设置/帮助同源：键位与描述只在 help.mjs 的 SHORTCUT_GROUPS 里维护一份。
+    // 命令表（buildCommands）只管「命令 → 键位」，不再往浮层里灌文案。
+    shortcuts = createShortcutsOverlay({ groups: overlayGroups() });
     // 偏好要在 boot 里显式落一次：引擎刚建好，撤销上限得跟着 localStorage 走，
     // 不能指望用户点开「设置 → 偏好」才生效。loadPrefs 内部也会调 setPrefs，
     // 这里再调一次 setHistoryLimit 是为了绕开 boot 早期的订阅回调时序。

@@ -16,6 +16,7 @@ import {
 } from '../core/transform.mjs';
 import { normalizeLattice, createLattice, latticeToQuad } from '../core/lattice.mjs';
 import { layerById, objectsOf } from '../core/cel.mjs';
+import { icon } from '../core/icons.mjs';
 
 // 关键帧时间比对容差：1e-6 s ≈ 0.001px。比 core 的 1e-9 宽松一点，
 // 免得「拖到画格切换点后再输数值」因为末位浮点误差又生成一个几乎重合的关键帧。
@@ -117,9 +118,11 @@ export function createXformPanel(ctx) {
     // ── 网格变形
     const warpBtn = document.createElement('button');
     warpBtn.type = 'button';
-    warpBtn.className = 'xf-warp-btn';
-    warpBtn.textContent = '网格变形';
+    warpBtn.className = 'xf-warp-btn ms-icon-label';
+    warpBtn.innerHTML = icon('grid') + '<span>网格变形</span>';
     warpBtn.title = '进入网格变形：在画布上拖顶点，曲线编辑器里调它们的缓动';
+    warpBtn.setAttribute('aria-label', '网格变形');
+    warpBtn.setAttribute('aria-pressed', 'false');
 
     // 密度：1×1 就是四角，2×2 起是真正的网格
     const divRow = document.createElement('div');
@@ -231,6 +234,7 @@ export function createXformPanel(ctx) {
         corners.hidden = !open;
         divRow.hidden = !open;
         warpBtn.classList.toggle('is-on', open);
+        warpBtn.setAttribute('aria-pressed', open ? 'true' : 'false');
         // 进网格模式 = 要在画布上拖顶点 → 顺手切选中模式。
         // 顺序与画布那边一致：先把网格落进文档，再切 selection（切模式会立刻重画叠加层）。
         // 1×1 网格没有内部线也没有内部顶点，不补齐的话用户只看到原来的选框，以为按钮没反应。
@@ -256,27 +260,32 @@ export function createXformPanel(ctx) {
         b.className = 'xf-segbtn';
         b.dataset.ease = ease;
         b.textContent = label;
+        b.title = '插值方式：' + label;
         b.addEventListener('click', () => writeEase(ease));
         seg.appendChild(b);
         easeBtn.set(ease, b);
     }
 
     // ── 动作
+    // 上一个 / 下一个关键帧原本是 ◀ ▶ 字符（部分系统字体缺字形会渲染成空白，
+    // timeline-paint.mjs:122 已经踩过这个坑），换成自绘 chevron 后就只是纯图标，
+    // 语义靠 title + aria-label 说清；删/重置留文字，图标只做前缀。
     const actions = document.createElement('div');
     actions.className = 'xf-actions';
     const actBtn = new Map();
-    for (const [act, label, title] of [
-        ['prev', '◀', '上一个关键帧'],
-        ['next', '▶', '下一个关键帧'],
-        ['del', '删关键帧', '删除当前时间的关键帧'],
-        ['reset', '重置', '重置为默认变换并打一个关键帧'],
+    for (const [act, iconName, label, title] of [
+        ['prev', 'chevron-left', null, '上一个关键帧'],
+        ['next', 'chevron-right', null, '下一个关键帧'],
+        ['del', 'diamond-minus', '删关键帧', '删除当前时间的关键帧'],
+        ['reset', 'rotate-ccw', '重置', '重置为默认变换并打一个关键帧'],
     ]) {
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = 'xf-btn';
+        b.className = 'xf-btn ' + (label ? 'ms-icon-label' : 'ms-icon-btn');
         b.dataset.act = act;
-        b.textContent = label;
+        b.innerHTML = icon(iconName) + (label ? '<span>' + label + '</span>' : '');
         b.title = title;
+        b.setAttribute('aria-label', title);
         b.addEventListener('click', () => runAction(act));
         actions.appendChild(b);
         actBtn.set(act, b);
@@ -553,6 +562,7 @@ export function createXformPanel(ctx) {
         const rows = lat ? lat.rows : 1;
         for (const [key, btn] of divBtns) btn.classList.toggle('is-on', key === cols + ':' + rows);
         warpBtn.classList.toggle('is-on', !corners.hidden);
+        warpBtn.setAttribute('aria-pressed', corners.hidden ? 'false' : 'true');
 
         const ease = idx >= 0 ? track.keys[idx].ease : null;
         for (const [val, btn] of easeBtn) btn.classList.toggle('is-on', ease === val);

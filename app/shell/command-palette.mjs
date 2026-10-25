@@ -33,6 +33,8 @@
  * 布局与配色全部在 palette.css。
  */
 
+import { icon, hasIcon } from '../core/icons.mjs';
+
 /** 列表最多渲染多少行（超出截断并提示）。 */
 const MAX_ROWS = 200;
 /** 命中字段权重：标题 > 组名 > hint。 */
@@ -45,6 +47,64 @@ const DISABLED_PENALTY = 1;
 const FOOT_HINT = '↑↓ 选择 · Enter 执行 · Esc 关闭';
 const EMPTY_TEXT = '没有匹配的命令';
 const UNGROUPED_LABEL = '其他';
+
+/**
+ * 命令 id → 图标名。
+ * 命令表本体在 app.mjs（那块写域归 Lead），所以这里用一张映射表，而不是要求每条
+ * 命令都补 icon 字段；将来命令对象自己带 icon 时优先用它（见 iconOf）。
+ * 新增命令忘登记也不会出现空白行 —— 有前缀兜底。
+ */
+const CMD_ICONS = Object.freeze({
+    'file.save': 'save',
+    'file.open': 'folder-open',
+    'file.export-frames': 'export',
+    'file.export-sheet': 'grid',
+    'file.export-video': 'play',
+    'edit.undo': 'undo',
+    'edit.redo': 'redo',
+    'edit.copy-keys': 'copy',
+    'edit.paste-keys': 'copy',
+    'play.toggle': 'play',
+    'play.first': 'step-back',
+    'play.last': 'step-forward',
+    'play.prev-cel': 'chevron-left',
+    'play.next-cel': 'chevron-right',
+    'play.prev-key': 'chevron-left',
+    'play.next-key': 'chevron-right',
+    'cel.new': 'plus',
+    'cel.add': 'timer',
+    'cel.remove': 'trash',
+    'cel.cycle-prev': 'chevron-left',
+    'cel.cycle-next': 'chevron-right',
+    'cel.unique': 'copy',
+    'canvas.fit': 'center',
+    'canvas.brush-smaller': 'minus',
+    'canvas.brush-bigger': 'plus',
+    'ws.animate': 'rows',
+    'ws.draw': 'columns',
+    'ws.free': 'grid',
+    'ui.shortcuts': 'help',
+});
+
+/** 前缀兜底：`tool.<id>` 这类动态 id 走这里，永远有图标可画。 */
+const CMD_ICON_PREFIX = Object.freeze({
+    file: 'save',
+    edit: 'help',
+    play: 'play',
+    cel: 'timer',
+    canvas: 'center',
+    ws: 'grid',
+    tool: 'outline',
+    ui: 'help',
+});
+
+/** 一条命令该用哪个图标：命令自带 > 精确表 > 前缀兜底 > help。 */
+function iconOf(cmd) {
+    if (cmd && typeof cmd.icon === 'string' && hasIcon(cmd.icon)) return cmd.icon;
+    const id = textOf(cmd && cmd.id);
+    if (Object.prototype.hasOwnProperty.call(CMD_ICONS, id)) return CMD_ICONS[id];
+    return CMD_ICON_PREFIX[id.split('.')[0]] || 'help';
+}
 
 /** 实例序号（给 item 生成唯一 id，供 aria-activedescendant 使用）。 */
 let instanceSeq = 0;
@@ -283,14 +343,17 @@ export function createPalette(opts = {}) {
         markItem(node, false);
         if (cmd.enabled === false) node.setAttribute('data-disabled', 'true');
 
-        // 三个 span 恒定存在（空的由 CSS 的 :empty 收掉），避免结构随数据抖动
+        // 图标固定在最前：14px（--icon-sm），颜色继承 .cmd-item 的 color，选中/禁用自动跟着走
+        const glyph = make('span', 'cmd-glyph');
+        glyph.innerHTML = icon(iconOf(cmd), { size: 'sm' });
+        // 四个 span 恒定存在（空的由 CSS 的 :empty 收掉），避免结构随数据抖动
         const title = make('span', 'cmd-title');
         title.textContent = textOf(cmd.title);
         const hint = make('span', 'cmd-hint');
         hint.textContent = textOf(cmd.hint);
         const keys = make('span', 'cmd-keys');
         keys.textContent = textOf(cmd.keys);
-        node.append(title, hint, keys);
+        node.append(glyph, title, hint, keys);
 
         list.appendChild(node);
         return { cmd, node };

@@ -4,6 +4,7 @@
 
 import { addLayer, removeLayer, moveLayer, patchLayer, celAt, imageAt, celTimes, objectsOf } from '../core/cel.mjs';
 import { objectSize } from '../core/doc-model.mjs';
+import { icon } from '../core/icons.mjs';
 import { duplicateLayer, mergeDown } from '../paint/ops.mjs';
 import { thumbFrom } from '../paint/thumb.mjs';
 
@@ -40,8 +41,8 @@ let popover = null;   // v5：时间通道浮层（懒创建、模块级复用�
 
 // v8：工具条只留两个可见按钮（＋ 新建 / ⋯ 菜单），其余 5 个动作收进菜单。
 // 动作顺序沿用老平铺工具条的 ＋ 复 ↑ ↓ 合 删，只是「入口」从按钮换成了菜单项。
-// [act, 按钮文字, 提示]
-const BAR_ACTS = [['add', '＋', '新建对象']];
+// [act, 图标名, 按钮文字（null = 纯图标）, 提示] —— 图标来自 core/icons.mjs
+const BAR_ACTS = [['add', 'plus', null, '新建对象']];
 // [act, 菜单文字, 提示]
 const MENU_ACTS = [
     ['dup', '复制对象', '复制当前对象'],
@@ -62,21 +63,23 @@ export function mount(el, ctx) {
     const bar = document.createElement('div');
     bar.className = 'lyr-bar';
     const actBtn = new Map();   // act → 要同步置灰的控件（工具条按钮或菜单项）
-    for (const [act, text, title] of BAR_ACTS) {
+    for (const [act, iconName, text, title] of BAR_ACTS) {
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = 'lyr-btn';
+        b.className = 'lyr-btn ' + (text ? 'ms-icon-label' : 'ms-icon-btn');
+        b.innerHTML = icon(iconName) + (text ? '<span>' + text + '</span>' : '');
         b.dataset.act = act;
-        b.textContent = text;
         b.title = title;
+        b.setAttribute('aria-label', title);
         bar.appendChild(b);
         actBtn.set(act, b);
     }
     const moreBtn = document.createElement('button');
     moreBtn.type = 'button';
-    moreBtn.className = 'lyr-btn lyr-more';
-    moreBtn.textContent = '⋯';
+    moreBtn.className = 'lyr-btn lyr-more ms-icon-btn';
+    moreBtn.innerHTML = icon('more-horizontal');
     moreBtn.title = '更多对象操作';
+    moreBtn.setAttribute('aria-label', '更多对象操作');
     moreBtn.setAttribute('aria-haspopup', 'true');
     moreBtn.setAttribute('aria-expanded', 'false');
     bar.appendChild(moreBtn);
@@ -180,22 +183,23 @@ export function mount(el, ctx) {
     celsCount.textContent = '0';
     const celsActs = document.createElement('span');
     celsActs.className = 'lyr-cels-acts';
-    // [act, 文字, 提示]
+    // [act, 图标名, 按钮文字（null = 纯图标）, 提示]
     const CEL_ACTS = [
-        ['add', '＋', '新建一张纹理：只进纹理库，不占时间轴（点这一行才会放到当前时刻）'],
-        ['dup', '复', '复制当前纹理：独特化成新图，之后改它不影响原来的时刻'],
-        ['prev', '‹', '跳到上一个曝光点（Shift+,）'],
-        ['next', '›', '跳到下一个曝光点（Shift+.）'],
-        ['del', '删', '删除这张纹理（所有曝光它的时刻一起消失）'],
+        ['add', 'plus', null, '新建一张纹理：只进纹理库，不占时间轴（点这一行才会放到当前时刻）'],
+        ['dup', 'copy', null, '复制当前纹理：独特化成新图，之后改它不影响原来的时刻'],
+        ['prev', 'chevron-left', null, '跳到上一个曝光点（Shift+,）'],
+        ['next', 'chevron-right', null, '跳到下一个曝光点（Shift+.）'],
+        ['del', 'trash', null, '删除这张纹理（所有曝光它的时刻一起消失）'],
     ];
     const celBtn = new Map();
-    for (const [act, text, title] of CEL_ACTS) {
+    for (const [act, iconName, text, title] of CEL_ACTS) {
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = 'lyr-cels-btn';
+        b.className = 'lyr-cels-btn ' + (text ? 'ms-icon-label' : 'ms-icon-btn');
         b.dataset.celact = act;
-        b.textContent = text;
+        b.innerHTML = icon(iconName) + (text ? '<span>' + text + '</span>' : '');
         b.title = title;
+        b.setAttribute('aria-label', title);
         celsActs.appendChild(b);
         celBtn.set(act, b);
     }
@@ -247,18 +251,24 @@ export function mount(el, ctx) {
         row.className = 'lyr-row';
         row.dataset.id = layer.id;
 
-        // 折叠箭头：只有「有子对象」的行才显示，点它只切面板显示，不改文档
+        // 折叠箭头：只有「有子对象」的行才显示，点它只切面板显示，不改文档。
+        // 图标随展开态在 chevron-right / chevron-down 之间切（原先用 ▾/▸ 文本，带 aria-expanded）。
         const caret = document.createElement('button');
         caret.type = 'button';
-        caret.className = 'lyr-caret';
-        caret.textContent = '▾';
+        caret.className = 'lyr-caret ms-icon-btn';
+        caret.innerHTML = icon('chevron-down');
+        caret.dataset.icon = 'chevron-down';
         caret.title = '收起 / 展开子对象';
+        caret.setAttribute('aria-label', caret.title);
+        caret.setAttribute('aria-expanded', 'true');
         caret.style.display = 'none';
 
         const vis = document.createElement('button');
         vis.type = 'button';
-        vis.className = 'lyr-vis';
+        vis.className = 'lyr-vis ms-icon-btn';
         vis.title = '显示 / 隐藏';
+        vis.innerHTML = icon('eye');
+        vis.dataset.icon = 'eye';
 
         const thumb = document.createElement('canvas');
         thumb.className = 'lyr-thumb';
@@ -274,12 +284,14 @@ export function mount(el, ctx) {
         sub.className = 'lyr-sub';
         meta.append(name, sub);
 
-        // v5：时间通道徽章。恒等时置灰，点开可改 offset / 倍率 / 循环 / 冻结
+        // v5：时间通道徽章。恒等时置灰，点开可改 offset / 倍率 / 循环 / 冻结。
+        // 徽章是 24×24 热区（视觉是 14px 淡色图标），点击目标不受图标尺寸影响。
         const timeBadge = document.createElement('button');
         timeBadge.type = 'button';
-        timeBadge.className = 'lyr-time is-off';
-        timeBadge.textContent = '⏱';
+        timeBadge.className = 'lyr-time is-off ms-icon-btn';
+        timeBadge.innerHTML = icon('timer');
         timeBadge.title = '时间通道（偏移 / 倍率 / 循环 / 冻结）';
+        timeBadge.setAttribute('aria-label', timeBadge.title);
         timeBadge.addEventListener('pointerdown', (e) => e.stopPropagation());
         timeBadge.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -567,8 +579,14 @@ const TIME_MODE_TEXT = [
 
             const kids = hasChild.has(layer.id);
         rec.caret.style.display = kids ? '' : 'none';
-        const wantCaret = collapsedIds.has(layer.id) ? '▸' : '▾';
-        if (kids && rec.caret.textContent !== wantCaret) rec.caret.textContent = wantCaret;
+        // 展开 = chevron-down（头朝下），收起 = chevron-right。只在文本变化时才重设 innerHTML，
+        // 否则每次 paint 都重建 DOM 会让 hover/焦点抖动。
+        const wantCaret = collapsedIds.has(layer.id) ? 'chevron-right' : 'chevron-down';
+        if (kids && rec.caret.dataset.icon !== wantCaret) {
+            rec.caret.dataset.icon = wantCaret;
+            rec.caret.innerHTML = icon(wantCaret);
+            rec.caret.setAttribute('aria-expanded', wantCaret === 'chevron-down' ? 'true' : 'false');
+        }
         rec.row.style.display = hiddenBy(layer) ? 'none' : '';
         rec.row.classList.toggle('is-active', layer.id === active);
             rec.row.classList.toggle('is-sel', layer.id === sel);
@@ -576,20 +594,28 @@ const TIME_MODE_TEXT = [
             rec.row.classList.toggle('is-linked', !!(cel && cel.group));
             rec.vis.classList.toggle('is-off', !layer.visible);
             rec.vis.title = layer.visible ? '隐藏「' + layer.name + '」' : '显示「' + layer.name + '」';
+            rec.vis.setAttribute('aria-label', rec.vis.title);
+            // 眼睛图标跟随可见性：可见 = eye，隐藏 = eye-off。同样只在切换时重建。
+            const wantEye = layer.visible ? 'eye' : 'eye-off';
+            if (rec.vis.dataset.icon !== wantEye) {
+                rec.vis.dataset.icon = wantEye;
+                rec.vis.innerHTML = icon(wantEye);
+            }
             if (rec.name.textContent !== layer.name) rec.name.textContent = layer.name;
-            // 副标题：种类 + 画格张数 + 曝光处数 + 关键帧数 + 链接标记。
-            // 「画格」是库里的张数，「曝光」是时间轴上有几个时刻在用它——两者不是一回事，
-            // 面板下半截列的是前者，时间轴画的是后者。
+            // 副标题：种类 + 库内画格张数 + 关键帧数。
+            // 这里必须短：.lyr-sub 的宽度预算实测只有 134px（11px 字号 ≈ 12 个汉字），
+            // 原先「0 画格 · 1 曝露 · 1 关键帧」写完 141px 会被 CSS 截成「1 关…」，
+            // 用户看到的是半截词。曝光处数不是「几个时刻在用它」，完整版放进 row.title。
             const libCount = drawingsOf(layer && layer.id).length;
             const expoCount = celTimes(layer).length;
-            let sub = kindLabel(layer) + ' · ' + libCount + ' 画格 · ' + expoCount + ' 曝露 · ' + keyCount(layer) + ' 关键帧';
+            let sub = kindLabel(layer) + ' · ' + libCount + ' 画格 · ' + keyCount(layer) + ' 键';
     // 对象自己带分辨率：只有和文档画布不一样时才标出来，否则每行都挂一遍 900×640 是噪音
     const osz = objectSize(layer);
     if (osz && doc && (osz.w !== doc.width || osz.h !== doc.height)) sub += ' · ' + osz.w + '×' + osz.h;
             if (cel && cel.group != null) sub += ' · 链接';
             if (rec.sub.textContent !== sub) rec.sub.textContent = sub;
             const pct = Math.round((layer.opacity == null ? 1 : layer.opacity) * 100);
-            const tip = layer.name + ' · 不透明度 ' + pct + '% · ' + sub;
+            const tip = layer.name + ' · 不透明度 ' + pct + '% · ' + sub + ' · 曝光 ' + expoCount + ' 处';
             if (rec.row.title !== tip) rec.row.title = tip;
 
             // v5：父子缩进 + 时间通道徽章

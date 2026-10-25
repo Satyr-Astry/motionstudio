@@ -7,6 +7,7 @@ import { objectSize, setObjectSize } from '../core/doc-model.mjs';
 import { patchLayer } from '../core/cel.mjs';
 import { createSurface } from '../paint/surface.mjs';
 import { createXformPanel } from './xform.mjs';
+import { icon } from '../core/icons.mjs';
 import { makeGroup, makeRow, makeText, makeValue, makeNum, makeNumPair, activeObj } from './prop-kit.mjs';
 
 // 种类文案与 layers.mjs 的 KIND_TEXT 对齐（那边是模块私有常量、不导出，这里复制一份，
@@ -31,9 +32,17 @@ export function mount(el, ctx) {
     const kindVal = makeValue(objBody, '种类', '—');
     // 尺寸 = 对象自己的画布，宽 / 高并排两个可编辑框。
     // 旧版这里是 makeValue 的只读文本：能看见「900 × 640」却改不了，正是「不能自定义对象尺寸」的根因。
-    const sizePair = makeNumPair(objBody, '尺寸', { min: 1, max: 4096, step: 1, key: 'obj-size', placeholder: '—' });
+    const sizePair = makeNumPair(objBody, '尺寸', { min: 1, max: 4096, step: 1, key: 'obj-size', placeholder: '宽' });
     const sizeW = sizePair.w;
     const sizeH = sizePair.h;
+    // 两个光秃秃的数字框看不出哪个是宽、哪个是高 —— 没有位图的对象还会被清空成占位符，
+    // 连「—」都读不出方向。用 placeholder 把方向写死（有值时靠标题与中间的 × 区分），
+    // 再补 aria-label 让读屏也能读出「宽 / 高」。
+    // 不在框外加「宽」「高」小标签：.prop-val 有自己的固定宽度，两个前缀会把
+    // 两个输入框从 92px 挤到 35px，那是拿可读性换可读性。
+    sizeH.placeholder = '高';
+    sizeW.setAttribute('aria-label', '对象宽度（像素）');
+    sizeH.setAttribute('aria-label', '对象高度（像素）');
     const opacityInput = makeNum(objBody, '不透明度', { min: 0, max: 100, step: 1, value: 100, key: 'obj-opacity' });
     opacityInput.title = '对象不透明度 0–100，与对象列表里的滑块是同一个值';
     // 补一个单位后缀：光秃秃的 0–100 会被读成像素
@@ -73,9 +82,10 @@ export function mount(el, ctx) {
     anchorY.title = '旋转/缩放原点的 Y（0 = 上边缘，50 = 垂直中心，100 = 下边缘）';
     const anchorCenter = document.createElement('button');
     anchorCenter.type = 'button';
-    anchorCenter.className = 'prop-seg prop-anchor-center';
-    anchorCenter.textContent = '居中';
+    anchorCenter.className = 'prop-seg prop-anchor-center ms-icon-label';
+    anchorCenter.innerHTML = icon('center') + '<span>居中</span>';
     anchorCenter.title = '把原点放到对象中心（50% / 50%）';
+    anchorCenter.setAttribute('aria-label', anchorCenter.title);
     anchorCenter.addEventListener('click', () => {
         const layer = activeObj(ctx, ctx.doc());
         if (!layer) return;
@@ -132,8 +142,12 @@ export function mount(el, ctx) {
     for (const def of EFFECT_DEFS) {
         const b = document.createElement('button');
         b.type = 'button';
-        b.textContent = '＋' + def.name;
+        // 「＋名字」的加号换成了效果自身的图标：模糊/外发光/投影/调整/描边各一个，
+        // 五个胶囊一眼能分出种类；「这是添加动作」由 title 与 hover 色说清。
+        b.className = 'ms-icon-label';
+        b.innerHTML = icon(def.id, { size: 'sm' }) + '<span>' + def.name + '</span>';
         b.title = '给当前对象加一个' + def.name;
+        b.setAttribute('aria-label', b.title);
         b.addEventListener('click', () => {
             const doc = ctx.doc();
             const layer = doc ? activeLayer(doc) : null;
@@ -356,11 +370,12 @@ export function mount(el, ctx) {
             const keyBtn = document.createElement('button');
             keyBtn.type = 'button';
             keyBtn.className = 'fx-key';
-            keyBtn.textContent = '◆';
+            keyBtn.innerHTML = icon('diamond', { size: 'sm' });
             keyBtn.classList.toggle('is-on', !!(hooks && hooks.hasTrack));
             keyBtn.title = hooks && hooks.hasTrack
                 ? '这个参数已有关键帧 —— 点击清除（保留当前值）'
                 : '在当前时间给这个参数打关键帧；之后拖滑杆就是逐帧改';
+            keyBtn.setAttribute('aria-label', hooks && hooks.hasTrack ? '清除该参数的关键帧' : '在该参数上打关键帧');
             keyBtn.addEventListener('click', (ev) => {
                 ev.stopPropagation();
                 if (hooks && hooks.onKey) hooks.onKey();
@@ -399,8 +414,9 @@ export function mount(el, ctx) {
                 const del = document.createElement('button');
                 del.type = 'button';
                 del.className = 'fx-del';
-                del.textContent = '×';
+                del.innerHTML = icon('x', { size: 'sm' });
                 del.title = '移除' + def.name;
+                del.setAttribute('aria-label', del.title);
                 del.addEventListener('click', () => {
                     const cur = activeLayer(ctx.doc());
                     if (!cur) return;

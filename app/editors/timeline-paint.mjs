@@ -15,6 +15,9 @@
 //
 // 几何（left/top/width/height）一律内联写入，CSS 只负责颜色与手感。
 
+import { icon, escapeAttr } from '../core/icons.mjs';
+// 图例的唯一数据源在 help.mjs：设置里的「图例」分组与这个浮层读同一份，不再各写一套
+import { LEGEND_ITEMS } from './help.mjs';
 import { docDuration, drawingsOf, drawingIdOf, imageAt, objectById, objectsOf } from '../core/doc-model.mjs';
 import {
     CEL_SIZE,
@@ -70,26 +73,35 @@ export function createView(el) {
         return g;
     };
 
-    const mkBtn = (host, act, text, title) => {
+    /**
+     * 建一个工具条按钮。
+     * spec.text 为空 = 纯图标按钮：走 ms-icon-btn（22×22 方盒，等比缩放的图标），
+     * 并强制补 aria-label —— 没有文字时标题就是唯一的可读名。
+     * spec.text 有值 = 图标 + 文字（ms-icon-label），宽度按内容走。
+     */
+    const mkBtn = (host, act, spec) => {
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = 'tline-btn';
+        b.className = 'tline-btn ' + (spec.text ? 'ms-icon-label' : 'ms-icon-btn');
         b.dataset.act = act;
         if (host && host.dataset && host.dataset.grp) b.dataset.grp = host.dataset.grp;
-        b.textContent = text;
-        b.title = title;
+        b.innerHTML = icon(spec.icon) + (spec.text ? '<span>' + escapeAttr(spec.text) + '</span>' : '');
+        b.title = spec.title;
+        // 测试里的假 DOM 只有 createElement 的极简壳，没有 setAttribute —— 照旧防御
+        if (typeof b.setAttribute === 'function') b.setAttribute('aria-label', spec.title);
         host.appendChild(b);
         return b;
     };
 
     /* ── 1. 播放控制（v8：从顶栏搬进来的，时间轴才是它的老家） ──
-       ⏮ ‹ ▶ › ⏭ 是行业通用字形；中文字号在 22px 按钮里会挤，标题写中文。 */
+       图标化：字形（⏮ ‹ ▶ › ⏭）在不同系统字体里缺字或粗细不一，换成自绘 SVG 后
+       5 个按钮仍然各占 22px，工具条总宽不变。标题照旧写中文（含快捷键）。 */
     const gTr = grp('transport', 'transport');
-    const first = mkBtn(gTr, 'first', '⏮', '回到开头（Home）');
-    const prev = mkBtn(gTr, 'prev', '‹', '上一帧（←）');
-    const play = mkBtn(gTr, 'play', '▶', '播放 / 暂停（空格）');
-    const next = mkBtn(gTr, 'next', '›', '下一帧（→）');
-    const last = mkBtn(gTr, 'last', '⏭', '跳到结尾（End）');
+    const first = mkBtn(gTr, 'first', { icon: 'step-back', text: '', title: '回到开头（Home）' });
+    const prev = mkBtn(gTr, 'prev', { icon: 'chevron-left', text: '', title: '上一帧（←）' });
+    const play = mkBtn(gTr, 'play', { icon: 'play', text: '', title: '播放 / 暂停（空格）' });
+    const next = mkBtn(gTr, 'next', { icon: 'chevron-right', text: '', title: '下一帧（→）' });
+    const last = mkBtn(gTr, 'last', { icon: 'step-forward', text: '', title: '跳到结尾（End）' });
 
     /* ── 2. 时间读数：当前时间与总时长都是可输入的数字 ──
        「总时长调整不直观」的根因就是它原本只是一段只读文字。 */
@@ -117,25 +129,26 @@ export function createView(el) {
     unitEl.textContent = 's';
     gTime.append(nowEl, sepEl, totalEl, unitEl);
 
-    /* ── 3. 画格（从这一刻起换图） ── */
+    /* ── 3. 画格（从这一刻起换图） ──
+       三字文案缩成两字：加图标后「上一格」要 61px，工具条在 1280 宽已经贴边。
+       「上格 / 下格 / 曝光 / 删格」配上图标语义一样清楚，标题里保留完整说明。 */
     const gCel = grp('cel', 'edit');
-    // 用「格」而不是箭头字符：◀ ▶ 在部分系统字体里缺字形，会渲染成空白
-    const prevCel = mkBtn(gCel, 'prevcel', '上一格', '跳到上一个画格点');
-    const nextCel = mkBtn(gCel, 'nextcel', '下一格', '跳到下一个画格点');
-    const add = mkBtn(gCel, 'addcel', '加曝光', '在播放头处再加一次曝光（复用当前画格，不新建图）');
-    const del = mkBtn(gCel, 'delcel', '删画格', '删除当前时间生效的画格');
+    const prevCel = mkBtn(gCel, 'prevcel', { icon: 'chevron-left', text: '上格', title: '跳到上一个画格点' });
+    const nextCel = mkBtn(gCel, 'nextcel', { icon: 'chevron-right', text: '下格', title: '跳到下一个画格点' });
+    const add = mkBtn(gCel, 'addcel', { icon: 'plus', text: '曝光', title: '在播放头处再加一次曝光（复用当前画格，不新建图）' });
+    const del = mkBtn(gCel, 'delcel', { icon: 'trash', text: '删格', title: '删除当前时间生效的画格' });
 
     /* ── 4. 关键帧 ── */
     const gKey = grp('key', 'edit');
-    const addKey = mkBtn(gKey, 'addkey', '◆', '在当前时间打一个变换关键帧（也可双击对应泳道）');
+    const addKey = mkBtn(gKey, 'addkey', { icon: 'diamond', text: '', title: '在当前时间打一个变换关键帧（也可双击对应泳道）' });
     // 磁铁：拖动关键帧 / 画格 / 时长手柄时吸附到整帧（AE、Aseprite 的默认行为）。
-    const snap = mkBtn(gKey, 'snap', '磁铁', '吸附到整帧（拖动时按住 Shift 可临时自由）');
+    const snap = mkBtn(gKey, 'snap', { icon: 'magnet', text: '磁铁', title: '吸附到整帧（拖动时按住 Shift 可临时自由）' });
     if (typeof snap.setAttribute === 'function') snap.setAttribute('aria-pressed', 'true');
 
     /* ── 5. 缩放 ── */
     const gZoom = grp('zoom', 'zoom');
-    const zoomOut = mkBtn(gZoom, 'zoomout', '−', '横向缩小（Ctrl+滚轮）');
-    const zoomIn = mkBtn(gZoom, 'zoomin', '＋', '横向放大（Ctrl+滚轮）');
+    const zoomOut = mkBtn(gZoom, 'zoomout', { icon: 'minus', text: '', title: '横向缩小（Ctrl+滚轮）' });
+    const zoomIn = mkBtn(gZoom, 'zoomin', { icon: 'plus', text: '', title: '横向放大（Ctrl+滚轮）' });
 
     const zoomEl = document.createElement('span');
     zoomEl.className = 'tline-zoom';
@@ -269,17 +282,13 @@ export function setEmptyChrome(view, zoomX) {
 
 /* ─────────────────────────── 图例：画格 vs 关键帧 ─────────────────────────── */
 
-const LEGEND_ROWS = [
-    ['is-cel', '■', '画格', '从这一秒起换成这张图，直到下一个画格；格与格之间不插值。'],
-    ['is-kf', '◆', '关键帧', '位移 / 缩放 / 旋转 / 不透明度在这里连续插值，与相邻关键帧平滑过渡。'],
-];
-
 /**
  * 工具条右侧的「?」图例。点开两行说明，点别处或 Esc 收起。
  *
  * 卡片挂在 document.body 上而不是 .tline 里：.tline 的孩子数量与顺序被
  * tests/timeline.test.mjs 钉死（tools / ruler / rows 三块），图例不能挤进去。
  * 卡片 pointer-events:none —— 它只是说明文字，绝不挡住时间轴上的操作。
+ * 文案来自 help.mjs 的 LEGEND_ITEMS（与设置工作区同源）。
  */
 export function createLegend() {
     let card = null;
@@ -287,8 +296,9 @@ export function createLegend() {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'tline-legend';
-    btn.textContent = '?';
+    btn.innerHTML = icon('help');
     btn.title = '画格与关键帧有什么区别（点开看图例）';
+    if (typeof btn.setAttribute === 'function') btn.setAttribute('aria-label', btn.title);
 
     function close() {
         if (card && typeof card.remove === 'function') card.remove();
@@ -320,21 +330,21 @@ export function createLegend() {
         wrap.style.maxWidth = '330px';
         wrap.style.pointerEvents = 'none';
 
-        for (const [cls, mark, name, text] of LEGEND_ROWS) {
+        for (const item of LEGEND_ITEMS) {
             const line = document.createElement('div');
             line.className = 'tline-legend-row';
 
             const m = document.createElement('span');
-            m.className = 'tline-legend-mark ' + cls;
-            m.textContent = mark;
+            m.className = 'tline-legend-mark is-' + item.kind;
+            m.textContent = item.mark;
 
             const n = document.createElement('b');
             n.className = 'tline-legend-name';
-            n.textContent = name;
+            n.textContent = item.name;
 
             const t = document.createElement('span');
             t.className = 'tline-legend-text';
-            t.textContent = text;
+            t.textContent = item.text;
 
             line.append(m, n, t);
             wrap.appendChild(line);
@@ -403,6 +413,10 @@ function makeKfNode(objId) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'tline-kf';
+    // 兜底文案：节点刚建、还没被 paint() 覆写 title 的那一帧也必须可读（悬停不能是空的）。
+    // 真正的摘要（时刻 / 缓动 / 通道数 / 拖动说明）由 paint 里的 tip 覆盖。
+    b.title = '关键帧：变换在这里有一条关键帧（连续插值）';
+    if (typeof b.setAttribute === 'function') b.setAttribute('aria-label', '关键帧');
     b.dataset.layer = objId;
     b.dataset.t = '0';
     b.style.position = 'absolute';
@@ -587,7 +601,7 @@ export function buildSegments(view, opts, onEdit) {
         node.style.top = '0';
         node.style.height = FPS_H + 'px';
         node.style.pointerEvents = 'auto';
-        node.style.fontSize = '8px';
+        node.style.fontSize = '10px';
         node.style.lineHeight = FPS_H - 1 + 'px';
         node.style.paddingLeft = '2px';
         node.style.zIndex = '1';
@@ -622,8 +636,8 @@ export function buildSegments(view, opts, onEdit) {
         node.classList.toggle('is-cur', i === cur);
         node.title = Math.round(seg.fps) + ' fps · ' + fmt2(seg.at) + '–' + fmt2(seg.end) + ' s（双击改帧率）';
         if (node.dataset.editing) return; // 正在编辑就别改文字
-        // 段太窄时不写字：8px 字号下「12fps」要 32px，硬挤会变成「12ps」这种残字
-        const narrow = (x1 - x0) < 34;
+        // 段太窄时不写字：10px 字号下「12fps」要 40px，硬挤会变成「12ps」这种残字
+        const narrow = (x1 - x0) < 42;
         const text = narrow ? '' : Math.round(seg.fps) + 'fps';
         if (node.textContent !== text) node.textContent = text;
     });
@@ -647,7 +661,7 @@ export function beginFpsEdit(node, deps) {
     inp.step = '1';
     inp.value = String(Number.isFinite(cur) ? Math.round(cur) : DEFAULT_FPS);
     inp.style.cssText =
-        'position:absolute;left:0;top:0;width:100%;height:100%;font-size:8px;line-height:1;' +
+        'position:absolute;left:0;top:0;width:100%;height:100%;font-size:10px;line-height:1;' +
         'border:0;padding:0 2px;background:var(--panel-2,#26282d);color:#fff;outline:1px solid var(--accent,#4a7dff);';
 
     const done = (ok) => {
@@ -864,9 +878,10 @@ export function updateTools(view, frame) {
     const total = Number(frame.total) || 0;
     const now = Number(frame.now) || 0;
 
-    // 播放：字形跟着状态走，标题说明「按下会发生什么」
-    view.btns.play.textContent = playing ? '❚❚' : '▶';
+    // 播放：图标跟着状态走，标题说明「按下会发生什么」
+    view.btns.play.innerHTML = icon(playing ? 'pause' : 'play');
     view.btns.play.title = playing ? '暂停（空格）' : '播放 / 暂停（空格）';
+    if (typeof view.btns.play.setAttribute === 'function') view.btns.play.setAttribute('aria-label', view.btns.play.title);
     view.btns.play.classList.toggle('is-on', playing);
 
     // 读数：正在输入的那个框不抢，否则每帧重绘会把光标和选区踢掉

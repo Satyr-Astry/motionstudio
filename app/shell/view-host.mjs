@@ -28,6 +28,7 @@ import {
 import { computeRects, resizeAcross, freezeAxis, MIN_AREA } from './layout.mjs';
 import { EDITORS, editorDef, editorTitle } from './registry.mjs';
 import { WS_IDS } from './chrome.mjs';
+import { icon } from '../core/icons.mjs';
 import { saveLayout, clearLayout } from './persist.mjs';
 import * as canvasEditor from '../editors/canvas.mjs';
 import {
@@ -375,14 +376,15 @@ function createSlot(view, areaNodeSrc) {
     head.appendChild(el('div', 'area-gap'));
 
     const acts = [
-        ['split-h', '▤', '横向分割（上下）'],
-        ['split-v', '▥', '竖向分割（左右）'],
-        ['close', '✕', '关闭区域'],
+        ['split-h', 'rows', '横向分割（上下）'],
+        ['split-v', 'columns', '竖向分割（左右）'],
+        ['close', 'x', '关闭区域'],
     ];
-    for (const [act, label, title] of acts) {
-        const b = el('button', 'area-btn', label);
+    for (const [act, iconName, title] of acts) {
+        const b = el('button', 'area-btn ms-icon-btn');
         b.type = 'button';
         b.dataset.act = act;
+        b.innerHTML = icon(iconName);
         b.title = title;
         b.setAttribute('aria-label', title);
         b.addEventListener('click', (e) => {
