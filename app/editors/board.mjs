@@ -20,6 +20,7 @@
  *       .bd-field.bd-field-size           range + 数字
  *       .bd-field.bd-field-opacity        range + 数字
  *       button[data-act=pick]             取色器（E）
+ *       button[data-act=bucket]           填充（G）—— 与取色器互斥的"点一下"模式
  *       select.bd-mirror                  镜像：无 / 左右 / 上下 / 四向
  *       button[data-act=undo|redo]        撤销 / 重做（引擎 history）
  *       button[data-act=settings]         （more-horizontal）笔刷设置
@@ -38,6 +39,7 @@ import {
 } from '../paint/brush.mjs';
 import { captureRegion, makeRegionCommand } from '../paint/patch.mjs';
 import { MAX_LEVEL, clampLevel, createStabilizer } from '../paint/stabilizer.mjs';
+import { floodFillRegion } from '../paint/fill.mjs';
 import { icon } from '../core/icons.mjs';
 import { imageAt, objectById, objectsOf } from '../core/doc-model.mjs';
 
@@ -154,6 +156,25 @@ export function mount(el, ctx) {
         if (!obj) return null;
         const img = imageAt(obj, timeNow());
         return img && typeof img.getContext === 'function' ? img : null;
+    }
+
+    /**
+     * 填充用的纹理入口：把「没有纹理」和「纹理是导入位图」分成两种结局。
+     *
+     * 共享的 texture() 只返回 canvas 或 null，会把这两种情况混成一句"还没有纹理"——
+     * 前者是用户操作前提没满足（该点「纹理」新建），后者是能力边界（导入的 PNG/PSD
+     * 图层是 ImageBitmap，没有 getContext，本就改不了）。混着说，用户会以为是自己少做了什么。
+     *
+     * @returns {{ kind: 'ok'|'none'|'bitmap', img: HTMLCanvasElement|null }}
+     */
+    function textureForFill() {
+        const obj = targetObject();
+        if (!obj) return { kind: 'none', img: null };
+        const raw = imageAt(obj, timeNow());
+        if (!raw || typeof raw.getContext !== 'function') {
+            return { kind: raw ? 'bitmap' : 'none', img: null };
+        }
+        return { kind: 'ok', img: raw };
     }
 
     /* ── 笔刷参数（预设 + localStorage 覆写） ── */
@@ -306,6 +327,14 @@ export function mount(el, ctx) {
     pickBtn.setAttribute('aria-label', '取色器');
     pickBtn.title = '取色器：点画布取一个像素（E）· 画布上右键随时取色';
 
+    // 油漆桶：与取色器同为「点一下生效」的模式工具（不是按住才生效的临时工具）。
+    const bucketBtn = mk('button', 'bd-ico');
+    bucketBtn.type = 'button';
+    bucketBtn.dataset.act = 'bucket';
+    bucketBtn.innerHTML = icon('bucket');
+    bucketBtn.setAttribute('aria-label', '填充');
+    bucketBtn.title = '填充：点画布把同色连通区一次填满（G）';
+
     const mirrorSel = mk('select', 'bd-select bd-mirror');
     mirrorSel.title = '镜像绘制（纯前端，不改数据）';
     for (const [value, label] of MIRROR_MODES) {
@@ -364,7 +393,7 @@ export function mount(el, ctx) {
 
     bar.append(
         brushes, swatch, sizeField, opacityField,
-        pickBtn, mirrorSel, undoBtn, redoBtn, settingsBtn, stabBtn, acts,
+        pickBtn, bucketBtn, mirrorSel, undoBtn, redoBtn, settingsBtn, stabBtn, acts,
     );
 
     /* ── DOM：画布 + 游标层 ── */
@@ -427,7 +456,7 @@ export function mount(el, ctx) {
     resetBtn.title = '清除这个笔刷的记忆参数';
     pop.appendChild(resetBtn);
 
-    const hint = mk('div', 'bd-hint', '左键画 · 右键/Alt 取色 · E 取色器 · [ ] 笔尖 · 1–7 笔刷 · 滚轮缩放 · 空格/中键平移 · 0 适配');
+    const hint = mk('div', 'bd-hint', '左键画 · 右键/Alt 取色 · E 取色器 · G 填充 · [ ] 笔尖 · 1–7 笔刷 · 滚轮缩放 · 空格/中键平移 · 0 适配');
 
     root.append(bar, stage, pal, pop, hint);
     el.appendChild(root);
@@ -443,6 +472,8 @@ export function mount(el, ctx) {
     let recent = [];
     let mirror = 'none';
     let pickMode = false;
+    // 桶是**模式**（选中后左键点即填），与取色器互斥；两者都不要和右键那条临时取色路径共用状态。
+    let bucketMode = false;
     let rightPick = false;  // 右键按住取色中（左键绘制路径完全不受影响）
     let pickDownHex = '';   // 右键按下时取到的颜色，松手时用来判断要不要再播报一次
     let spaceDown = false;
@@ -611,7 +642,7 @@ export function mount(el, ctx) {
             ov.strokeStyle = 'rgba(255,255,255,0.92)';
             ov.stroke();
         }
-        if (pickMode || rightPick) {
+        if (pickMode || rightPick || bucketMode) {
             ov.beginPath();
             ov.moveTo(hover.x - rad - 3, hover.y);
             ov.lineTo(hover.x - Math.max(1, rad - 1), hover.y);
@@ -902,6 +933,73 @@ export function mount(el, ctx) {
         return true;
     }
 
+    /* ── 油漆桶 ── */
+
+    /** 桶与取色器互斥：两个都是"左键点一下"的模式，同时开着会让一次点击有两种解释。 */
+    function setBucketMode(on) {
+        bucketMode = !!(on == null ? !bucketMode : on);
+        if (bucketMode) pickMode = false;
+        paintChrome();
+        scheduleCursor();
+    }
+
+    /**
+     * 把当前纹理的同色连通区一次填满。
+     *
+     * 时序安全的关键：第 1 步拿到 img 之后，2–5 全在同一个同步块里 —— 没有 await、没有 rAF、
+     * 没有再调一次 texture()/timeNow()。setDoc 触发的重渲染只能在 pointerdown 返回后跑，
+     * 所以不存在「算出 A 的填充、写进 B」的调度窗口。撤销命令绑的是 img 这个引用（与落笔
+     * 同一套 makeRegionCommand），事后切画格/换纹理/删对象都不会写错图。
+     *
+     * @param {PointerEvent} e
+     * @returns {boolean} 是否真的填了（false 时一定没产生撤销命令）
+     */
+    function fillAt(e) {
+        const { kind, img } = textureForFill();
+        if (kind === 'none') {
+            notify('这个时刻还没有纹理：点「纹理」新建一张');
+            return false;
+        }
+        if (kind === 'bitmap') {
+            // 导入位图是 ImageBitmap，没有 getContext —— 不许偷偷画到临时画布上再丢回去
+            notify('这张纹理是导入位图，暂不支持填充');
+            return false;
+        }
+        const g = img.getContext('2d', { willReadFrequently: true });
+        if (!g) return false;
+        const W = img.width;
+        const H = img.height;
+        const p = toTexture(e);
+        const x = Math.floor(p.x);
+        const y = Math.floor(p.y);
+
+        const before = captureRegion(img, { x: 0, y: 0, w: W, h: H });
+        let frame;
+        try {
+            g.setTransform(1, 0, 0, 1, 0, 0);
+            frame = g.getImageData(0, 0, W, H);
+        } catch (err) {
+            // 纹理可能刚好被撤销/换成 detached 画布：这一次填不了，别让它炸掉整个 pointerdown
+            notify('这张纹理现在读不了，没法填充');
+            return false;
+        }
+        const res = floodFillRegion(frame.data, W, H, x, y, color);
+        if (!res.changed) {
+            if (x < 0 || y < 0 || x >= W || y >= H) notify('点在纹理外面了，没法填充');
+            else notify('这块已经是当前色，不用再填');
+            return false;
+        }
+        g.putImageData(frame, 0, 0);
+        const after = captureRegion(img, { x: 0, y: 0, w: W, h: H });
+        if (engine && typeof engine.pushCommand === 'function' && before && after) {
+            engine.pushCommand(makeRegionCommand(img, before, after, '填充（纹理）'));
+        }
+        draw();
+        if (typeof c.requestRender === 'function') c.requestRender();
+        notify('填充 ' + res.painted + ' 个像素');
+        return true;
+    }
+
     /* ── 尺寸 / 不透明度 / 笔刷 / 镜像 ── */
 
     function setSize(v) {
@@ -1023,6 +1121,9 @@ export function mount(el, ctx) {
         switch (a.dataset.act) {
             case 'pick':
                 setPickMode();
+                return;
+            case 'bucket':
+                setBucketMode();
                 return;
             case 'settings':
                 if (pop.hidden) openPop();
@@ -1169,6 +1270,10 @@ export function mount(el, ctx) {
             sampleAt(e);
             return;
         }
+        if (bucketMode) {
+            fillAt(e);
+            return;
+        }
         if (!beginStroke(e)) return;
         const move = (ev) => extendStroke(ev);
         const up = () => {
@@ -1224,6 +1329,7 @@ export function mount(el, ctx) {
         else if (e.key === '[') setSize(size >= 20 ? size - 4 : size - 1);
         else if (e.key === ']') setSize(size >= 20 ? size + 4 : size + 1);
         else if (e.key === 'e' || e.key === 'E') setPickMode();
+        else if (e.key === 'g' || e.key === 'G') setBucketMode();
         else if (/^[1-7]$/.test(e.key)) {
             const b = BRUSH_PRESETS[Number(e.key) - 1];
             if (b) selectBrush(b.id);
@@ -1267,6 +1373,11 @@ export function mount(el, ctx) {
         pickBtn.title = pickMode
             ? '取色器已开：点画布取色（E 取消）· 右键 / Alt+左键也可临时取色'
             : '取色器：点画布取一个像素（E）· 画布上右键或 Alt+左键随时取色';
+        bucketBtn.classList.toggle('is-on', bucketMode);
+        bucketBtn.setAttribute('aria-pressed', bucketMode ? 'true' : 'false');
+        bucketBtn.title = bucketMode
+            ? '填充已开：点画布填满同色连通区（G 取消）'
+            : '填充：点画布把同色连通区一次填满（G）';
         mirrorSel.value = mirror;
         if (engine && typeof engine.canUndo === 'function') undoBtn.disabled = !engine.canUndo();
         if (engine && typeof engine.canRedo === 'function') redoBtn.disabled = !engine.canRedo();

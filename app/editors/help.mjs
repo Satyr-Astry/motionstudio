@@ -79,9 +79,10 @@ export const SHORTCUT_GROUPS = [
         title: '画板',
         icon: 'brush',
         items: [
+            { icon: 'select', name: '选择工具', keys: 'V' },
             { icon: 'brush', name: '画笔', keys: 'B' },
             { icon: 'eraser', name: '橡皮', keys: 'E' },
-            { icon: 'bucket', name: '填充', keys: 'G' },
+            { icon: 'bucket', name: '填充', keys: 'G', hint: '同色连通区一次填满（容差 24）；导入的位图纹理不支持' },
             { icon: 'eyedropper', name: '取色器', keys: 'I' },
             { icon: 'eyedropper', name: '直接取色（按住拖可连续取）', keys: '右键 / Alt+左键' },
             { icon: 'move', name: '平移画布', keys: 'H' },
