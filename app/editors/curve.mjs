@@ -25,12 +25,13 @@ import { patchLayer, layerById, celTimes, objectsOf } from '../core/cel.mjs';
 import {
     PAD_L, PAD_R, PAD_T, PAD_B, EASE_LABEL, SCALAR_CHANNELS, ensureWarpChannels, warpChannels, chById, chValue,
     clamp, fmt2, fmtVal, totalSeconds, computeRange, xToT, yToV,
-    snapTime as geoSnapTime, hitTest as geoHitTest, pickInRect, dragKeyTo, dragHandleTo, selectionIndexes,
-    channelKeysOf, ensureChannel, isChannelField, dragChannelKeyTo, dragChannelHandleTo, autoTangentsChannel,
+    hitTest as geoHitTest, pickInRect, dragKeyTo, dragHandleTo, selectionIndexes,
+    channelKeysOf, writeModeOf, occupiedAt, isChannelField, dragChannelKeyTo, dragChannelHandleTo, autoTangentsChannel,
 } from './curve-geo.mjs';
 import { resizeCanvas, beginFrame, paintCanvas } from './curve-draw.mjs';
 // 曲线里「拖出来/打出来的时刻」也要落在整帧上，否则时间轴帧带里对不上位置
-import { snapFrame } from './timeline-geo.mjs';
+import { snapForDrag } from './timeline-geo.mjs';
+import { snapOnNow } from './timeline-keys.mjs';
 
 /**
  * `focusChannel` 的判定部分：只回答「这条通道 + 这个时刻能不能定位」，
@@ -493,15 +494,15 @@ export function mount(el, ctx) {
             hint.textContent = '先选点';
             return;
         }
-        // 批量：同一对象上所有被选中的点一起改缓动；标量通道走它自己的轨道，
-        // warp 顶点没有独立轨道（不在 TRACK_FIELDS 里），只能改共用关键帧
+        // 批量：同一对象上所有被选中的点一起改缓动。走哪套 API 由 writeModeOf 决定 ——
+        // 已经是独立轨道才改通道键，否则改共用关键帧（别因为「点了缓动按钮」就把字段独立掉）
         const chId = sel ? sel.chId : focus;
         writeTrack(layer.id, (trk) => {
-            const base = ensureChannel(trk, chId);
+            const chMode = writeModeOf(trk, chId) === 'channel';
             return idxs.reduce((acc, i) => {
-                if (!isChannelField(chId)) return hs ? setKeyEase(acc, i, ease, hs[0], hs[1]) : setKeyEase(acc, i, ease);
+                if (!chMode) return hs ? setKeyEase(acc, i, ease, hs[0], hs[1]) : setKeyEase(acc, i, ease);
                 return setChannelKeyEase(acc, chId, i, ease, hs ? hs[0] : undefined, hs ? hs[1] : undefined);
-            }, base);
+            }, trk);
         });
         hint.textContent = '缓动 ' + (ease === 'linear' ? '线性' : ease === 'hold' ? '保持' : '贝塞尔') + (idxs.length > 1 ? ' ×' + idxs.length : '');
     }
@@ -526,11 +527,11 @@ export function mount(el, ctx) {
         for (const i of idxs) {
             const cur = layerById(docOf(), layer.id);
             const trk = (cur && cur.transform) || { keys: [] };
-            if (isChannelField(chId)) {
-                // 独立轨道（或尚未提升）：切线只按这条通道自己的键算
+            if (writeModeOf(trk, chId) === 'channel') {
+                // 已是独立轨道：切线只按这条通道自己的键算
                 const tg = autoTangentsChannel(trk, chId, i);
                 if (!tg) continue;
-                writeTrack(layer.id, (t2) => setChannelKeyEase(ensureChannel(t2, chId), chId, i, 'bezier', tg.h1, tg.h2));
+                writeTrack(layer.id, (t2) => setChannelKeyEase(t2, chId, i, 'bezier', tg.h1, tg.h2));
             } else {
                 const tg = applyAutoTangents(trk, i);
                 if (!tg) continue;
@@ -555,15 +556,17 @@ export function mount(el, ctx) {
         if (typeof ctx.requestRender === 'function') ctx.requestRender();
     }
 
+    /**
+     * 曲线里的吸附必须与时间轴**同一套判据**（`magnetOf` + `snapForDrag`）：
+     * 磁铁开 = 吸整帧、Shift = 关磁铁（可落在两帧之间）；磁铁关 = 自由、Shift = 吸 0.1s 网格。
+     *
+     * 以前这里自己写「无条件吸帧、Shift 吸画格」，于是同一个关键帧在两个面板里
+     * 拖到同一像素位置会落到不同时刻 —— 那才是「时间轴和曲线不同步」的真身。
+     */
     function snapTime(t, ev) {
         const doc = docOf();
         if (!doc) return t;
-        // 时间轴的基本刻度是「帧」：曲线里拖出来的点先落整帧，再谈 Shift 的画格吸附，
-        // 否则同一个关键帧在帧带里会落在两帧之间（时间轴按帧定位，曲线按秒定位）。
-        const framed = snapFrame(doc, t);
-        if (!ev.shiftKey) return framed;
-        // Shift：吸附到最近的画格切换点（0 秒起点也作为一个吸附点）
-        return geoSnapTime(framed, celTimes(activeLayer(doc)));
+        return snapForDrag(doc, t, ev, snapOnNow());
     }
 
     /* ── 指针交互 ── */
@@ -650,13 +653,22 @@ export function mount(el, ctx) {
         if (drag.kind === 'key') {
             const t = snapTime(xToT(geo, x), ev);
             const v = yToV(geo, y, drag.chId);
+            // 目标时刻已经有别的关键帧：在**写之前**就挡掉（与时间轴同一条规矩）。
+            // 早先的做法是在 updater 里 return 原轨道，那会白白记一条撤销、还报「关键帧已更新」。
+            const cur = keysNow().track;
+            if (cur && occupiedAt(cur, drag.chId, t, drag.index)) {
+                if (!drag.blockedNotified) {
+                    drag.blockedNotified = true;
+                    notify('这个时刻已经有关键帧了：换一帧再拖，或先把那一颗删掉');
+                }
+                return;
+            }
             writeTrack(drag.layerId, (trk) => {
-                // 第一次在这个通道上动手：先提升成独立轨道（取值不变，所以画面不跳），
-                // 从这一刻起它才真的只影响自己。warp 顶点不在 TRACK_FIELDS 里，提升是空操作。
-                const base = ensureChannel(trk, drag.chId);
-                const r = isChannelField(drag.chId)
-                    ? dragChannelKeyTo(base, drag.chId, drag.index, t, v)
-                    : dragKeyTo(base, drag.index, t, drag.chId, v, drag.baseState);
+                // 只有该字段**已经**是独立轨道时才写通道轨；否则挪的就是时间轴上那颗共用菱形
+                // （整组一起搬，两个视图永远看同一套时刻）。绝不因为「拖了一下」就顺手提升。
+                const r = writeModeOf(trk, drag.chId) === 'channel'
+                    ? dragChannelKeyTo(trk, drag.chId, drag.index, t, v)
+                    : dragKeyTo(trk, drag.index, t, drag.chId, v, drag.baseState);
                 if (r.index >= 0) {
                     drag.index = r.index;
                     sel = { layerId: drag.layerId, chId: drag.chId, index: r.index, part: 'key' };
@@ -667,10 +679,10 @@ export function mount(el, ctx) {
             const t = xToT(geo, x);
             const v = yToV(geo, y, drag.chId);
             writeTrack(drag.layerId, (trk) => {
-                const base = ensureChannel(trk, drag.chId);
-                return isChannelField(drag.chId)
-                    ? dragChannelHandleTo(base, drag.chId, drag.index, drag.kind, drag.h, drag.span, t, v)
-                    : dragHandleTo(base, drag.index, drag.kind, drag.h, drag.span, t, v);
+                // 手柄同理：共用键的手柄改的是共用键自己的缓动，不该把字段提升成独立轨道
+                return writeModeOf(trk, drag.chId) === 'channel'
+                    ? dragChannelHandleTo(trk, drag.chId, drag.index, drag.kind, drag.h, drag.span, t, v)
+                    : dragHandleTo(trk, drag.index, drag.kind, drag.h, drag.span, t, v);
             });
         }
         paint();
@@ -742,11 +754,12 @@ export function mount(el, ctx) {
         if (hit) return;
         const { doc, layer, track } = keysNow();
         if (!doc || !layer) return;
-        // 双击落点同样吸到整帧：曲线里新建的关键帧就是时间轴里的那一帧
-        const t = snapFrame(doc, xToT(geo, x));
-        if (isChannelField(focus)) {
+        // 双击落点同样过磁铁：曲线里新建的关键帧就是时间轴里的那一帧
+        const t = snapTime(xToT(geo, x), ev);
+        // 没独立就用共用关键帧加点（＝时间轴双击泳道做的同一件事）；已独立才写通道轨
+        if (writeModeOf(track, focus) === 'channel') {
             // 省略 value = 取该时刻当前求值，所以加点不会让曲线跳一下
-            writeTrack(layer.id, (old) => setChannelKey(ensureChannel(old, focus), focus, t, undefined, 'bezier'));
+            writeTrack(layer.id, (old) => setChannelKey(old, focus, t, undefined, 'bezier'));
         } else {
             writeTrack(layer.id, (old) => addKey(old, t, stateAt(track, t), 'bezier'));
         }
@@ -785,8 +798,8 @@ export function mount(el, ctx) {
                 if (keys[hit.index] && keys[hit.index].ease === ease) b.classList.add('is-on');
                 b.addEventListener('click', () => {
                     const chId = hit.chId;
-                    writeTrack(layer.id, (trk) => (isChannelField(chId)
-                        ? setChannelKeyEase(ensureChannel(trk, chId), chId, hit.index, ease)
+                    writeTrack(layer.id, (trk) => (writeModeOf(trk, chId) === 'channel'
+                        ? setChannelKeyEase(trk, chId, hit.index, ease)
                         : setKeyEase(trk, hit.index, ease)));
                     notify('缓动改为' + EASE_LABEL[ease]);
                     closeMenu();
@@ -814,14 +827,15 @@ export function mount(el, ctx) {
         menu = m;
     });
 
-    /** 批量删点：标量通道走它自己的轨道，warp 顶点只能删共用关键帧。 */
+    /** 批量删点：已有独立轨道就走它自己的键，否则删的是共用关键帧（＝时间轴上那颗菱形）。 */
     function removeKeysOn(layerId, chId, idxs) {
         const list = idxs.slice().sort((a, b) => b - a);
         if (!list.length) return;
         writeTrack(layerId, (trk) => {
-            if (!isChannelField(chId)) return list.reduce((acc, i) => removeKey(acc, i), trk);
-            const base = ensureChannel(trk, chId);
-            return list.reduce((acc, i) => removeChannelKey(acc, chId, i), base);
+            if (writeModeOf(trk, chId) === 'channel') {
+                return list.reduce((acc, i) => removeChannelKey(acc, chId, i), trk);
+            }
+            return list.reduce((acc, i) => removeKey(acc, i), trk);
         });
         setSel(null);
         notify('已删除 ' + list.length + ' 个关键帧');

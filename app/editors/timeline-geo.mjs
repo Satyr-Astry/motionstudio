@@ -110,6 +110,31 @@ export function snapGrid(t, grid = SNAP_GRID) {
     return Math.round(v / g) * g;
 }
 
+/**
+ * 磁铁档位：`off` / `frame` / `grid`。
+ *
+ * **时间轴与曲线共用这一份**。以前曲线自己写了一套「无条件吸帧、Shift 吸画格」，
+ * 于是同一个关键帧在两个面板里拖到同一个像素位置、落到的时刻却不一样 —— 这就是
+ * 「时间轴和曲线不同步」里最容易被当成数据 bug 的那种不一致。
+ *
+ * @param {{shiftKey?: boolean}} [e] 事件（Shift 反转磁铁）
+ * @param {boolean} snapOn 磁铁是否开着（时间轴那个按钮，存 `ms.timeline.snap`）
+ */
+export function magnetOf(e, snapOn) {
+    const shift = !!(e && e.shiftKey);
+    return shift ? (snapOn ? 'off' : 'grid') : (snapOn ? 'frame' : 'off');
+}
+
+/** 把一次拖动算出来的时刻过一遍磁铁（时间轴与曲线共用同一套判据）。 */
+export function snapForDrag(doc, t, e, snapOn) {
+    const m = magnetOf(e, snapOn);
+    const v = Number(t);
+    const base = Number.isFinite(v) && v > 0 ? v : 0;
+    if (m === 'frame') return snapFrame(doc, base);
+    if (m === 'grid') return snapGrid(base, SNAP_GRID);
+    return base;
+}
+
 /** 吸附到最近整帧（按文档 fps）。fps 不可用时原样返回。 */
 export function snapFrame(doc, t) {
     const v = Number(t);

@@ -38,29 +38,29 @@ test('曲线落点：吸附结果不含浮点毛刺（写回文档的 t 要能�
     assert.equal(snapFrame(d, t), t, '吸附必须幂等');
 });
 
-test('curve.mjs 接线：双击加点用 snapFrame(doc, xToT(...))', () => {
-    assert.match(src, /const t = snapFrame\(doc, xToT\(geo, x\)\);/, '双击落点必须先吸帧再写回');
+// 判定变更记录（0.1.2-alpha.9）：曲线曾经自己写一套「无条件吸帧、Shift 吸画格」，
+// 与时间轴的「磁铁开=吸帧 / Shift=关磁铁（可落两帧之间）/ 磁铁关=自由 / Shift=吸 0.1s 网格」不一致 ——
+// 同一个关键帧在两个面板拖到同一像素位置会落到不同时刻。现在两边共用
+// `snapForDrag(doc, t, e, snapOn)`（`app/editors/timeline-geo.mjs`），这三条接线断言随之改口径。
+test('curve.mjs 接线：双击加点也过 snapTime（与时间轴双击泳道同一套吸附）', () => {
+    assert.match(src, /const t = snapTime\(xToT\(geo, x\), ev\);/, '双击落点必须过 snapTime');
     // 写回用的是吸附后的 t，不是原始的 xToT 结果
-    assert.match(src, /setChannelKey\(ensureChannel\(old, focus\), focus, t, undefined, 'bezier'\)/);
+    assert.match(src, /setChannelKey\(old, focus, t, undefined, 'bezier'\)/);
     assert.match(src, /addKey\(old, t, stateAt\(track, t\), 'bezier'\)/);
 });
 
-test('curve.mjs 接线：本地 snapTime 先吸帧、再谈 Shift 的画格吸附', () => {
+test('curve.mjs 接线：本地 snapTime 委托给 timeline-geo 的 snapForDrag', () => {
     const body = src.slice(src.indexOf('function snapTime(t, ev)'), src.indexOf('/* ── 指针交互 ──'));
-    assert.ok(body.includes('snapFrame(doc, t)'), 'snapTime 里必须先吸帧');
-    const iFrame = body.indexOf('snapFrame(doc, t)');
-    const iGeo = body.indexOf('geoSnapTime(');
-    assert.ok(iFrame > 0 && iGeo > iFrame, '顺序必须是「先帧、后画格」');
-    // 关键语义：不按 Shift 也要吸帧（改前是无 Shift 直接原样返回，拖动就落在两帧之间）
-    assert.match(body, /if \(!ev\.shiftKey\) return framed;/, '不按 Shift 也必须返回吸帧结果');
-    assert.ok(!/if \(!doc \|\| !ev\.shiftKey\) return t;/.test(body), '旧的「无 Shift 原样返回」必须消失');
+    assert.match(body, /snapForDrag\(doc, t, ev, snapOnNow\(\)\)/, '必须走共用的吸附判据');
+    assert.ok(!/geoSnapTime/.test(src), '旧的「Shift 吸画格」口径要彻底消失，别再留第二条吸附语义');
 });
 
 test('curve.mjs 接线：拖拽关键帧仍走 snapTime（不能绕过吸附直接写 xToT）', () => {
     assert.match(src, /const t = snapTime\(xToT\(geo, x\), ev\);/, '拖拽分支必须过 snapTime');
 });
 
-test('curve.mjs 接线：snapFrame 从 timeline-geo 导入且不重复实现', () => {
-    assert.match(src, /import \{ snapFrame \} from '\.\/timeline-geo\.mjs';/);
+test('curve.mjs 接线：吸附与磁铁都从 timeline-geo 导入，不重复实现', () => {
+    assert.match(src, /import \{ snapForDrag \} from '\.\/timeline-geo\.mjs';/);
     assert.ok(!/function snapFrame/.test(src), '不许在 curve.mjs 里另写一份吸帧实现');
+    assert.ok(!/function magnetOf/.test(src), '磁铁判据也只许有一份');
 });

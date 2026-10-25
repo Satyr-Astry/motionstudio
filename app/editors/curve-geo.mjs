@@ -9,6 +9,7 @@
 // 统一收成 `channelKeysOf()` 一种形状 —— 绘制、命中、拖动就不用各记一套索引规则。
 
 import { normalizeLattice, createLattice } from '../core/lattice.mjs';
+import { T_EPS } from './timeline-geo.mjs';
 import { docDuration } from '../core/cel.mjs';
 import {
     moveKey, setKeyState, setKeyEase, autoTangents as coreAutoTangents,
@@ -155,6 +156,32 @@ export function channelKeysOf(track, chId) {
 export function ensureChannel(track, chId) {
     if (!isChannelField(chId)) return track;
     return channelOf(track, chId) ? track : promoteChannel(track, chId);
+}
+
+/**
+ * 这一刻该怎么写：`'channel'` = 该字段已有独立轨道，`'shared'` = 还没独立。
+ *
+ * 曲线的**所有编辑**都必须先问这一句。以前拖动/改缓动/删除都无条件 `ensureChannel`，
+ * 结果只是「拖了一个点」就把该字段悄悄提升成独立轨道 —— 共用关键帧还在原位，两个视图
+ * 从此各拿一套时刻，用户看到的就是「时间轴和曲线不同步」。提升必须是显式动作
+ * （双击加点、右键「提升为通道轨」），拖动不该顺手改数据模型。
+ */
+export function writeModeOf(track, chId) {
+    if (!isChannelField(chId)) return 'shared';
+    return channelOf(track, chId) ? 'channel' : 'shared';
+}
+
+/**
+ * 目标时刻是否已经被**别的**关键帧占着（`skipIndex` 是被拖的那一颗）。
+ *
+ * 时间轴那边遇到同刻冲突是「显式跳过并回报数量」；曲线以前没有这道闸，`moveKey` 会把
+ * 两颗键静默合并成一颗 —— 用户只是把点挪了一下，另一个点就没了，画面上还看不出来。
+ */
+export function occupiedAt(track, chId, t, skipIndex = -1) {
+    const keys = channelKeysOf(track, chId);
+    const v = Number(t);
+    if (!Number.isFinite(v)) return false;
+    return keys.some((k, i) => i !== skipIndex && Math.abs(Number(k.t) - v) <= T_EPS);
 }
 
 export function clamp(n, lo, hi) {
