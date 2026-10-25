@@ -4,6 +4,7 @@
 import { imageAt } from './doc-model.mjs';
 import { stateAt, matrixOf, warpQuad } from './transform.mjs';
 import { normalizeLattice, createLattice, latticeOffset, latticeInverse, latticeInverseRaw } from './lattice.mjs';
+import { alphaMaskOf } from './hit-mask.mjs';
 
 /** 八个缩放手柄，顺时针从左上开始 */
 export const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -301,6 +302,11 @@ function clampIdx(v, lo, hi) {
  * 历史行为提醒：本函数此前用 worldToLocal + `uv ∈ [0,1]` 判定，而 worldToLocal 会把
  * 越界点夹回 [0,1]、且自身带 2px 的包围盒容差 —— 结果是「上/左边界外 1px 能选中，
  * 右/下边界本身却选不中」。改为 localUv（不夹取）+ 显式容差后四方向一致。
+ *
+ * alpha 取自 `alphaMaskOf`（`hit-mask.mjs`）：canvas 直接读，`ImageBitmap` 这类
+ * 没有 getContext 的源会被重画进临时画布再读 —— 此前直接调 pixelAlpha，导入的
+ * PNG/PSD 图层取像素抛错被吞成 0，导致它们在画布上永远点不中。掩膜读不出来时
+ * **退回矩形命中**（见下方注释），这是有意的降级。
  */
 export function hitTest(doc, time, x, y, opts) {
     const o = opts || {};
@@ -330,7 +336,25 @@ export function hitTest(doc, time, x, y, opts) {
         // 于是「贴着右边/下边的最后一列像素」永远点不中，那是个历史缺陷。
         const lx = clampIdx(Math.floor(loc.x), 0, w - 1);
         const ly = clampIdx(Math.floor(loc.y), 0, h - 1);
-        const alpha = pixelAlpha(imageAt(el, time), lx, ly);
+        const image = imageAt(el, time);
+        // 没有图像（空画格 / 纯矢量对象）：不命中。这一条不能并进下面的降级，
+        // 否则一个还没画任何东西的空对象会整块矩形都能点中。
+        if (!image) continue;
+        // 图像尺寸为 0 同样视为「没有内容」：elementSize 此时会回退到 doc 尺寸，
+        // 若不挡住，下面读不到像素的降级会让这个空对象占住整个画布。
+        if (!(Number(image.width) > 0) || !(Number(image.height) > 0)) continue;
+        const mask = alphaMaskOf(image);
+        if (!mask) {
+            // 有图像但掩膜读不出来（没有 2D 上下文、drawImage/getImageData 抛错）：
+            // 退回矩形命中。这是有意的降级 —— 点不中对象在用户眼里是功能破损，
+            // 而多选中一次透明区只需要再点一下空白；反过来则无路可走。
+            return { id: el.id, local: { x: lx, y: ly }, alpha: 255 };
+        }
+        // 掩膜尺寸未必等于对象基准尺寸（图像换过、对象被拉伸过），按掩膜夹取索引，
+        // 否则 lx 超过掩膜宽度会读到下一行的像素。
+        const mx = clampIdx(lx, 0, mask.w - 1);
+        const my = clampIdx(ly, 0, mask.h - 1);
+        const alpha = mask.mask[my * mask.w + mx];
         if (alpha > threshold) return { id: el.id, local: { x: lx, y: ly }, alpha };
     }
     return null;
