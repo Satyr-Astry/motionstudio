@@ -1,0 +1,25 @@
+/* 导出对话框（第 32 批）：只放进度条，其余样式由 export-dialog.mjs 内联，避免与面板样式互撞。
+ *
+ * `[hidden]` 那条兜底是必须的：面板里给元素写过 display 的地方会盖掉浏览器默认的
+ * `[hidden] { display: none }`（W18 在顶栏 `.top-project-dot` 上踩过一次同款）。 */
+.exp-progress {
+    position: relative;
+    height: 6px;
+    margin-top: 8px;
+    background: #14171c;
+    border: 1px solid #3a3f4b;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.exp-progress[hidden] {
+    display: none;
+}
+
+.exp-progress-fill {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: #3a6df0;
+    transition: width 90ms linear;
+}

@@ -1,3 +1,30 @@
+## v0.5.0-alpha.13 — 2026-10-26 · 网格软拖 · 选择模型 · 拖拽反馈 · 导出栈
+
+按 `docs/开发计划-2026-10-26.md` 一批次一批次落地，本版含第 26 / 28 / 29 / 32 / 33 五批。
+
+### 画板：网格内部拖拽（第 26 批）
+- 拖图像内部但没点中格点 → **影响附近格点**（不再是移动对象）。算法移植 Klecks `ffd.ts:317 warpLatticeViaPoint`：Bernstein 权重 × 距离斜坡 `1 - d/(1/3)`、外侧再乘 `edgeFalloff=0.5`、按 `Σw²·strength` 分配位移，最后乘 `1/J` 一次归一即精确落地（误差 ≤7.1e-15，不再需要迭代）。
+- 半径按**格数**取 `max(1/3, 1/cols)`：纯 Klecks 的 1/3 补丁比例在 1×1 网格中心拖拽时一个顶点都碰不到（实测 `sumWeightsSq=0`）。
+- 撤销：逐帧 `{silent:true}` + 松手 `pushCommand` 一条 —— 显式 `coalesce` 的 700ms 窗口会把慢拖断成多条（实测），故不依赖时间窗；`Esc` 静默回落不留重做栈痕迹。
+- 拖动中画虚线影响圈（夹在对象 `[0,1]²` 内）。新增 `app/core/warp-drag.mjs`、`tests/warp-drag.test.mjs`（16 例）、`docs/网格拖拽-2026-10.md`。
+
+### 编排：选择模型（第 28 批）
+- 关键帧：单击只选它、`Shift`/`Ctrl` 点累加（再点移出）、`Shift+Alt+点` 连选、框选追加、`A` 全选 / `Alt+A` 取消 / `Ctrl+I` 反选 / `B` 框选模式 / `Esc` 退出。时间轴与曲线共用 `app/core/selection.mjs` 的 `clickIntent`。
+- 对象：叠放与父子面板支持多选（同套修饰键）、批量删除/显隐、整块拖拽**一次 `setDoc` 落全部**且保持相对次序；父子关系只对单选生效（多选拖动给提示）。
+- 修掉两个自造 bug：编辑时吃掉 `else if (act === 'del')`（点删除无反应、点合并反删对象）、批量删除后选择集合未清。曲线自己的 `Ctrl+A/I` 曾重复报数（显示 4 个实际 0 个），改为只改集合、读数由时间轴独占。
+
+### 编排：拖拽反馈（第 29 批）
+- 拖动关键帧显示浮层（`t = 0.167 s · 第 2 帧 · 吸附:帧`），冲突时追加红字「该时刻已有关键帧」，被占用的那颗标 `.is-blocked`。浮层挂 `body`、只写 `transform`、rAF 合并、夹在视口内（三尺寸拖到右下角极限仍完整可见，残留 0）。
+- `Esc` 取消拖动（只在拖动中接管 + `preventDefault`），不碰 `moveKeys`。曲线 `.curve-tip` 与时间轴统一到同一实现；删掉无消费方的 `dataset.preview` 死属性。
+
+### 导出栈（第 32 / 33 批）
+- 三条导出命令全部走对话框：范围（左闭右开 `ceil(span*fps - 1e-9)`）、缩放、格式（png/webp/jpeg + 质量）、图集上限、trim、引擎格式；进度条 + 可取消；键盘契约（`Esc` 关、`Tab` 全走、`Enter` 导出、初焦在导出）。
+- PNG 序列改**分片写**（每片 16 帧、首片建目录 + `uniqueDir` 去重、片间让出宏任务），不再攒 base64 一次过 IPC。
+- 精灵图新增：超上限**自动分张**（单帧本身超限则明确报错不产图）、内容裁剪（格尺寸跟着收到内容盒最大宽高：`2700×640/13815B` → **`420×84/868B`**）、Phaser 3 JSON Hash、单帧导出、复制到剪贴板（三条降级文案各自可辨，且不再被后续 flash 覆盖）。
+- 新增 `app/editors/export-dialog.mjs`、`app/core/export-options.mjs`、`app/styles/export.css`、`tests/export-options.test.mjs`、`tests/sheet-split.test.mjs`、`tests/sheet-trim.test.mjs`、`docs/导出栈-2026-10.md`。
+
+### 验证
+`npm test` **1117 tests / 1115 pass / 2 skipped / 0 fail**；`npm run check` 87 模块、残留 0、坏 import 0、`node --check` 87/87；三尺寸（1680×1000 / 1280×800 / 1000×620）审计 `small/unlabeled/symbolOnly/truncation/errors` 全 0。
 ## v0.4.0-alpha.12 — 2026-10-26 · 叠放与父子彻底分离 + Blender 式列表拖拽
 
 这一版把「层级」和「叠放」从**数据**到**手势**都拆干净：改谁就只改谁，另一个数据一个字节都不动。

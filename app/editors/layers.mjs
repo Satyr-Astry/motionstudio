@@ -7,8 +7,9 @@ import { objectSize } from '../core/doc-model.mjs';
 import { icon } from '../core/icons.mjs';
 import { duplicateLayer, mergeDown } from '../paint/ops.mjs';
 import { reorderIndex } from '../core/layer-order.mjs';
-import { drawOrderOf } from '../core/draw-order.mjs';
+import { drawOrderOf, moveInOrder } from '../core/draw-order.mjs';
 import { textureCount } from '../core/textures.mjs';
+import { clickIntent, rangeBetween } from '../core/selection.mjs';
 
 // 对象种类文案（CONTRACT-v2 §1：kind = 'paint' 手绘 / 'image' 导入图片）
 const KIND_TEXT = { paint: '手绘', image: '图片' };
@@ -131,6 +132,26 @@ export function dropLineTop(rowTop, rowBottom, listTop, scrollTop, where) {
     const edge = where === 'before' ? rowTop : rowBottom;
     const y = edge - listTop + (Number(scrollTop) || 0) - 1;
     return Number.isFinite(y) ? Math.max(0, Math.round(y)) : 0;
+}
+
+/**
+ * 整块搬的调用计划（纯函数，node 可直测）。
+ *
+ * 多选拖拽时不能只搬被拖的那一行：选中的几行要**保持相对次序**一起落到目标位。
+ * 做法是逐个调 `ctx.moveDrawOrder(id, to + i)` —— 每次搬完前面那个已就位，
+ * 后面的自然顺延一格，全程不碰未选中的行（不为了让块连续去挪别人）。
+ *
+ * @param {string[]} order 当前 drawOrder（index 0 = 最上层）
+ * @param {string[]} moving 选中的 id（顺序无关，内部按 order 重排）
+ * @param {number} to 块首的落点下标
+ * @returns {{id:string,to:number}[]} 依次要发出的调用；只有 1 个 id 时返回空数组（走单对象路径）
+ */
+export function blockMovePlan(order, moving, to) {
+    const ids = (Array.isArray(order) ? order : []).map(String);
+    const chosen = new Set((Array.isArray(moving) ? moving : []).map(String));
+    const picked = ids.filter((id) => chosen.has(id));
+    if (picked.length <= 1 || !Number.isInteger(to) || to < 0) return [];
+    return picked.map((id, i) => ({ id, to: Math.min(ids.length - 1, to + i) }));
 }
 
 export function mount(el, ctx) {
@@ -324,6 +345,20 @@ export function mount(el, ctx) {
         const to = reorderIndex(order, fromId, opts.targetId, opts.where);
         if (to < 0) {
             notify('找不到落点');
+            return;
+        }
+        // 多选整块搬：目标下标由 blockMovePlan 逐个算，但**整批只写一次 doc**。
+        // 不能循环调 ctx.moveDrawOrder —— 它每次都 setDoc，会留下 N 条撤销，用户在历史里
+        // 得按 N 下才能退回去。这里一次 setDoc、一条「调整叠放顺序」。
+        const sels = selIds();
+        const plan = blockMovePlan(order, sels.includes(fromId) ? sels : [fromId], to);
+        if (plan.length) {
+            ctx.setDoc((d) => {
+                let next = drawOrderOf(d);
+                for (const step of plan) next = moveInOrder(next, step.id, step.to);
+                return Object.assign({}, d, { drawOrder: next });
+            }, { label: '调整叠放顺序' });
+            paint();
             return;
         }
         if (ctx.moveDrawOrder(fromId, to) === false) notify('调整叠放失败');
@@ -650,7 +685,8 @@ const TIME_MODE_TEXT = [
             const cel = celAt(layer, t);
 
             rec.row.classList.toggle('is-active', layer.id === active);
-            rec.row.classList.toggle('is-sel', layer.id === sel);
+            // .is-sel 覆盖单选的 sel 与多选集合两者（多选集合在内存层，由 ctx 提供）
+            rec.row.classList.toggle('is-sel', layer.id === sel || selIds().includes(layer.id));
             rec.row.classList.toggle('is-hold', !!(cel && cel.hold && !cel.image));
             rec.row.classList.toggle('is-linked', !!(cel && cel.group));
             rec.vis.classList.toggle('is-off', !layer.visible);
@@ -815,11 +851,23 @@ const TIME_MODE_TEXT = [
             });
             if (error) notify(error);
             else if (lower) ctx.setActiveLayer(lower.id);
+        } else if (act === 'del') {
             if (!active) return;
-            // v8：不再有「至少保留一个对象」的死胡同 —— 删光就得到一个空文档
+            // 多选时一次删掉整批（仍是一条撤销）。有子对象的父对象走 removeLayer 既有的
+            // 「孩子升根」规则，不会留下悬空 parentId。
+            const sels = selIds();
+            const targets = sels.length > 1 && sels.includes(active) ? sels.slice() : [active];
             const i = objectsOf(doc).findIndex((l) => l.id === active);
-            const name = (objectsOf(doc)[i] || {}).name || '对象';
-            ctx.setDoc((d) => removeLayer(d, active), { label: '删除对象' });
+            const single = (objectsOf(doc)[i] || {}).name || '对象';
+            // v8：不再有「至少保留一个对象」的死胡同 —— 删光就得到一个空文档
+            ctx.setDoc((d) => {
+                let out = d;
+                for (const x of targets) out = removeLayer(out, x);
+                return out;
+            }, { label: targets.length > 1 ? '删除多个对象' : '删除对象' });
+            if (typeof ctx.setLayerSelection === 'function') ctx.setLayerSelection([]);
+            // 单选标记（画布叠加层读的 ctx.selection）也要清，否则删完还会有一行亮着
+            if (typeof ctx.setSelection === 'function') ctx.setSelection(null);
             const rest = ctx.doc();
             if (rest && objectsOf(rest).length) {
                 const next = objectsOf(rest)[Math.min(Math.max(i, 0), objectsOf(rest).length - 1)];
@@ -827,7 +875,7 @@ const TIME_MODE_TEXT = [
             } else if (typeof ctx.setActiveLayer === 'function') {
                 ctx.setActiveLayer(null);
             }
-            notify('已删除对象「' + name + '」');
+            notify(targets.length > 1 ? '已删除 ' + targets.length + ' 个对象' : '已删除对象「' + single + '」');
         }
     }
 
@@ -841,6 +889,16 @@ const TIME_MODE_TEXT = [
     });
 
     // v10：纹理库的动作与行交互整块随库一起搬到属性面板「纹理」组（prop-textures.mjs）。
+    /** 当前多选集合（内存层，与层级面板共用）。没有该接口时退化成空数组。 */
+    function selIds() {
+        if (typeof ctx.selectedLayers !== 'function') return [];
+        const v = ctx.selectedLayers();
+        return Array.isArray(v) ? v.map(String) : [];
+    }
+
+    /** 连选锚点：最后一次「单击」落下的那行；Shift+Alt 范围选择从这里量起。 */
+    let anchorId = null;
+
     // ── 行内交互：选对象 / 切可见性 / 双击改名
     list.addEventListener('click', (e) => {
         const row = e.target.closest ? e.target.closest('.lyr-row') : null;
@@ -849,12 +907,33 @@ const TIME_MODE_TEXT = [
         // v10：折叠箭头已随扁平化下线（层级在 tree.mjs），这里不再处理 .lyr-caret。
         const vis = e.target.closest ? e.target.closest('.lyr-vis') : null;
         if (vis) {
-            ctx.setDoc((d) => patchLayer(d, id, { visible: !isVisible(d, id) }));
+            // 多选时就地批量显隐（反色到一个共同目标：只要有一行是隐藏的就全显示）
+            const sels = selIds();
+            const ids = sels.length > 1 && sels.includes(id) ? sels : [id];
+            const doc0 = ctx.doc();
+            const targetVisible = ids.some((x) => !isVisible(doc0, x));
+            ctx.setDoc((d) => {
+                let out = d;
+                for (const x of ids) out = patchLayer(out, x, { visible: targetVisible });
+                return out;
+            });
             paint();
             return;
         }
         if (id) {
-            // 当前操作对象 + 选中态同时同步（画布叠加层读的是 ctx.selection）
+            const all = objectsOf(ctx.doc() || {});
+            const order = all.map((l) => l.id);
+            const sels = selIds();
+            const intent = clickIntent(e, sels.includes(id));
+            if (intent === 'ignore') return;
+            let next = sels;
+            if (intent === 'single' || intent === 'promote') next = [id];
+            else if (intent === 'add') next = sels.concat([id]);
+            else if (intent === 'remove') next = sels.filter((x) => x !== id);
+            else if (intent === 'range') next = rangeBetween(order, anchorId || id, id);
+            if (intent === 'single' || intent === 'promote' || intent === 'range') anchorId = id;
+            if (typeof ctx.setLayerSelection === 'function') ctx.setLayerSelection(next);
+            // 主键 = 最后点的那颗；写在 setLayerSelection 之后，免得被它回退到集合首位
             ctx.setActiveLayer(id);
             if (typeof ctx.setSelection === 'function') ctx.setSelection({ id });
         }
@@ -942,6 +1021,10 @@ const TIME_MODE_TEXT = [
 
     const off = typeof ctx.subscribeDoc === 'function' ? ctx.subscribeDoc(() => paint()) : () => {};
 
+    // 多选集合是内存层（不进文档、不进撤销）：集合一变，两个面板各自重绘
+    const onSelChange = () => paint();
+    if (typeof document !== 'undefined') document.addEventListener('ms:layer-selection', onSelChange);
+
     // 切帧 / 切对象时把当前对象行滚进可视区；重绘交给 refresh，避免重复绘制缩略图
     // 把一个行滚进可视区（对象行与纹理行共用）。
     // 坐标必须按滚动盒自己的内容系算：offsetTop 相对的是最近的定位祖先（这里是 .area-body），
@@ -975,6 +1058,7 @@ const TIME_MODE_TEXT = [
         focusFrame,
         destroy() {
             off();
+            if (typeof document !== 'undefined') document.removeEventListener('ms:layer-selection', onSelChange);
             rows.clear();
             root.remove();
         },

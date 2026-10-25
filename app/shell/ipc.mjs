@@ -47,9 +47,19 @@ export function available() {
  * @param {string[]} frames dataURL 数组
  * @returns {Promise<object>|object|null}
  */
-export function exportFrames(name, frames) {
-    if (!Array.isArray(frames) || !frames.length) return null;
-    return call('exportFrames', [String(name == null ? 'motionstudio' : name), frames]);
+/**
+ * 导出逐帧 PNG。
+ * @param {string} name 工程名（无扩展名）
+ * @param {string[]} frames dataURL 数组（分片时是该片的帧）
+ * @param {{dir?:string, startIndex?:number, total?:number}} [opts] 第 32 批：分片与自定义目录
+ * @returns {Promise<object>|object|null}
+ */
+export function exportFrames(name, frames, opts) {
+    if (!Array.isArray(frames)) return null;
+    const o = opts && typeof opts === 'object' ? opts : {};
+    const resuming = Number.isFinite(o.startIndex) && o.startIndex > 0;
+    if (!frames.length && !resuming) return null;
+    return call('exportFrames', [String(name == null ? 'motionstudio' : name), frames, o]);
 }
 
 /**
@@ -59,9 +69,10 @@ export function exportFrames(name, frames) {
  * @param {string} name 工程名（无扩展名）
  * @param {string} png 精灵图 dataURL（image/png）
  * @param {string|object} json 帧表（对象会被 stringify）
+ * @param {{dir?:string}} [opts] 第 32 批：自定义根目录
  * @returns {Promise<object>|object|null} `{ok,dir,png,json}` / null
  */
-export function exportSheet(name, png, json) {
+export function exportSheet(name, png, json, opts) {
     if (typeof png !== 'string' || !png) return null;
     let text = json;
     if (text && typeof text === 'object') {
@@ -75,6 +86,7 @@ export function exportSheet(name, png, json) {
         String(name == null ? 'motionstudio' : name),
         png,
         typeof text === 'string' ? text : '',
+        opts && typeof opts === 'object' ? opts : {},
     ]);
 }
 

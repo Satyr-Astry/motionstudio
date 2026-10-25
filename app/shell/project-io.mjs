@@ -32,9 +32,15 @@ import {
     draftName,
 } from '../core/project-guard.mjs';
 import * as store from './project-store.mjs';
-import { buildSpritesheet } from './spritesheet.mjs';
+import { buildSpritesheet, buildSpritesheets, phaserJSON, sheetToDataURLAsync } from './spritesheet.mjs';
 import { icon } from '../core/icons.mjs';
 import { pickVideoMime, videoBitrate, videoCanvasSize, videoFps, videoFrameCount, videoSeconds } from './video-plan.mjs';
+import {
+    EXPORT_CHUNK,
+    chunkPlan,
+    normalizeExportOptions,
+    sampleTimesFor,
+} from '../core/export-options.mjs';
 import {
     DEFAULT_W,
     DEFAULT_H,
@@ -83,7 +89,87 @@ let savedAtMs = 0;
  */
 let askDepth = 0;
 
-function exportFrames(name) {
+/**
+ * 逐帧 PNG 导出。
+ *
+ * 双语义（第 32 批）：
+ * - `exportFrames('工程名')` —— 旧调用，逐字走老行为：按文档尺寸/帧率导整段、
+ *   不弹对话框、落系统图片目录。`app/shell/app.mjs` 里的旧调用点还在用它。
+ * - `exportFrames()` / `exportFrames(opts)` —— 新流程：先在 `opts` 上归一化，
+ *   支持缩放/帧率/时间范围/背景/自定义目录/进度/取消，按 16 帧分片落盘。
+ */
+function exportFrames(arg) {
+    if (typeof arg === 'string') return exportFramesLegacy(arg);
+    const raw = arg && typeof arg === 'object' ? arg : {};
+    // `__direct` 是内部标记：对话框与测试直接调分片导出，不再套一层浮层
+    if (raw.__direct) return exportFramesChunked(raw);
+    return exportWithDialog('frames', raw);
+}
+
+/**
+ * 打开导出对话框并跑其中一条通道。
+ *
+ * 用动态 `import` 取 `editors/export-dialog.mjs`：那个文件会 import 本模块用不到的
+ * DOM 工具，静态引入会让「浏览器直开 / node 测试」都多背一份依赖链，
+ * 而对话框只有用户点导出时才需要。
+ *
+ * @param {'frames'|'sheet'|'video'} kind 预选通道
+ * @param {object} [preset] 预填选项
+ * @returns {Promise<object|null>}
+ */
+async function exportWithDialog(kind, preset) {
+    if (typeof document === 'undefined') return null;
+    let mod;
+    try {
+        mod = await import('../editors/export-dialog.mjs');
+    } catch (err) {
+        console.error('[shell] 导出对话框加载失败：', err);
+        flash('导出对话框加载失败');
+        return null;
+    }
+    const opened = await mod.openExportDialog({
+        doc: () => state.doc,
+        preset: preset || {},
+        storage: typeof localStorage !== 'undefined' ? localStorage : null,
+        run: async (which, opts, ui) => {
+            if (which === 'frames') {
+                return exportFramesChunked({
+                    ...opts,
+                    __direct: true,
+                    onProgress: (p) => ui.progress(p.written, p.total),
+                    shouldCancel: ui.canceled,
+                });
+            }
+            if (which === 'sheet') {
+                if (ui && typeof ui.progress === 'function') ui.progress(0, 1);
+                const r = await exportSpritesheet({ dir: opts.dir, scale: opts.scale, background: opts.background, bgColor: opts.bgColor });
+                if (ui && typeof ui.progress === 'function') ui.progress(1, 1);
+                return r ? { ok: true, res: r } : { ok: false, error: '导出精灵图失败' };
+            }
+            const r = await recordVideo({
+                fps: opts.fps || 0,
+                seconds: Math.max(0, opts.to - opts.from),
+                from: opts.from,
+                onProgress: (done, total) => {
+                    if (ui && typeof ui.progress === 'function') ui.progress(done, total);
+                },
+            });
+            if (!r || r.ok === false) return { ok: false, error: (r && r.error) || '录制失败' };
+            return { ok: true, message: '已录制 ' + (r.frames || 0) + ' 帧（WebM 在内存里，另存由上层决定）', res: r };
+        },
+    });
+    return opened;
+}
+
+/**
+ * 旧行为：整段一次传给主进程，不弹框、不分片、不认选项。
+ *
+ * **只为兼容旧调用方保留** —— 菜单导出（`onFileAct('export')`）已经翻成
+ * `exportFrames()` 走对话框，本仓内没有活跃调用点；外部脚本若还在用
+ * `exportFrames('名字')` 这种字符串调用，仍然逐字走这条老路。
+ * 新代码请用 `exportFrames()` / `exportFrames({...})`。
+ */
+function exportFramesLegacy(name) {
     const doc = state.doc;
     if (!doc || typeof document === 'undefined') return null;
     const cv = document.createElement('canvas');
@@ -125,31 +211,295 @@ function exportFrames(name) {
     return res;
 }
 
-/** 导出精灵图（PNG + 每帧坐标 JSON），落盘由主进程 ms:export-sheet 负责。 */
+/**
+ * 新流程：按导出选项逐帧合成，16 帧一片交给主进程落盘。
+ *
+ * 两个约束来自真机实测：
+ * - **每片之间 `await` 一次宏任务**，否则整段导出在一个任务里跑完，进度条一帧都不动；
+ * - **取消 = 少发后几片**，已写出的片留在磁盘上（部分结果比「什么都没有」有用）。
+ */
+async function exportFramesChunked(raw) {
+    const doc = state.doc;
+    if (!doc || typeof document === 'undefined') return null;
+    const opts = normalizeExportOptions(raw, doc);
+    if (!opts.count) {
+        flash('时间范围为空，没有可导出的帧');
+        updateChrome();
+        return null;
+    }
+    const cv = document.createElement('canvas');
+    cv.width = opts.width;
+    cv.height = opts.height;
+    const times = sampleTimesFor(opts);
+    const plans = chunkPlan(opts.count, EXPORT_CHUNK);
+    const solid = opts.background === 'solid';
+    let dir = '';
+    let written = 0;
+    for (let c = 0; c < plans.length; c++) {
+        if (typeof raw.shouldCancel === 'function' && raw.shouldCancel()) {
+            finishExport({ dir, written, total: opts.count, canceled: true });
+            return { ok: false, canceled: true, written, total: opts.count, dir };
+        }
+        const plan = plans[c];
+        const frames = [];
+        for (let i = 0; i < plan.count; i++) {
+            compositeFrame(cv, doc, times[plan.start + i], { clear: true });
+            if (solid) fillBehind(cv, opts.bgColor);
+            frames.push(cv.toDataURL('image/png'));
+        }
+        const res = await Promise.resolve(
+            ipc.exportFrames(projectLabel(), frames, { dir, startIndex: plan.start, total: opts.count })
+        );
+        if (!res) {
+            flash('导出接口不可用（非桌面环境）');
+            updateChrome();
+            return null;
+        }
+        if (res.ok === false) {
+            flash(res.error || '导出失败');
+            updateChrome();
+            return null;
+        }
+        if (res.dir) dir = res.dir;
+        written += Number(res.count) || 0;
+        if (typeof raw.onProgress === 'function') {
+            raw.onProgress({ written, total: opts.count, chunk: c + 1, chunks: plans.length });
+        }
+        // 让出一次宏任务：进度条与「取消」按钮要靠它才有机会响应
+        await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    finishExport({ dir, written, total: opts.count, canceled: false, openAfter: opts.openAfter });
+    return { ok: true, dir, written, total: opts.count };
+}
+
+/** 背景色：合成完成后在底下垫一层（`destination-over` 不会盖住已画的内容）。 */
+function fillBehind(cv, color) {
+    const g = cv.getContext('2d');
+    if (!g) return;
+    g.save();
+    g.globalCompositeOperation = 'destination-over';
+    g.fillStyle = color;
+    g.fillRect(0, 0, cv.width, cv.height);
+    g.restore();
+}
+
+function finishExport(res) {
+    if (res.canceled) {
+        flash('已取消导出（已写出 ' + res.written + ' 帧）');
+    } else {
+        flash('已导出 ' + res.written + ' 帧（共 ' + res.total + '）');
+        // 勾了「完成后打开所在文件夹」才开；浏览器里 ipc 没桥，openFolder 自己返回 null
+        if (res.openAfter && res.dir) ipc.openFolder(res.dir);
+    }
+    updateChrome();
+    if (CTX && typeof CTX.requestRender === 'function') CTX.requestRender();
+}
+
+/** 导出精灵图（图片 + 帧表），落盘由主进程 ms:export-sheet 负责。 */
 async function exportSpritesheet(opts) {
     const o = opts || {};
     if (!state.doc || typeof document === 'undefined') return null;
-    if (typeof buildSpritesheet !== 'function') {
+    if (typeof buildSpritesheets !== 'function') {
         flash('精灵图模块未加载');
         return null;
     }
-    const sheet = buildSpritesheet(state.doc, o);
-    if (!sheet || !sheet.canvas) {
-        flash('没有可导出的帧');
+
+    const n = normalizeExportOptions(o, state.doc);
+    const format = n.format;
+    const mime = format === 'webp' ? 'image/webp' : format === 'jpeg' ? 'image/jpeg' : 'image/png';
+    // JPEG 没有 alpha 通道：必须给一个具体底色，否则透明区会变黑，用户以为是渲染坏了
+    const jpegFill = n.bgColor || '#000000';
+    const bg = format === 'jpeg' ? jpegFill : n.background === 'color' ? n.bgColor : '';
+
+    const built = buildSpritesheets(state.doc, {
+        maxTextureSize: n.maxTextureSize,
+        trim: n.trim,
+        background: bg,
+        times: o.times,
+        step: o.step,
+        columns: o.columns,
+        gap: o.gap,
+    });
+    if (!built.ok) {
+        // 预检失败要把原因说清楚（比如「单帧 5000px 超过图集上限」），不能只说「失败」
+        flash(built.reason || '导出精灵图失败');
         return null;
     }
-    const png = sheet.canvas.toDataURL('image/png');
-    const res = await Promise.resolve(ipc.exportSheet(projectLabel(), png, sheet.json));
+    if (format === 'jpeg' && n.background !== 'color') {
+        flash('JPEG 不支持透明，已用 ' + jpegFill + ' 填底');
+    }
+
+    const images = [];
+    for (const one of built.sheets) {
+        const dataUrl = await sheetToDataURLAsync(one, mime);
+        if (!dataUrl) {
+            flash('精灵图编码失败（' + format + '）');
+            return null;
+        }
+        images.push({ file: one.file, png: dataUrl });
+    }
+
+    // 帧表：自家格式永远写；engine 选 phaser/both 时再写一份 Phaser JSON Hash
+    const jsons = [{ file: projectLabel() + '.json', text: JSON.stringify(built.json, null, 2) }];
+    if (n.engine === 'phaser' || n.engine === 'both') {
+        // 分张时每张一份 Phaser 帧表（每份只描述自己那张的帧）
+        const per = built.sheets.map((one) => phaserJSON(Object.assign({}, one, {
+            sheets: [{ file: one.file, width: one.width, height: one.height }],
+        }), { image: one.file }));
+        if (per.length === 1) {
+            jsons.push({ file: projectLabel() + '.phaser.json', text: JSON.stringify(per[0], null, 2) });
+        } else {
+            per.forEach((json, i) => {
+                jsons.push({
+                    file: projectLabel() + '.phaser-' + (i + 1) + '.json',
+                    text: JSON.stringify(json, null, 2),
+                });
+            });
+        }
+    }
+
+    const res = await Promise.resolve(ipc.exportSheet(projectLabel(), images[0] && images[0].png, jsons[0].text, {
+        dir: n.dir || '',
+        sheets: images,
+        jsons: jsons,
+    }));
     if (!res) {
         flash('导出接口不可用（非桌面环境）');
         return null;
     }
     if (res.ok === false) {
-        flash(res.canceled ? '已取消导出' : '导出精灵图失败');
+        flash(res.error || (res.canceled ? '已取消导出' : '导出精灵图失败'));
         return null;
     }
-    flash('已导出精灵图 ' + sheet.frames.length + ' 帧');
+    const count = built.json && built.json.frames ? built.json.frames.length : 0;
+    const extra = built.sheets.length > 1 ? '，' + built.sheets.length + ' 张图集' : '';
+    flash('已导出精灵图 ' + count + ' 帧' + extra);
     return res;
+}
+
+/**
+ * 导出当前帧为一张图片（菜单/命令面板用）。
+ *
+ * 走 `ms:save-binary`（系统保存对话框），扩展名跟着格式走。
+ * @param {{format?:string, quality?:number, background?:string, bgColor?:string}} [opts]
+ */
+async function exportCurrentFrame(opts) {
+    const o = opts || {};
+    if (!state.doc || typeof document === 'undefined') return null;
+    if (!ipc || typeof ipc.saveBinary !== 'function') {
+        flash('导出接口不可用（非桌面环境）');
+        return null;
+    }
+    const n = normalizeExportOptions(o, state.doc);
+    const format = n.format;
+    const mime = format === 'webp' ? 'image/webp' : format === 'jpeg' ? 'image/jpeg' : 'image/png';
+    const ext = format === 'jpeg' ? 'jpg' : format;
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(state.doc.width || 1));
+    cv.height = Math.max(1, Math.round(state.doc.height || 1));
+    const g = cv.getContext('2d');
+    if (!g) {
+        flash('取不到画布上下文');
+        return null;
+    }
+    if (format === 'jpeg' || n.background === 'color') {
+        g.fillStyle = format === 'jpeg' ? (n.bgColor || '#000000') : n.bgColor;
+        g.fillRect(0, 0, cv.width, cv.height);
+    }
+    compositeFrame(cv, state.doc, state.time, { clear: format !== 'jpeg' && n.background !== 'color' });
+    const dataUrl = format === 'jpeg' || format === 'webp'
+        ? cv.toDataURL(mime, n.quality)
+        : cv.toDataURL(mime);
+    const bytes = dataUrlToBytes(dataUrl);
+    if (!bytes) {
+        flash('这一帧是空的，导不出图片');
+        return null;
+    }
+    const saved = await ipc.saveBinary(projectLabel() + '-frame-' + String(Math.round(state.time * 1000)) + '.' + ext, bytes, ext, 'PNG 图片');
+    if (!saved) {
+        flash('已取消');
+        return null;
+    }
+    flash('已导出当前帧');
+    return saved;
+}
+
+/** dataURL → Uint8Array（base64 解码，浏览器里用 atob）。 */
+function dataUrlToBytes(dataUrl) {
+    const m = /^data:image\/[a-z+]+;base64,(.+)$/i.exec(String(dataUrl || ''));
+    if (!m) return null;
+    try {
+        const bin = atob(m[1]);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out;
+    } catch (err) {
+        return null;
+    }
+}
+
+/** 把当前帧编码成 PNG Blob（剪贴板用；失败返回 null）。 */
+async function currentFrameBlob() {
+    if (!state.doc || typeof document === 'undefined') return null;
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(state.doc.width || 1));
+    cv.height = Math.max(1, Math.round(state.doc.height || 1));
+    const g = cv.getContext('2d');
+    if (!g) return null;
+    compositeFrame(cv, state.doc, state.time, { clear: true });
+    if (typeof cv.toBlob === 'function') {
+        return await new Promise((resolve) => {
+            try {
+                cv.toBlob((blob) => resolve(blob || null), 'image/png');
+            } catch (err) {
+                resolve(null);
+            }
+        });
+    }
+    try {
+        return await cv.convertToBlob({ type: 'image/png' });
+    } catch (err) {
+        return null;
+    }
+}
+
+/**
+ * 复制当前帧到剪贴板（菜单/命令面板用）。
+ *
+ * 三条降级路径**文案必须不同** —— 用户看到的提示要能告诉他该修什么：
+ * 1. 浏览器没有 `ClipboardItem` → 「浏览器不支持写剪贴板，已改为导出文件」
+ * 2. `clipboard.write` 抛 NotAllowed（窗口没焦点 / 没授权）→ 「窗口没有焦点，已改为导出文件」
+ * 3. `write` 超时（系统剪贴板被别的进程占着）→ 「剪贴板写入超时，已改为导出文件」
+ * 三者最后都落到「导出当前帧到文件」，不会让用户白点一下。
+ */
+async function copyFrameToClipboard(opts) {
+    const fallback = async (msg) => {
+        // 注意顺序：`exportCurrentFrame` 自己会 flash（「已取消」/「导出接口不可用」），
+        // 必须**在它之后**再 flash 一次，否则用户只看到最后那句，不知道为什么要改走文件。
+        const out = await exportCurrentFrame(opts);
+        flash(out ? msg + '，已改为导出文件' : msg + '；导成文件也没成功');
+        return out;
+    };
+    if (typeof document === 'undefined' || !state.doc) return null;
+    if (typeof window === 'undefined' || typeof ClipboardItem !== 'function' || !navigator.clipboard || typeof navigator.clipboard.write !== 'function') {
+        return await fallback('浏览器不支持写剪贴板');
+    }
+    const blob = await currentFrameBlob();
+    if (!blob) return await fallback('当前帧是空的');
+    try {
+        const job = navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        const timeout = new Promise((resolve) => setTimeout(() => resolve('timeout'), 3000));
+        const result = await Promise.race([job.then(() => 'ok'), timeout]);
+        if (result === 'timeout') return await fallback('剪贴板写入超时');
+    } catch (err) {
+        const name = err && err.name ? String(err.name) : '';
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+            return await fallback('窗口没有焦点');
+        }
+        return await fallback('剪贴板写入失败');
+    }
+    flash('已复制当前帧到剪贴板');
+    return true;
 }
 
 /* ─────────────────────────── 项目：保存 / 打开 / 新建 ─────────────────────────── */
@@ -1187,7 +1537,8 @@ function onFileAct(act) {
         return;
     }
     if (act === 'export') {
-        exportFrames(projectLabel());
+        // 菜单导出：先问选项（帧率 / 范围 / 缩放 / 背景 / 目录），不再静默导整段
+        exportFrames();
         return;
     }
     if (act === 'undo') {
@@ -1254,10 +1605,12 @@ export async function recordVideo(opts) {
         rec.onstop = () => resolve();
     });
     const stepMs = Math.max(4, Math.round(1000 / fps));
+    // 第 32 批：`o.from` 让录制的起点跟着导出对话框的时间范围走（老调用不传，等价于 0）
+    const fromSec = Math.max(0, Number(o.from) || 0);
     try {
         rec.start();
         for (let i = 0; i < frames; i += 1) {
-            const t = i / fps;
+            const t = fromSec + i / fps;
             compositeFrame(cv, doc, t, { clear: true, time: t });
             if (track && typeof track.requestFrame === 'function') track.requestFrame();
             if (typeof o.onProgress === 'function') o.onProgress(i + 1, frames);
@@ -1339,7 +1692,22 @@ const projectApi = {
     importObjects: () => importFileObjects(),
     importDropped,
     exportFile: (id) => writeProjectFile(id, {}),
+    /**
+     * 逐帧 PNG 导出。
+     * - `exportFrames()` —— 弹导出对话框（第 32 批的新流程）；
+     * - `exportFrames('工程名')` —— 旧调用，直接导整段，不弹框。
+     */
+    exportFrames: (arg) => exportFrames(arg),
+    /** 只要有对话框的地方都走这个：`exportWithDialog('frames'|'sheet'|'video', preset)`。 */
+    exportWithDialog,
     exportSpritesheet: (opts) => exportSpritesheet(opts),
+    /** 导出当前帧为一张图片（走系统保存对话框）。菜单/命令面板挂这个。 */
+    exportCurrentFrame: (opts) => exportCurrentFrame(opts),
+    /**
+     * 复制当前帧到剪贴板。三条降级路径（无 ClipboardItem / 无焦点 / 超时）
+     * 都会自动改走「导出当前帧到文件」，提示文案各自不同。
+     */
+    copyFrameToClipboard: (opts) => copyFrameToClipboard(opts),
     recordVideo: (opts) => recordVideo(opts),
     exportVideo: (opts) => exportVideo(opts),
     subscribe: subscribeProjects,

@@ -586,6 +586,34 @@ function buildCtx() {
         scheduleRefresh();
     },
 
+    /**
+     * 对象多选（叠放面板与父子面板共用同一份）。**只在内存层**：
+     * 不进文档、不进撤销 —— 选择是「我现在的注意力」，不是作品的一部分。
+     * 每次读都跟文档对一遍，对象被删后悬空 id 自动退干净。
+     */
+    selectedLayers() {
+        const doc = state.doc;
+        if (!doc) return [];
+        const raw = Array.isArray(state.layerSel) ? state.layerSel : [];
+        const live = raw.filter((id) => objectById(doc, id));
+        if (live.length !== raw.length) state.layerSel = live; // 自愈：不留已删对象的 id
+        return live.slice();
+    },
+    setLayerSelection(ids) {
+        const doc = state.doc;
+        const want = Array.isArray(ids) ? ids.map(String) : [];
+        state.layerSel = doc ? want.filter((id) => objectById(doc, id)) : [];
+        // 主选中跟着走：原来的 activeLayer 不在新集合里时，落到第一个选中项
+        if (state.layerSel.length && !state.layerSel.includes(String(state.activeLayerId))) {
+            state.activeLayerId = state.layerSel[0];
+        }
+        // 选择不是文档状态，subscribeDoc 不会触发 —— 用一条事件把两个面板一起叫醒
+        if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+            document.dispatchEvent(new CustomEvent('ms:layer-selection', { detail: { ids: state.layerSel.slice() } }));
+        }
+        scheduleRefresh();
+    },
+
     selection: () => state.selection,
     setSelection(sel) {
         const doc = state.doc;
@@ -1150,8 +1178,10 @@ function buildCommands() {
         // 文件
         { id: 'file.save', title: '保存项目', hint: '写入当前存档', keys: 'Ctrl+S', group: '文件', run: () => saveProject() },
         { id: 'file.open', title: '打开项目库', hint: '最近项目 / 新建 / 导入', keys: 'Ctrl+O', group: '文件', run: () => openProjectsPanel() },
-        { id: 'file.export-frames', title: '导出帧序列', hint: 'PNG 序列 + 帧清单', keys: 'Ctrl+Shift+E', group: '文件', run: () => exportFrames(projectLabel()) },
-        { id: 'file.export-sheet', title: '导出精灵图', hint: '单张 PNG + 每帧坐标 JSON', keys: '', group: '文件', run: () => exportSpritesheet({}) },
+        { id: 'file.export-frames', title: '导出帧序列…', hint: 'PNG 序列 + 帧清单（可设范围/缩放/格式）', keys: 'Ctrl+Shift+E', group: '文件', run: () => exportFrames() },
+        { id: 'file.export-current', title: '导出当前帧…', hint: '当前时刻的一张 PNG', keys: '', group: '文件', run: () => projectApi.exportCurrentFrame() },
+        { id: 'file.export-clip', title: '复制当前帧到剪贴板', hint: '直接粘贴到聊天或绘图软件', keys: '', group: '文件', run: () => projectApi.copyFrameToClipboard() },
+        { id: 'file.export-sheet', title: '导出精灵图…', hint: '图集 PNG + 每帧坐标 JSON（可设上限/裁剪/引擎格式）', keys: '', group: '文件', run: () => exportSpritesheet() },
         { id: 'file.export-video', title: '导出 WebM 视频', hint: '按当前帧率录制整段时长', keys: '', group: '文件', run: () => projectApi.exportVideo() },
         // 编辑
         { id: 'edit.undo', title: '撤销', hint: '', keys: 'Ctrl+Z', group: '编辑', run: () => engine.undo() },

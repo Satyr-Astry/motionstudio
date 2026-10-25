@@ -539,7 +539,8 @@ export function createXformPanel(ctx) {
         const idx = keyIndexAt(track, t);
         const keyCount = track.keys.length;
 
-        keysEl.textContent = keyCount + ' 个关键帧 · 当前 t=' + t.toFixed(2) + 's';
+        // 计数单位统一用「颗」（与时间轴/曲线的报数一致）；「一个关键帧」这类语词不动
+        keysEl.textContent = keyCount + ' 颗关键帧 · 当前 t=' + t.toFixed(2) + 's';
 
         for (const [key] of FIELDS) {
             const input = fieldInput.get(key);

@@ -11,7 +11,10 @@ import {
     elementLattice, handlePoints, elementWorldMatrix, elementSize, elementState,
     applyMatrix, localUv, anchorPoint, invertMatrix,
 } from '../core/element.mjs';
-import { HIT_PX, pickHandle, pickAnchor, anchorUvFromMatrix, dragPatch } from '../core/gizmo.mjs';
+import { HIT_PX, pickHandle, pickAnchor, anchorUvFromMatrix, dragPatch, localDelta } from '../core/gizmo.mjs';
+import {
+    KLEKS_PATCH_RADIUS, MIN_INFLUENCE_CELLS, hitInside, softPatch, warpOffsetAt, zoneOf,
+} from '../core/warp-drag.mjs';
 
 /**
  * @param {object} deps
@@ -80,6 +83,43 @@ export function createInput(deps) {
     /** 拖锚点期间的预览态：{ elId, u, v }。只画十字，不动文档。 */
     let preview = null;
     let dragCanceled = false;
+
+    /**
+     * 网格软拖的落点：网格模式 + 指针在图像内部时返回 { u, v }，否则 null。
+     * 判据与 hitAt 里「内部 → 移动」完全一致（uv 不夹取，0≤u≤1 ⇔ 0≤局部x≤w）。
+     */
+    function softTarget(p) {
+        const info = selectionInfo();
+        if (!info || info.sel.mode !== 'warp') return null;
+        const { doc, el, time, parentM } = info;
+        const loc = localUv(doc, el, time, { x: p.x, y: p.y }, parentM, 0);
+        if (!loc) return null;
+        if (!hitInside(loc.u, loc.v)) return null;
+        return { u: loc.u, v: loc.v };
+    }
+
+    /**
+     * 开始软拖：拖动点记在参数空间（u,v），基准网格取按下时那一版。
+     * 逐帧都从**基准网格**算绝对偏移，误差不会随帧累积。
+     */
+    function startSoftDrag(e, u, v) {
+        const info = selectionInfo();
+        if (!info) return;
+        const { doc, el, time, parentM } = info;
+        const lat = elementLattice(doc, el, time, parentM);
+        // 基键：t≈0 时当前这帧就是基准帧（没有更早的帧可插值），直接写；
+        // t>0 且对象只有一个关键帧时先补一个 0 秒空帧，否则整条时间线上只有这一刻有形状。
+        // 与点拖同一策略（见 ensureWarpBaseKey 的注释），返回值这里不需要区分。
+        ensureWarpBaseKey(el.id);
+        startDrag(e, { kind: 'lattice-soft', name: 'lattice-soft' });
+        if (!drag) return;
+        drag.soft = {
+            u, v,
+            base: lat.lattice,
+            moved: false,
+            lastMoved: -1,
+        };
+    }
 
     function startDrag(e, onHandle) {
         const info = selectionInfo();
@@ -158,6 +198,30 @@ export function createInput(deps) {
         const el = layerById(doc, drag.elId);
         if (!el) return;
         const t = ctx.time();
+        // 网格软拖：位移换算到对象局部像素，交给 core/warp-drag 分给附近格点。
+        // 逐帧写文档但**不进撤销栈**（silent）：显式 coalesce 的时间窗是 700ms
+        //（shell/doc-state.mjs:263），拖到一半手停一下就断成两条记录；
+        // 这里改成松手时推一条命令（onDragEnd），一次拖动严格一条撤销。
+        if (drag.pick && drag.pick.kind === 'lattice-soft') {
+            const s = drag.soft;
+            if (!s) return;
+            const inv = invertMatrix(elementWorldMatrix(el, t, drag.size, drag.parentM));
+            const p = toDocPoint(e);
+            const local = localDelta(inv, p.x - drag.p0.x, p.y - drag.p0.y);
+            const r = warpOffsetAt(s.base, s.u, s.v, local);
+            if (!r.moved) return;
+            const next = writeKey(doc, drag.elId, t, { warp: softPatch(s.base, r.pts) });
+            if (next === doc) return;
+            ctx.setDoc(next, { silent: true, label: '格点变形' });
+            s.moved = true;
+            // 影响顶点数只在变化时报一次，别每帧刷提示
+            if (s.lastMoved !== r.moved) {
+                s.lastMoved = r.moved;
+                if (ctx.notify) ctx.notify('格点变形：影响 ' + r.moved + ' 个顶点');
+            }
+            if (typeof ctx.requestRender === 'function') ctx.requestRender();
+            return;
+        }
         // 拖锚点：把指针位置反解成对象本地 uv。**拖动中只记预览**（见 previewAnchor），
         // 松手时才 setAnchor 落一次文档——每帧写文档会把一次拖动拆成多条撤销记录，
         // 而且 keepPlace 的补偿每帧都算一遍，中途按 Esc 也退不回去。
@@ -212,8 +276,37 @@ export function createInput(deps) {
         const before = drag.before;
         const pv = preview;
         const elId = drag.elId;
+        const pickKind = drag.pick && drag.pick.kind;
+        const softState = drag.soft || null;
         drag = null;
         preview = null;
+
+        /* 网格软拖：拖动中都是 silent 写入，这里补一条命令。
+           Esc 取消时静默回落到按下时的文档——不推命令、也不留空记录。 */
+        if (pickKind === 'lattice-soft') {
+            const canceled = dragCanceled;
+            dragCanceled = false;
+            if (canceled) {
+                if (softState && softState.moved && before) ctx.setDoc(before, { silent: true });
+                if (typeof ctx.requestRender === 'function') ctx.requestRender();
+                if (ctx.notify) ctx.notify('已取消');
+                return;
+            }
+            const after = ctx.doc();
+            if (softState && softState.moved && before && after && before !== after) {
+                const cmd = {
+                    label: '格点变形',
+                    undo: () => ctx.setDoc(before, { silent: true }),
+                    redo: () => ctx.setDoc(after, { silent: true }),
+                };
+                if (ctx.engine && typeof ctx.engine.pushCommand === 'function') ctx.engine.pushCommand(cmd);
+                else if (ctx.engine && ctx.engine.history) ctx.engine.history.push(cmd);
+                if (ctx.notify) ctx.notify('已变形网格');
+            } else if (ctx.notify) {
+                ctx.notify('这次拖动没有改变网格');
+            }
+            return;
+        }
 
         /* 拖锚点：整段拖动只在松手时写一次文档。Esc 取消就什么都不写。
            撤销记录由 ctx.setAnchor 内部那次 setDoc 生成（label「改旋转原点」），
@@ -250,6 +343,19 @@ export function createInput(deps) {
         return preview ? { elId: preview.elId, u: preview.u, v: preview.v } : null;
     }
 
+    /**
+     * 叠加层画「软拖影响范围」用：拖动中返回
+     * `{ elId, u, v, radiusX, radiusY }`（radius 是参数空间半径，按 Klecks 的补丁比例与
+     * 最小格数下限算出），其余时候 null。
+     */
+    function previewSoftDrag() {
+        if (!drag || !drag.soft) return null;
+        const { cols, rows } = drag.soft.base;
+        const radiusX = Math.max(KLEKS_PATCH_RADIUS, MIN_INFLUENCE_CELLS / cols);
+        const radiusY = Math.max(KLEKS_PATCH_RADIUS, MIN_INFLUENCE_CELLS / rows);
+        return { elId: drag.elId, u: drag.soft.u, v: drag.soft.v, radiusX, radiusY };
+    }
+
     /* ── 指针入口（宿主捕获阶段，抢在引擎之前） ── */
 
     function onDown(e) {
@@ -264,6 +370,14 @@ export function createInput(deps) {
 
         // 手柄在任何工具下都能抓
         const onHandle = hitAt(probe, isSelect);
+        // 网格模式下落在图像内部（且没压住顶点/手柄/锚点）时，拖动改的是「附近格点」而不是对象位置
+        const softAt = onHandle && onHandle.kind === 'move' && isSelect ? softTarget(p) : null;
+        if (zoneOf(onHandle, { mode: softAt ? 'warp' : '', inside: !!softAt }) === 'soft') {
+            e.preventDefault();
+            e.stopPropagation();
+            startSoftDrag(e, softAt.u, softAt.v);
+            return;
+        }
         if (onHandle) {
             e.preventDefault();
             e.stopPropagation();
@@ -313,5 +427,5 @@ export function createInput(deps) {
         dragCanceled = false;
     }
 
-    return { onDown, dispose, previewAnchor };
+    return { onDown, dispose, previewAnchor, previewSoftDrag };
 }

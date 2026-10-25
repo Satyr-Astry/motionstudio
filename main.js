@@ -121,40 +121,137 @@ function importFilters(exts) {
     ];
 }
 
-/** 逐帧 PNG 导出：写入「图片/MotionStudio/<名字>-<时间戳>/frame_0001.png…」 */
+/**
+ * 目录名去重：被占用就依次试 `<base>-2`、`<base>-3`…
+ *
+ * 起因：`stamp()` 只到秒，同一秒里连点两次导出会落进同一个目录，
+ * 第二次的 `writeFileSync` 会静默覆盖第一次 —— 用户以为「导出了两份」。
+ * 999 次都撞上则返回空串，由调用方报错（不静默覆盖）。
+ */
+function uniqueDir(base) {
+    if (!fs.existsSync(base)) return base;
+    for (let i = 2; i <= 999; i++) {
+        const next = base + '-' + i;
+        if (!fs.existsSync(next)) return next;
+    }
+    return '';
+}
+
+/** 逐帧 PNG 导出的目标目录：`<根>/<名字>-<时间戳>`，冲突时加 `-2`/`-3`。 */
+function framesDir(name, root) {
+    const base = path.join(root || path.join(app.getPath('pictures'), 'MotionStudio'), name + '-' + stamp());
+    return uniqueDir(base);
+}
+
+/**
+ * 逐帧 PNG 导出：写入「图片/MotionStudio/<名字>-<时间戳>/frame_0001.png…」
+ *
+ * payload 支持分片（渲染侧每 16 帧发一片，省掉每帧一次跨进程）：
+ * - `startIndex` 缺省 → 老行为，一次写完整批；
+ * - `startIndex === 0` → 建目录并去重，最终目录名随返回值回传给后续片；
+ * - `startIndex > 0` → 沿用回传的 `dir` 续写。
+ * `dir`（用户选的根目录）只在首片/整批有意义，不传时仍是系统图片目录。
+ */
 function exportFrames(payload) {
     const name = sanitize(payload && payload.name);
     const frames = (payload && payload.frames) || [];
-    if (!frames.length) return { ok: false, error: '没有可导出的帧' };
-    const dir = path.join(app.getPath('pictures'), 'MotionStudio', name + '-' + stamp());
+    const rawStart = payload && payload.startIndex;
+    const startIndex = Number.isFinite(rawStart) ? Math.max(0, Math.floor(rawStart)) : -1;
+    const chunked = startIndex >= 0;
+    if (!frames.length && !chunked) return { ok: false, error: '没有可导出的帧' };
+    if (!frames.length && startIndex > 0) return { ok: false, error: '没有可导出的帧' };
+
+    let dir;
+    if (chunked && startIndex > 0 && payload && payload.dir) {
+        // 后续片：dir 是首片回传的最终目录，直接用
+        dir = String(payload.dir);
+    } else {
+        dir = framesDir(name, payload && payload.dir ? String(payload.dir) : '');
+    }
+    if (!dir) return { ok: false, error: '同名目录过多，请先清理图片/MotionStudio' };
     fs.mkdirSync(dir, { recursive: true });
+
     let count = 0;
     frames.forEach((dataUrl, i) => {
         const m = /^data:image\/png;base64,(.+)$/.exec(String(dataUrl || ''));
         if (!m) return;
-        const file = path.join(dir, 'frame_' + String(i + 1).padStart(4, '0') + '.png');
+        const idx = chunked ? startIndex + i : i;
+        const file = path.join(dir, 'frame_' + String(idx + 1).padStart(4, '0') + '.png');
         fs.writeFileSync(file, Buffer.from(m[1], 'base64'));
         count++;
     });
-    log('[export]', dir, count);
-    return { ok: count > 0, dir, count };
+    log('[export]', dir, count, chunked ? 'chunk@' + startIndex : 'whole');
+    return { ok: count > 0 || (chunked && startIndex > 0), dir, count, startIndex };
 }
 
-/** 精灵图导出：写入「图片/MotionStudio/<名字>-sheet-<时间戳>/」下的 png + 帧表 json */
+/** 从 dataURL 的 mime 推断落盘扩展名（png / webp / jpg）。认不出就按 png。 */
+function extOf(dataUrl) {
+    const m = /^data:image\/([a-z+]+);base64,/i.exec(String(dataUrl || ''));
+    if (!m) return '';
+    const t = m[1].toLowerCase();
+    return t === 'jpeg' ? 'jpg' : t;
+}
+
+/** 精灵图导出：写入「<根>/<名字>-sheet-<时间戳>/」下的 png + 帧表 json */
 function exportSheet(payload) {
     const name = sanitize(payload && payload.name);
-    const m = /^data:image\/png;base64,(.+)$/.exec(String((payload && payload.png) || ''));
-    if (!m) return { ok: false, error: '精灵图不是 PNG dataURL' };
-    const dir = path.join(app.getPath('pictures'), 'MotionStudio', name + '-sheet-' + stamp());
-    fs.mkdirSync(dir, { recursive: true });
-    const png = path.join(dir, name + '.png');
-    fs.writeFileSync(png, Buffer.from(m[1], 'base64'));
-    let jsonFile = '';
-    const text = payload && payload.json;
-    if (typeof text === 'string' && text) {
-        jsonFile = path.join(dir, name + '.json');
-        fs.writeFileSync(jsonFile, text, 'utf8');
+    const root = payload && payload.dir ? String(payload.dir) : '';
+    const base = path.join(root || path.join(app.getPath('pictures'), 'MotionStudio'), name + '-sheet-' + stamp());
+
+    const writeJson = (dir) => {
+        let jsonFile = '';
+        // 多份帧表（自家格式 + Phaser 各一份时用）：[{file, text}]
+        const many = Array.isArray(payload && payload.jsons) ? payload.jsons : null;
+        if (many && many.length) {
+            for (const one of many) {
+                const safe = String((one && one.file) || '').replace(/[\\/:*?"<>|]/g, '_');
+                const text = typeof (one && one.text) === 'string' ? one.text : '';
+                if (!safe || !text) continue;
+                const full = path.join(dir, safe);
+                fs.writeFileSync(full, text, 'utf8');
+                if (!jsonFile) jsonFile = full;
+            }
+            return jsonFile;
+        }
+        const text = payload && payload.json;
+        if (typeof text === 'string' && text) {
+            jsonFile = path.join(dir, name + '.json');
+            fs.writeFileSync(jsonFile, text, 'utf8');
+        }
+        return jsonFile;
+    };
+
+    // 多张形态（分张）：一次建目录，按每张自己的文件名写，绝不各建一个目录。
+    const list = Array.isArray(payload && payload.sheets) ? payload.sheets : null;
+    if (list && list.length) {
+        const dir = uniqueDir(base);
+        if (!dir) return { ok: false, error: '同名目录过多，请先清理图片/MotionStudio' };
+        fs.mkdirSync(dir, { recursive: true });
+        const files = [];
+        for (const one of list) {
+            const m = /^data:image\/[a-z+]+;base64,(.+)$/i.exec(String((one && one.png) || ''));
+            if (!m) return { ok: false, error: '精灵图分片不是 dataURL' };
+            // 文件名来自帧表里的 sheets[].file，去掉路径分隔符防止越界写
+            const safe = String((one && one.file) || '').replace(/[\\/:*?"<>|]/g, '_')
+                || 'sheet-' + (files.length + 1) + '.' + (extOf(one && one.png) || 'png');
+            const full = path.join(dir, safe);
+            fs.writeFileSync(full, Buffer.from(m[1], 'base64'));
+            files.push(full);
+        }
+        const jsonFile = writeJson(dir);
+        log('[sheet]', dir, files.length + ' 张');
+        return { ok: true, dir: dir, png: files[0], files: files, json: jsonFile };
     }
+
+    // 单张（旧路径）：文件名仍是「<名字>.<扩展名>」，扩展名跟着编码走（默认 png 时与以前逐字相同）
+    const m = /^data:image\/[a-z+]+;base64,(.+)$/i.exec(String((payload && payload.png) || ''));
+    if (!m) return { ok: false, error: '精灵图不是图片 dataURL' };
+    const dir = uniqueDir(base);
+    if (!dir) return { ok: false, error: '同名目录过多，请先清理图片/MotionStudio' };
+    fs.mkdirSync(dir, { recursive: true });
+    const png = path.join(dir, name + '.' + (extOf(payload && payload.png) || 'png'));
+    fs.writeFileSync(png, Buffer.from(m[1], 'base64'));
+    const jsonFile = writeJson(dir);
     log('[sheet]', dir);
     return { ok: true, dir: dir, png: png, json: jsonFile };
 }

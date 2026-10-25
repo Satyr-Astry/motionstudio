@@ -4,7 +4,9 @@
 // 所有外壳调用都走主文件注入的 deps（has / call / notify），本文件不直接摸 ctx。
 
 import { docDuration, objectById, patchObject } from '../core/doc-model.mjs';
+import { clickIntent } from '../core/selection.mjs';
 import { addKey, moveKey, removeKey, setKeyEase, stateAt } from '../core/transform.mjs';
+import { findConflict, hideTip, showTip } from './drag-tip.mjs';
 import {
     EASES,
     EASE_TEXT,
@@ -179,6 +181,22 @@ export function createKeys(deps) {
         return selKeys.length ? selKeys[selKeys.length - 1] : null;
     }
 
+    /**
+     * 把「选了几颗、主键在哪个时刻」广播给状态栏。
+     *
+     * 为什么走 document 事件而不是往 ctx 上加一个 `selectedKeys()`：那等于把内部选择集合
+     * 变成公开接口，下一个人就会直接去改它、绕过拖拽与撤销的重绘路径。事件名与对象侧的
+     * `ms:layer-selection` 保持同一族，监听方只读 detail、碰不到这里的状态。
+     */
+    function emitSel() {
+        if (typeof document === 'undefined' || typeof CustomEvent !== 'function') return;
+        const last = selKeys.length ? selKeys[selKeys.length - 1] : null;
+        const primaryT = last && Number.isFinite(Number(last.t)) ? Number(last.t) : null;
+        document.dispatchEvent(new CustomEvent('ms:key-selection', {
+            detail: { count: selKeys.length, primaryT },
+        }));
+    }
+
     function isSelected(layerId, t) {
         return selKeys.some((k) => k.layerId === layerId && Math.abs(k.t - t) <= T_EPS);
     }
@@ -209,10 +227,15 @@ export function createKeys(deps) {
         if (!selKeys.length && selAnchor === null) return;
         selKeys = [];
         selAnchor = null;
+        emitSel();
         deps.paint();
     }
 
-    /** Shift+单击：锚点到本键之间（同对象内按时间顺序）的同刻组全选上。 */
+    /**
+     * 连选：锚点到本键之间（同对象内按时间顺序）的同刻组全选上。
+     * 触发键是 **Shift+Alt+单击** —— 只按 Shift 是累加/移出（见 core/selection.mjs 的 clickIntent），
+     * 两者只差一个 Alt，改这里之前先想清楚要给用户哪一种。
+     */
     function selectRange(layerId, t) {
         const doc = deps.docNow();
         const obj = doc ? objectById(doc, layerId) : null;
@@ -231,6 +254,79 @@ export function createKeys(deps) {
         selKeys = times.length ? times.map((x) => ({ layerId, t: x })) : [{ layerId, t }];
         selAnchor = { layerId, t };
     }
+
+    /** 当前对象上所有「同刻组」的时刻，时间升序 —— 全选 / 反选 / 连选共用这一份全集。 */
+    function allTimes(layerId) {
+        const doc = deps.docNow();
+        const obj = doc ? objectById(doc, layerId) : null;
+        if (!obj) return [];
+        return keyGroups(trackOf(obj).keys).map((g) => g.t);
+    }
+
+    /** A：选中当前对象的全部关键帧（同刻多通道按一颗算）。 */
+    function selectAll() {
+        const layerId = deps.activeId();
+        if (!layerId) { deps.notify('先选一个对象'); return; }
+        const times = allTimes(layerId);
+        if (!times.length) { deps.notify('这个对象还没有关键帧'); return; }
+        selKeys = times.map((t) => ({ layerId, t }));
+        selAnchor = { layerId, t: times[0] };
+        emitSel();
+        deps.paint();
+        deps.notify('已选中 ' + times.length + ' 颗关键帧');
+    }
+
+    /** Ctrl+I：反选 —— 当前对象上还没被选中的那些。 */
+    function invertSelection() {
+        const layerId = deps.activeId();
+        if (!layerId) return;
+        const times = allTimes(layerId);
+        if (!times.length) return;
+        const chosen = selKeys.filter((k) => k.layerId === layerId).map((k) => k.t);
+        const next = times.filter((t) => !chosen.some((c) => Math.abs(c - t) <= T_EPS));
+        selKeys = next.map((t) => ({ layerId, t }));
+        selAnchor = next.length ? { layerId, t: next[0] } : null;
+        emitSel();
+        deps.paint();
+        deps.notify(next.length ? '已选中 ' + next.length + ' 颗关键帧' : '已经全选，没有可反选的');
+    }
+
+    /**
+     * 关键帧选择的键盘：A 全选 / Alt+A 取消 / Ctrl+I 反选 / Esc 清空（含退出框选）。
+     * 面板不可见（人在别的工区）时一律不响应 —— 时间轴与曲线各有一套键，不能同时抢。
+     */
+    function onSelKey(e) {
+        const host = typeof deps.rowsEl === 'function' ? deps.rowsEl() : null;
+        if (!host || host.offsetParent === null) return;
+        const tag = e.target && e.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        const k = e.key;
+        if (e.altKey && !e.ctrlKey && !e.metaKey && (k === 'a' || k === 'A')) {
+            e.preventDefault();
+            clearSelection();
+            deps.notify('已取消选择');
+            return;
+        }
+        if ((e.ctrlKey || e.metaKey) && (k === 'i' || k === 'I')) {
+            e.preventDefault();
+            invertSelection();
+            return;
+        }
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && (k === 'a' || k === 'A')) {
+            e.preventDefault();
+            selectAll();
+            return;
+        }
+        if (k === 'Escape') {
+            if (!selKeys.length && !marquee) return;
+            e.preventDefault();
+            detachMarquee();
+            clearSelection();
+        }
+    }
+    // node 里没有 document（本文件被纯逻辑测试直接 import），挂键前必须守卫
+    const hasDom = typeof document !== 'undefined' && document && typeof document.addEventListener === 'function';
+    if (hasDom) document.addEventListener('keydown', onSelKey);
 
     /** 集合签名：用来判断「框选扫过的命中集合有没有变」，变了才重绘。 */
     function keysSig(list) {
@@ -464,7 +560,7 @@ export function createKeys(deps) {
         selAnchor = null;
         // 集合里留着已不存在的时间（别处改过文档）时别静默失败，否则用户以为按键没生效
         if (!removed) deps.notify('选中的关键帧已不在文档里，可能已被别处改动');
-        else deps.notify('已删除 ' + removed + ' 个关键帧');
+        else deps.notify('已删除 ' + removed + ' 颗关键帧');
         deps.paint();
         return removed;
     }
@@ -571,6 +667,42 @@ export function createKeys(deps) {
         document.removeEventListener('pointermove', onKfMove);
         document.removeEventListener('pointerup', onKfUp);
         document.removeEventListener('pointercancel', onKfUp);
+        document.removeEventListener('keydown', onDragKey, true);
+    }
+
+    /**
+     * 拖动中的 Esc = 取消。只在真的在拖时接管（`kfDrag` 存在才挂监听），
+     * 且必须 preventDefault —— 否则同一个 Esc 还会被浮层/命令面板/导出对话框收走。
+     * 取消只看 DOM 快照回滚，**不调 moveKeys、不写文档** → 撤销栈条数不变，
+     * 这正是它和 Ctrl+Z 的语义差别（后者是「已经改了，撤回去」）。
+     */
+    function onDragKey(e) {
+        if (!kfDrag) return;
+        if (!e || e.key !== 'Escape') return;
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
+        cancelKfDrag();
+    }
+
+    function cancelKfDrag() {
+        const d = kfDrag;
+        kfDrag = null;
+        detachKfDrag();
+        hideTip();
+        if (!d) return;
+        if (d.node && d.node.classList) d.node.classList.toggle('is-drag', false);
+        // 逐颗回滚到按下时的左偏移（快照是按节点存的，不是按时间重算的）
+        for (const it of d.nodes) {
+            const n = it.node;
+            if (!n || !n.style) continue;
+            const left = d.snapshot && d.snapshot.get(n);
+            if (typeof left === 'string') n.style.left = left;
+            n.title = '关键帧 ' + fmt2(it.t0) + ' s · 松手后生效';
+            if (n.classList) n.classList.remove('is-blocked', 'is-merge-target');
+        }
+        deps.keepTime(d.keep);
+        deps.notify('已取消移动');
+        deps.paint();
     }
 
     /** 选中集合对应的菱形节点：整组预览时一起挪，但仍然只挪 DOM。 */
@@ -618,11 +750,17 @@ export function createKeys(deps) {
 
         deps.menu.close();
 
-        if (e.ctrlKey || e.metaKey) toggleAt(layerId, t);
-        else if (e.shiftKey) selectRange(layerId, t);
-        else if (isSelected(layerId, t)) promote(layerId, t);
+        // 选择语义统一走 core/selection.mjs：
+        //   单击 = 只选它 / Shift 或 Ctrl+点 = 累加，再点移出 / Shift+Alt+点 = 从锚点连选
+        // 别在这里再写一份 if(shiftKey)，否则曲线面板迟早跟这里走偏。
+        const intent = clickIntent(e, isSelected(layerId, t));
+        if (intent === 'ignore') return;
+        if (intent === 'remove' || intent === 'add') toggleAt(layerId, t);
+        else if (intent === 'range') selectRange(layerId, t);
+        else if (intent === 'promote') promote(layerId, t);
         else setSingle(layerId, t);
 
+        emitSel();
         deps.setActive(layerId);
         if (!selKeys.length) {
             deps.paint(); // Ctrl+单击把自己的选中项减光了：没有可拖的东西
@@ -642,11 +780,19 @@ export function createKeys(deps) {
             // 快照：拖动过程中集合可能被别处改（重绘/外部刷新），而「松手提交哪些」必须是按下时那一批
             sel: selKeys.map((k) => ({ layerId: k.layerId, t: k.t })),
             nodes: selectedNodes(),
+            marked: null,
+            snapshot: null,
         };
+        // Esc 取消要逐颗回原位，所以把按下时的左偏移存一份（不是按时间重算 —— 重算会和吸附打架）
+        kfDrag.snapshot = new Map();
+        for (const it of kfDrag.nodes) {
+            if (it.node && it.node.style) kfDrag.snapshot.set(it.node, it.node.style.left);
+        }
         if (node.classList) node.classList.add('is-drag');
         document.addEventListener('pointermove', onKfMove);
         document.addEventListener('pointerup', onKfUp);
         document.addEventListener('pointercancel', onKfUp);
+        document.addEventListener('keydown', onDragKey, true);
         deps.paint();
     }
 
@@ -673,19 +819,93 @@ export function createKeys(deps) {
         if (Math.abs(dt - kfDrag.dt) < 1e-9) return;
         kfDrag.dt = dt;
 
-        // 只挪 DOM，不碰文档（文档留到 onKfUp 一次写完）
+        // 只挪 DOM，不碰文档（文档留到 onKfUp 一次写完）。
+        // 预告值不再写 dataset.preview —— 那是个没人消费的死属性，读数交给下面的浮层。
         for (const it of kfDrag.nodes) {
             const n = it.node;
             if (!n || !n.style) continue;
             const nt = it.t0 + dt;
             n.style.left = kfLeft(doc, nt, deps.zoomOf()).toFixed(2) + 'px';
-            n.dataset.preview = fmt2(nt);
             n.title = '关键帧 ' + fmt2(nt) + ' s · 松手后生效';
         }
+
+        // 拖动中的读数与冲突预警：挪到哪儿、吸到了什么、会不会撞上别人，都在过程中说清楚
+        const obj = objectById(doc, kfDrag.layerId);
+        const track = obj ? trackOf(obj) : null;
+        const keys = track ? keyGroups(track.keys).map((g) => ({ layerId: kfDrag.layerId, t: g.t })) : [];
+        const conf = findConflict({
+            keys,
+            sel: kfDrag.sel,
+            fromT: kfDrag.t0,
+            dt,
+            layerId: kfDrag.layerId,
+            eps: T_EPS,
+        });
+        markConflict(conf);
+        showTip({
+            x: e.clientX + 14,
+            y: e.clientY + 18,
+            t: kfDrag.t0 + dt,
+            fps: doc.fps,
+            duration: total,
+            snapped: magnet,
+            conflict: conf.kind,
+        });
+    }
+
+    /**
+     * 冲突标记：被占用的那颗挂 `.is-blocked`（danger 描边），会被合并的那颗挂 `.is-merge-target`。
+     * 只切「上一颗」和「这一颗」，不做全表清理 —— 轨道上可能有上百颗菱形。
+     */
+    function markConflict(conf) {
+        if (!kfDrag) return;
+        const host = typeof deps.rowsEl === 'function' ? deps.rowsEl() : null;
+        const hits = conf && Array.isArray(conf.hits) ? conf.hits : [];
+        const cls = conf && conf.kind === 'merge' ? 'is-merge-target' : 'is-blocked';
+        const want = new Set();
+        for (const h of hits) want.add(h.layerId + '|' + Number(h.t).toFixed(6));
+        const prev = kfDrag.marked;
+        if (prev && !want.has(prev)) {
+            const n = kfNodeAt(host, prev);
+            if (n && n.classList) n.classList.remove('is-blocked', 'is-merge-target');
+            kfDrag.marked = null;
+        }
+        for (const key of want) {
+            if (prev === key) continue;
+            const n = kfNodeAt(host, key);
+            if (!n || !n.classList) continue;
+            n.classList.remove('is-blocked', 'is-merge-target');
+            n.classList.add(cls);
+            kfDrag.marked = key;
+        }
+    }
+
+    /** `layerId|t` → 那一颗菱形节点（host 限定在当前可见行区里）。 */
+    function kfNodeAt(host, key) {
+        if (!host || typeof host.querySelectorAll !== 'function') return null;
+        const cut = String(key).lastIndexOf('|');
+        const layerId = key.slice(0, cut);
+        const t = Number(key.slice(cut + 1));
+        for (const n of host.querySelectorAll('.tline-kf') || []) {
+            if (!n || !n.dataset || n.dataset.layer !== layerId) continue;
+            if (Math.abs(Number(n.dataset.t) - t) <= T_EPS) return n;
+        }
+        return null;
+    }
+
+    /** 清掉所有冲突标记（松手 / 取消 / 重绘前都要走一趟，否则类名会留在旧的菱形上）。 */
+    function clearConflict() {
+        if (!kfDrag || !kfDrag.marked) return;
+        const host = typeof deps.rowsEl === 'function' ? deps.rowsEl() : null;
+        const n = kfNodeAt(host, kfDrag.marked);
+        if (n && n.classList) n.classList.remove('is-blocked', 'is-merge-target');
+        kfDrag.marked = null;
     }
 
     function onKfUp() {
         detachKfDrag();
+        hideTip();
+        clearConflict();
         const d = kfDrag;
         kfDrag = null;
         if (!d) return;
@@ -786,6 +1006,7 @@ export function createKeys(deps) {
         const dedup = next.filter((k, i) => next.findIndex((x) => x.layerId === k.layerId && Math.abs(x.t - k.t) <= T_EPS) === i);
         if (keysSig(dedup) === keysSig(selKeys)) return; // 集合没变就别重绘
         selKeys = dedup;
+        emitSel();
         deps.paint();
     }
 
@@ -817,10 +1038,10 @@ export function createKeys(deps) {
             y0: e.clientY,
             moved: false,
             el: null,
-            // Shift 框选是「追加」，所以要先记住起点集合；不按 Shift 就从空集重新数
-            base: e.shiftKey ? selKeys.slice() : [],
+            // Shift / Ctrl / Cmd 框选都是「追加」，所以要先记住起点集合；都不按就从空集重新数
+            base: (e.shiftKey || e.ctrlKey || e.metaKey) ? selKeys.slice() : [],
         };
-        if (!e.shiftKey && selKeys.length) {
+        if (!(e.shiftKey || e.ctrlKey || e.metaKey) && selKeys.length) {
             selKeys = [];
             selAnchor = null;
             deps.paint();
@@ -914,7 +1135,10 @@ export function createKeys(deps) {
         getSelKey: () => primary(),
         // 新读数：整个集合（paint 用它区分主键与跟随键）
         selectionAll: () => selKeys.map((k) => ({ layerId: k.layerId, t: k.t })),
+        selectAll,
+        invertSelection,
         destroy() {
+            if (hasDom) document.removeEventListener('keydown', onSelKey);
             detachKfDrag();
             detachMarquee();
             if (marquee && marquee.el && marquee.el.parentNode && typeof marquee.el.parentNode.removeChild === 'function') {

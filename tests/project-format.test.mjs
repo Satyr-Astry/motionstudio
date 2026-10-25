@@ -366,7 +366,15 @@ test('精灵图：每格按自己的采样时间合成，帧表用 t 字段', ()
     assert.equal(json.duration, 0.5);
     assert.equal(json.frames.length, 5);
     assert.equal('time' in json.frames[0], false);
-    assert.deepEqual(json.frames[3], { index: 3, x: 40, y: 30, w: 40, h: 30, t: 0.3, duration: 0.1 });
+    // v0.14 起帧表多了 trim 矩形字段（不是随手加的）：`x/y/w/h` 仍是**格在图集里的位置**，
+    // `sx/sy/sw/sh` 是**内容在原帧坐标系里**的矩形，`trimmed` 标这一格是否真裁过。
+    // 这里注入的假画布读不到像素 → 不裁，四个字段就是「等价旧帧表」的默认值。
+    assert.deepEqual(json.frames[3], {
+        index: 3, x: 40, y: 30, w: 40, h: 30, t: 0.3, duration: 0.1,
+        sx: 0, sy: 0, sw: 40, sh: 30, trimmed: false,
+    });
+    // 分张清单也要在：单张时就是一项，与磁盘文件一一对应
+    assert.deepEqual(json.sheets, [{ file: 'sheet-1.png', width: 80, height: 90 }]);
     assert.equal(sheet.times.length, 5);
 });
 

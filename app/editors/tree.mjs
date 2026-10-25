@@ -7,6 +7,7 @@ import { treeOrder, isDescendantId } from './layers.mjs';
 import { treeZone } from '../core/layer-order.mjs';
 import { objectsOf } from '../core/cel.mjs';
 import { icon } from '../core/icons.mjs';
+import { clickIntent, rangeBetween } from '../core/selection.mjs';
 
 const INDENT = 12;                       // 每级缩进（契约 §5：12px/级）
 const MAX_DEPTH = 64;                    // 与 layers.mjs 的 MAX_TREE_DEPTH 同值，防脏数据成环
@@ -82,8 +83,34 @@ export function mount(el, ctx) {
         return names.length ? names.join(' › ') : '';
     }
 
-    function select(id) {
+    /** 当前多选集合（内存层，与叠放面板共用）。没有该接口时退化成空数组。 */
+    function selIds() {
+        if (typeof ctx.selectedLayers !== 'function') return [];
+        const v = ctx.selectedLayers();
+        return Array.isArray(v) ? v.map(String) : [];
+    }
+
+    /** 连选锚点：最后一次「单击」落下的一行；Shift+Alt 范围选择从这里量起。 */
+    let anchorId = null;
+    /** 这次拖拽是不是多选块：父子关系一次只能改一个对象，多选只提示、不动数据。 */
+    let dragMulti = false;
+
+    /** 行选择：单击独占、Shift/Ctrl 累加或移出、Shift+Alt 从锚点连选。 */
+    function select(id, ev) {
+        const all = objectsOf(ctx.doc() || {});
+        const order = all.map((l) => l.id);
+        const sels = selIds();
+        const intent = clickIntent(ev, sels.includes(id));
+        if (intent === 'ignore') return;
+        let next = sels;
+        if (intent === 'single' || intent === 'promote') next = [id];
+        else if (intent === 'add') next = sels.concat([id]);
+        else if (intent === 'remove') next = sels.filter((x) => x !== id);
+        else if (intent === 'range') next = rangeBetween(order, anchorId || id, id);
+        if (intent === 'single' || intent === 'promote' || intent === 'range') anchorId = id;
+        if (typeof ctx.setLayerSelection === 'function') ctx.setLayerSelection(next);
         if (typeof ctx.setSelection === 'function') ctx.setSelection({ id });
+        // 主键写在 setLayerSelection 之后，免得被它回退到集合首位
         if (typeof ctx.setActiveLayer === 'function') ctx.setActiveLayer(id);
     }
 
@@ -99,6 +126,7 @@ export function mount(el, ctx) {
         row.draggable = true;
         row.style.paddingLeft = 6 + Math.min(MAX_DEPTH, Math.max(0, depth)) * INDENT + 'px';
         if (layer.id === activeId()) row.classList.add('is-active');
+        if (selIds().includes(layer.id)) row.classList.add('is-sel');
 
         // 折叠箭头：只有「有子对象」的行才有，点它只切显示，不改文档
         if (kidCount > 0) {
@@ -152,13 +180,15 @@ export function mount(el, ctx) {
         const chain = chainText(layer, byId);
         row.title = (layer.name || layer.id) + (chain ? ' · 父链 ' + chain : ' · 顶层');
 
-        row.addEventListener('click', () => select(layer.id));
+        row.addEventListener('click', (e) => select(layer.id, e));
 
         // ── 拖拽：三区落点（Blender Outliner 手感）
         // 上缘 25% = 插到它上面（成为同一父级的兄弟）、下缘 25% = 插到下面、中间 50% = 成为它的子对象。
         // 落点非法时（拖进自己的子孙、拖到自身）只标红不拦事件 —— 指针不动，用户能自己看出来。
         row.addEventListener('dragstart', (e) => {
             dragId = layer.id;
+            const sels = selIds();
+            dragMulti = sels.length > 1 && sels.includes(layer.id);
             if (e.dataTransfer) {
                 e.dataTransfer.effectAllowed = 'move';
                 try { e.dataTransfer.setData('text/plain', layer.id); } catch (err) { /* 老浏览器忽略 */ }
@@ -196,10 +226,17 @@ export function mount(el, ctx) {
             e.stopPropagation();
             const from = dragId;
             const where = dropWhere || 'into';
+            const multi = dragMulti;
             dragId = null;
+            dragMulti = false;
             dropWhere = null;
             clearDropMarks();
             if (!from || from === layer.id) return;
+            // 父子关系一次只能改一个对象：多选块拖进树里只提示，绝不拿其中一行去改结构
+            if (multi) {
+                notify('父子关系一次只能改一个对象');
+                return;
+            }
             if (typeof ctx.moveSubtree === 'function') {
                 if (ctx.moveSubtree(from, { mode: where, targetId: layer.id }) === false) notify('移动失败');
             } else if (where === 'into') {
@@ -266,11 +303,16 @@ export function mount(el, ctx) {
     // 文档一变就重画（叠放/父子/增删都会走到这里）
     const off = typeof ctx.subscribeDoc === 'function' ? ctx.subscribeDoc(() => paint()) : () => {};
 
+    // 多选集合是内存层（不进文档、不进撤销）：集合一变就重画一遍点亮态
+    const onSelChange = () => paint();
+    if (typeof document !== 'undefined') document.addEventListener('ms:layer-selection', onSelChange);
+
     el.appendChild(root);
     return {
         refresh: paint,
         destroy: () => {
             off();
+            if (typeof document !== 'undefined') document.removeEventListener('ms:layer-selection', onSelChange);
             root.remove();
         },
     };

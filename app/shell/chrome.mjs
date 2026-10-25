@@ -236,8 +236,30 @@ export function buildStatusbar(host, api) {
     host.textContent = '';
     const left = el('span', 'stb-left', '');
     const right = el('span', 'stb-right', '');
+    // 多选读数：复用 .stb-right 的样式（不新增 CSS），只在选中多于 1 个对象时出现。
+    // 走事件而不是读 ctx —— 选择集合是各面板的内部状态，状态栏只订阅结果、不持有它。
+    const selCount = el('span', 'stb-right stb-sel', '');
+    // 关键帧读数：同一族的 ms:key-selection，由 timeline-keys.mjs 广播
+    const keySel = el('span', 'stb-right stb-keysel', '');
     host.appendChild(left);
+    host.appendChild(keySel);
+    host.appendChild(selCount);
     host.appendChild(right);
+
+    const onSel = (e) => {
+        const ids = e && e.detail && Array.isArray(e.detail.ids) ? e.detail.ids : [];
+        selCount.textContent = ids.length > 1 ? '已选 ' + ids.length + ' 个对象' : '';
+    };
+    if (typeof document !== 'undefined') document.addEventListener('ms:layer-selection', onSel);
+
+    const onKeySel = (e) => {
+        const d = (e && e.detail) || {};
+        const n = Number(d.count) || 0;
+        const t = Number(d.primaryT);
+        keySel.textContent =
+            n > 1 ? '已选 ' + n + ' 颗 · 主键 t=' + (Number.isFinite(t) ? t.toFixed(2) : '—') + ' s' : '';
+    };
+    if (typeof document !== 'undefined') document.addEventListener('ms:key-selection', onKeySel);
 
     return {
         setLeft(t) {
@@ -247,5 +269,11 @@ export function buildStatusbar(host, api) {
             right.textContent = t == null ? '' : String(t);
         },
         el: host,
+        destroy() {
+            if (typeof document !== 'undefined') {
+                document.removeEventListener('ms:layer-selection', onSel);
+                document.removeEventListener('ms:key-selection', onKeySel);
+            }
+        },
     };
 }

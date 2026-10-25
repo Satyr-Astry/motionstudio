@@ -84,7 +84,6 @@ input.lyr-rename,
 /* —— 浮层：6px 圆角 + 统一描边与投影 —— */
 .curve-pop,
 .curve-menu,
-.curve-tip,
 .cv-ob-menu,
 .cv-objectbar,
 .lyr-tp,
@@ -1310,12 +1309,25 @@ input.lyr-rename {
 
 .curve-plot { display: block; }
 
-.curve-tip {
-    position: absolute; z-index: 5;
-    pointer-events: none; padding: 2px 6px;
-    font-size: 11px; line-height: 1.5; color: var(--ink); background: rgba(20, 21, 24, .94);
+/* 拖动读数浮层：时间轴与曲线共用（editors/drag-tip.mjs）。
+   刻意 position:fixed —— 拖到时间轴最右 / 最下时要能跑出面板，位置由 JS 夹在视口内。
+   z-index 40 压住面板内浮层（5/8），低于模态（9999）。 */
+.drag-tip {
+    position: fixed; top: 0; left: 0; z-index: 40;
+    pointer-events: none; padding: 3px 7px;
+    display: inline-flex; align-items: baseline; gap: 4px;
+    font-size: 11px; line-height: 1.45; color: var(--ink);
+    background: rgba(20, 21, 24, .96);
+    border: 1px solid var(--line-2); border-radius: var(--r-pop);
+    box-shadow: var(--shadow-pop);
     font-variant-numeric: tabular-nums; white-space: nowrap;
+    will-change: transform;
 }
+
+.drag-tip[hidden] { display: none; }
+.drag-tip-suffix { color: var(--danger); }
+.drag-tip-suffix:empty { display: none; }
+.drag-tip-suffix::before { content: '· '; color: var(--ink-faint); }
 
 .curve-menu {
     position: absolute; z-index: 8; display: flex; flex-direction: column; min-width: 104px;
@@ -2039,6 +2051,22 @@ input.tline-total {
     outline-offset: 1px;
     opacity: 0.75;
     cursor: grabbing;
+}
+
+/* 拖动冲突预警（editors/timeline-keys.mjs 的 markConflict）：
+   .is-blocked = 目标时刻被别的键占着，松手时这颗会被跳过；.is-merge-target = 会合并过去。
+   用 danger 描边 + inset 光，不去动 .is-drag 的 opacity —— 那里 45%/75% 说的是「正在搬的那颗」，
+   两个语义混在一起会让用户以为手抖了。 */
+.tline-kf.is-blocked {
+    outline: 1px dashed var(--danger);
+    outline-offset: 1px;
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--danger) 60%, transparent);
+}
+
+.tline-kf.is-merge-target {
+    outline: 1px dashed var(--danger);
+    outline-offset: 1px;
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--danger) 35%, transparent);
 }
 
 /* v10：纹理库（.lyr-cels / .lyr-cel*）随纹理搬家一起下线 —— 纹理编辑在属性面板「纹理」组（prop-textures.mjs + textures.css）。 */

@@ -38,6 +38,11 @@ const HOST_CLASS = 'cv-host';
 const GIZMO_CLASS = 'cv-gizmo';
 const ACCENT = '#4a7dff';
 
+/** 把影响范围圈夹在对象的参数空间里（圈外没有几何可影响） */
+function clamp01(v) {
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
 let hostEl = null;          // 全局唯一宿主
 let attached = false;       // 引擎只 attach 一次，detach 由外壳决定
 
@@ -332,6 +337,36 @@ export function mount(el, ctx) {
                 g.rect(s.x - HANDLE_PX + 1.5, s.y - HANDLE_PX + 1.5, (HANDLE_PX - 1.5) * 2, (HANDLE_PX - 1.5) * 2);
                 g.fill();
                 g.stroke();
+            }
+
+            // 软拖预览：把这次拖动的影响范围画出来（参数空间椭圆 → lat.map → 屏幕）。
+            // 走 lat.map 而不是像素矩形，旋转与已有变形都自动跟随。
+            const pvSoft = typeof input.previewSoftDrag === 'function' ? input.previewSoftDrag() : null;
+            if (pvSoft && pvSoft.elId === el.id) {
+                const STEPS = 64;
+                g.save();
+                g.strokeStyle = 'rgba(255,212,121,0.9)';
+                g.lineWidth = 1.5;
+                g.setLineDash([5, 4]);
+                g.beginPath();
+                for (let i = 0; i <= STEPS; i++) {
+                    const a = (i / STEPS) * Math.PI * 2;
+                    // 夹到 [0,1]：圈外的参数空间没有几何可影响，画到对象外面只会误导
+                    const su = clamp01(pvSoft.u + Math.cos(a) * pvSoft.radiusX);
+                    const sv = clamp01(pvSoft.v + Math.sin(a) * pvSoft.radiusY);
+                    const s = toScreenArr(lat.map(su, sv));
+                    if (i === 0) g.moveTo(s.x, s.y);
+                    else g.lineTo(s.x, s.y);
+                }
+                g.stroke();
+                g.setLineDash([]);
+                // 拖动点：一个小实心圆，告诉用户「鼓包鼓在这里」
+                const dot = toScreenArr(lat.map(pvSoft.u, pvSoft.v));
+                g.fillStyle = '#ffd479';
+                g.beginPath();
+                g.arc(dot.x, dot.y, 3, 0, Math.PI * 2);
+                g.fill();
+                g.restore();
             }
             g.strokeStyle = ACCENT;
             g.lineWidth = 1;

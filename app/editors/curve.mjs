@@ -20,6 +20,7 @@ import {
     channelOf, clearChannel, setChannelKey, removeChannelKey, setChannelKeyEase,
 } from '../core/transform.mjs';
 import { icon } from '../core/icons.mjs';
+import { clickIntent } from '../core/selection.mjs';
 import { normalizeLattice, latticeIsZero } from '../core/lattice.mjs';
 import { patchLayer, layerById, celTimes, objectsOf } from '../core/cel.mjs';
 import {
@@ -32,6 +33,7 @@ import { resizeCanvas, beginFrame, paintCanvas } from './curve-draw.mjs';
 // 曲线里「拖出来/打出来的时刻」也要落在整帧上，否则时间轴帧带里对不上位置
 import { snapForDrag } from './timeline-geo.mjs';
 import { snapOnNow } from './timeline-keys.mjs';
+import { hideTip, showTip } from './drag-tip.mjs';
 
 /**
  * `focusChannel` 的判定部分：只回答「这条通道 + 这个时刻能不能定位」，
@@ -128,10 +130,8 @@ export function mount(el, ctx) {
     cv.className = 'curve-plot';
     wrap.appendChild(cv);
 
-    const tip = document.createElement('div');
-    tip.className = 'curve-tip';
-    tip.hidden = true;
-    wrap.appendChild(tip);
+    // 读数浮层改为与时间轴共用 editors/drag-tip.mjs（常驻 document.body，视口内夹取），
+    // 这里不再自带 .curve-tip 节点。
 
     root.append(bar, pop, wrap);
     el.appendChild(root);
@@ -145,12 +145,20 @@ export function mount(el, ctx) {
     let selKeys = [];         // 多选：[{ layerId, chId, index, part }]
     let sel = null;           // primary（最后点中的那个），切线柄与提示条只跟它走
 
+    /** 同一个曲线点（通道 + 下标 + 部位）。选择集与命中测试共用同一判等，避免两处口径漂移。 */
+    const sameKey = (a, b) => !!a && !!b && a.layerId === b.layerId && a.chId === b.chId
+        && a.index === b.index && a.part === b.part;
+
+    /** 这个点现在是否已在选择集里（clickIntent 需要它来区分累加与移出）。 */
+    function isSelKey(hit) {
+        return !!hit && selKeys.some((s) => sameKey(s, hit));
+    }
+
     /** 统一的选择入口：additive 为真时切换该点，否则独占。 */
     function setSel(hit, additive) {
         if (!hit) { selKeys = []; sel = null; return; }
-        const same = (a, b) => a.layerId === b.layerId && a.chId === b.chId && a.index === b.index && a.part === b.part;
         if (additive) {
-            const at = selKeys.findIndex((s) => same(s, hit));
+            const at = selKeys.findIndex((s) => sameKey(s, hit));
             if (at >= 0) { selKeys.splice(at, 1); sel = selKeys[selKeys.length - 1] || null; return; }
         } else {
             selKeys = [];
@@ -576,9 +584,11 @@ export function mount(el, ctx) {
         const hit = hitTest(x, y);
         if (!hit) {
             // 空白处按下先起框；没拖动就松手 = 点空白（移播放头 + 清选中）
-            marquee = { x0: x, y0: y, x1: x, y1: y, additive: ev.shiftKey, moved: false };
+            // 框选追加：Shift 或 Ctrl/Cmd 拖都是「加进来」而不是「换成这批」（与时间轴一致）
+            const additive = !!(ev.shiftKey || ev.ctrlKey || ev.metaKey);
+            marquee = { x0: x, y0: y, x1: x, y1: y, additive, moved: false };
             // 新起一次框选：不是叠加模式就先把旧选择清掉（否则框了个空的反而留着上一次的点）
-            if (!ev.shiftKey) setSel(null);
+            if (!additive) setSel(null);
             try {
                 cv.setPointerCapture(ev.pointerId);
             } catch (err) {
@@ -588,7 +598,17 @@ export function mount(el, ctx) {
             return;
         }
         ev.preventDefault();
-        setSel(hit, ev.shiftKey);
+        // 与时间轴同一套语义（core/selection.mjs 的 clickIntent）：
+        //   单击=只选它 / Shift 或 Ctrl+点=累加，再点移出 / Shift+Alt+点=连选
+        // 曲线的「连选」没有线性顺序（一个通道一条曲线，跨通道怎么连没有公认答案），
+        // 所以 range 在这里退化成独占 —— 时间轴那边的连选是真连选，别把两边当同一件事。
+        const intent = clickIntent({
+            shiftKey: ev.shiftKey, ctrlKey: ev.ctrlKey, metaKey: ev.metaKey, altKey: ev.altKey, button: ev.button,
+        }, isSelKey(hit));
+        if (intent === 'ignore') return;
+        if (intent === 'add' || intent === 'remove') setSel(hit, true);
+        else if (intent === 'promote') sel = hit; // 已在集合里：只挪主选中，不动集合
+        else setSel(hit, false);
         const { layer, keys } = keysNow();
         // 拖动期间的值域 = 按下这一刻屏幕上的值域（drag.frozen 交给 computeRange 复用）
         const frozen = { vMin: geo.vMin, vMax: geo.vMax, ranges: geo.ranges };
@@ -640,12 +660,14 @@ export function mount(el, ctx) {
             if (hit) {
                 const { keys } = keysNow();
                 const k = keys[hit.index];
-                tip.hidden = false;
-                tip.textContent = 't = ' + fmt2(k.t) + ' s · ' + EASE_LABEL[k.ease] + (k.ease === 'bezier' ? ' · h1[' + fmt2(k.h1[0]) + ', ' + fmt2(k.h1[1]) + '] h2[' + fmt2(k.h2[0]) + ', ' + fmt2(k.h2[1]) + ']' : '');
-                tip.style.left = Math.round(x + 12) + 'px';
-                tip.style.top = Math.round(y + 10) + 'px';
+                // 读数浮层与时间轴共用一份实现（editors/drag-tip.mjs），不再自带 .curve-tip
+                showTip({
+                    x: ev.clientX + 14,
+                    y: ev.clientY + 18,
+                    text: 't = ' + fmt2(k.t) + ' s · ' + EASE_LABEL[k.ease] + (k.ease === 'bezier' ? ' · h1[' + fmt2(k.h1[0]) + ', ' + fmt2(k.h1[1]) + '] h2[' + fmt2(k.h2[0]) + ', ' + fmt2(k.h2[1]) + ']' : ''),
+                });
             } else {
-                tip.hidden = true;
+                hideTip();
             }
             return;
         }
@@ -716,7 +738,7 @@ export function mount(el, ctx) {
             if (!dup && selKeys.length < 2000) selKeys.push(hit);
         }
         sel = selKeys[selKeys.length - 1] || null;
-        if (picked.length) notify('框选 ' + picked.length + ' 个关键帧');
+        if (picked.length) notify('框选 ' + picked.length + ' 颗关键帧');
         paint();
     }
 
@@ -838,7 +860,7 @@ export function mount(el, ctx) {
             return list.reduce((acc, i) => removeKey(acc, i), trk);
         });
         setSel(null);
-        notify('已删除 ' + list.length + ' 个关键帧');
+        notify('已删除 ' + list.length + ' 颗关键帧');
     }
 
     /** 菜单项「回到共用」：删掉该通道的独立轨道。 */
@@ -928,7 +950,7 @@ export function mount(el, ctx) {
             selKeys = [];
             for (let i = 0; i < keys.length; i += 1) selKeys.push({ layerId: layer.id, chId: ch.id, index: i, part: 'key' });
             sel = selKeys[selKeys.length - 1] || null;
-            notify('已选中 ' + selKeys.length + ' 个关键帧');
+            // 报数只由时间轴负责（同屏时两边都响应 Ctrl+A，各报一条会盖成两条）
             paint();
             return;
         }
@@ -941,6 +963,30 @@ export function mount(el, ctx) {
             const idxs = selectionIndexes(selKeys, layer.id);
             if (!idxs.length) return;
             removeKeysOn(layer.id, chId, idxs);
+            paint();
+            return;
+        }
+        // Alt+A：取消全部（与上面的 Ctrl+A 全选成对，Blender 同款）
+        if (ev.altKey && !ev.ctrlKey && !ev.metaKey && (ev.key === 'a' || ev.key === 'A')) {
+            ev.preventDefault();
+            setSel(null);
+            paint();
+            return;
+        }
+        // Ctrl+I：反选 —— 聚焦通道上「还没被选中」的关键帧全部选上
+        if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'i' || ev.key === 'I')) {
+            const { layer, keys } = keysNow();
+            const ch = chById(focus);
+            if (!layer || !ch || !keys.length) return;
+            ev.preventDefault();
+            const next = [];
+            for (let i = 0; i < keys.length; i += 1) {
+                const hit = { layerId: layer.id, chId: ch.id, index: i, part: 'key' };
+                if (!isSelKey(hit)) next.push(hit);
+            }
+            selKeys = next;
+            sel = next[next.length - 1] || null;
+            // 同上：选择集照改，报数交给时间轴（它读的是全片关键帧，文案统一用「颗」）
             paint();
             return;
         }
