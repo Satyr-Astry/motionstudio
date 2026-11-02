@@ -1,4 +1,40 @@
-## v0.6.3 — 2026-11-03 · 时间轴上分得清「通道键」和「共用关键帧」（待修清单 B1）
+## v0.6.4 — 2026-11-03 · 大项目保存/打开少做一半的位图工作（待修清单 C1 的可行部分）
+
+C1 记的是「几百 MB 素材的项目打开/保存明显变慢」。数据格式级的大改（二进制容器、全量外置）代价高、风险和兼容性都要重估，所以这一版先做**不换格式就能拿到**的两处：
+
+### 保存：位图从「编码两遍」变成「编码一遍」
+
+之前 Ctrl+S 在项目绑定了 `.msp` 时：
+1. `store.makeRecord({doc})` → `docToJSON`（每张位图一次 `toDataURL`）；
+2. `writeBackProjectFile` → `projectFilePayload` → `store.docToFile` → **又** `docToJSON`（每张位图再编码一次）。
+
+`toDataURL` 是保存路径上最贵的一步。现在 `saveProject` / `autoSaveProject` 先 `serializeCurrentDoc()` 一次拿到文档节点，再派生「库信封」（进库记录 / 版本快照）与「扁平 `.msp` 文件」（回写），位图编码次数**减半**：
+
+| | 改前 | 改后 |
+|---|---|---|
+| 12 张 900×640 位图的项目，Ctrl+S（已绑定文件） | 24 次 `toDataURL` | **12 次** |
+| 同一批保存的时间戳 | 记录 / 文件各取一次 `Date.now()` | 共用同一个 `now`（版本快照也对齐） |
+
+- `store.makeRecord` 新增可注入的 `docJson` / `project` / `savedAt` / `bytes`（不传时行为与以前完全一致，其它调用点零改动）；新增纯函数 `store.fileNodeOf(docJson, meta)`（与 `docToFile` 同形状、但不重新编码位图，`docToFile` 自己也改为复用 它）。
+- `writeBackProjectFile(label, file, { json })` 接受调用方已经序列化好的 JSON；不传时仍走原来的 `projectFilePayload` 路径（「存为文件」对话框路径不受影响）。
+
+### 打开：assets 并行解码
+
+`decodeAssets` 以前逐个 `await` 解码，打开一个 12 张图的项目 ≈ 12 倍单张解码时间。这些解码彼此独立（`cache` 只按 key 存结果），现在一起提交给浏览器的解码器：
+
+- 模拟 12 张 × 20ms 解码延迟：`jsonToDoc` **29.8ms**（≈ 最慢一张 + 调度），串行理论值 240ms。
+- 单张解码失败仍是 `null`，不影响其它图；`Map` 的写入顺序仍按原始 key（后续按 key 查，不依赖顺序）。
+
+### 验证
+
+`npm test` **1702 / 1695 pass / 7 skipped / 0 fail**（120 个测试文件）；`npm run check` 五道门全绿（静态 105 模块 0/0/0 · 语法 109/109 · 分层 0 违规 · 文档基线一致 · 本地化 129 条待迁未增加、词典 1466/1466 镜面）；`npm run smoke` 15/15 编辑器、`PROBLEMS []`。测试钉住：注入 `docJson/project/bytes` 与老路径派生字段一致、`fileNodeOf` 与 `docToFile` 输出逐字段相同、保存路径不再调 `docToFile`（源码守卫）、并行解码最大并发 > 1。
+
+### 需要知道的
+
+- **没换数据格式**：`.msp` 仍是 v4、位图仍内联 dataURL。所以「几百 MB 级素材」的根因（base64 膨胀 4/3 + 一次性 JSON）仍在，C1 只算**部分根治**；真要大改需要二进制容器/全量外置，属另一次设计。
+- 保存路径现在**依赖一次 `docToJSON` 的节点被两处复用**：以后若有人给 `makeRecord` 传 `project` 却不同时给 `docJson`，派生字段会缺 —— 传参约定写在函数注释里，测试也钉了。
+- 并行解码的并发度没有做上限（同时 <= 图片张数）；超大项目若出现解码内存尖峰，再加一个分批上限（例如每批 8 张）。
+
 
 待修清单 B1 记的是：数据模型里「共用关键帧」（`transform.keys`，一颗键携带全部通道）与「通道独立键」（`transform.channels[field].keys`，只在某个通道上打）是两层东西，但时间轴画出来都是菱形，用户看不出哪颗是哪颗、属于哪个通道。
 

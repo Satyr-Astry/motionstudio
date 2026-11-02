@@ -584,6 +584,23 @@ export function docToJSON(doc) {
 export function docToFile(doc, meta) {
     const node = docToJSON(doc);
     if (!node) return null;
+    return fileNodeOf(node, meta);
+}
+
+/**
+ * 文档节点 → 扁平 `.msp` 文件节点（C1）。
+ *
+ * 与 `docToFile` 的唯一区别：**不再自己编码位图**。`docToFile` 拿到文档后要过一遍
+ * `docToJSON`（每张位图一次 `toDataURL`，保存路径上最贵的一步）；而 `saveProject`
+ * 为了「入库 bytes」和「回写文件」各需要一份，以前等于把位图编码两次。
+ * 现在调用方先 `docToJSON` 一次，再用这个函数把同一份节点包成文件形状。
+ *
+ * @param {object|null} docJson `docToJSON` 的返回值
+ * @param {{name?:string,savedAt?:number}} [meta]
+ * @returns {object|null} 扁平文件（format/version/elements/assets 平铺在顶层）
+ */
+export function fileNodeOf(docJson, meta) {
+    if (!docJson || typeof docJson !== 'object' || Array.isArray(docJson)) return null;
     const m = meta || {};
     const name = String(m.name == null ? '' : m.name).trim() || '未命名项目';
     return Object.assign(
@@ -593,7 +610,7 @@ export function docToFile(doc, meta) {
             name: name,
             savedAt: Number.isFinite(m.savedAt) ? m.savedAt : Date.now(),
         },
-        node
+        docJson
     );
 }
 
@@ -821,16 +838,28 @@ function docShell(node, objects, opts) {
     return doc;
 }
 
-/** assets → 位图：key 可以是对象 id（v2 assets），也可以是 `对象id#2`（v4 多张图）。 */
+/**
+ * assets → 位图：key 可以是对象 id（v2 assets），也可以是 `对象id#2`（v4 多张图）。
+ *
+ * **并行解码（C1）**：项目里有十几张 900×640 的位图时，串行 `await` 每一张意味着
+ * 打开时间 ≈ 每张解码时间之和；这些解码彼此独立（各自产出自己的 bitmap，`cache`
+ * 只按 key 存结果、不做跨图依赖），所以用 `Promise.all` 一起提交给浏览器的解码器，
+ * 打开大项目的耗时从「N × 单张」降到「≈ 最慢那一张」。
+ *
+ * 失败语义不变：单张解不出来就是 `null`（`bitmapFromJSON` 自己吞错），不影响别的图；
+ * 写入 `out` 的顺序仍按原始 key 顺序（Map 顺序稳定，后续按 key 查，不依赖它）。
+ */
 async function decodeAssets(node, dims, cache) {
     const rawAssets = node.assets && typeof node.assets === 'object' ? node.assets : {};
     const out = new Map();
-    for (const key of Object.keys(rawAssets)) {
-        const url = rawAssets[key];
-        if (typeof url !== 'string' || !url) continue;
-        const d = dims.get(key) || {};
-        out.set(key, await bitmapFromJSON({ w: d.w, h: d.h, dataUrl: url }, cache));
-    }
+    const keys = Object.keys(rawAssets).filter((key) => typeof rawAssets[key] === 'string' && rawAssets[key]);
+    const bitmaps = await Promise.all(
+        keys.map((key) => {
+            const d = dims.get(key) || {};
+            return bitmapFromJSON({ w: d.w, h: d.h, dataUrl: rawAssets[key] }, cache);
+        })
+    );
+    keys.forEach((key, i) => out.set(key, bitmaps[i]));
     return out;
 }
 
@@ -1126,13 +1155,19 @@ export function normalizeTags(raw) {
  */
 export function makeRecord(spec) {
     const s = spec || {};
-    const doc = s.doc;
-    const docJson = docToJSON(doc);
+    const docJson = s.docJson || docToJSON(s.doc);
     const name = String(s.name == null ? '' : s.name).trim() || '未命名项目';
-    const savedAt = Date.now();
+    // 保存时刻可注入（C1）：saveProject 需要让「库记录 / 版本快照 / 回写文件」共用同一个
+    // savedAt，否则同一批保存出来的三份时间戳会差几毫秒，对账时看起来像三次保存。
+    const stamp = Number(s.savedAt);
+    const savedAt = Number.isFinite(stamp) && stamp > 0 ? stamp : Date.now();
     const openedRaw = Number(s.openedAt);
     const openedAt = Number.isFinite(openedRaw) && openedRaw > 0 ? openedRaw : savedAt;
-    const project = { format: FORMAT, version: VERSION, name: name, savedAt: savedAt, doc: docJson };
+    // 也可直接注入已建好的信封（C1）：saveProject 只编码一次位图，然后同一条信封
+    // 既进库记录、又进版本快照，避免第二次 docToJSON。
+    const project = s.project && typeof s.project === 'object'
+        ? s.project
+        : { format: FORMAT, version: VERSION, name: name, savedAt: savedAt, doc: docJson };
     const elementCount = docJson && Array.isArray(docJson.elements) ? docJson.elements.length : 0;
     const times = new Set();
     for (const el of (docJson && docJson.elements) || []) {
@@ -1154,10 +1189,16 @@ export function makeRecord(spec) {
         project: project,
         bytes: 0,
     };
-    try {
-        rec.bytes = JSON.stringify(project).length;
-    } catch (err) {
-        rec.bytes = 0;
+    const bytesIn = Number(s.bytes);
+    if (Number.isFinite(bytesIn) && bytesIn > 0) {
+        // 调用方已经为同一份信封 stringify 过（用于回写文件/版本），不要再序列化一次
+        rec.bytes = bytesIn;
+    } else {
+        try {
+            rec.bytes = JSON.stringify(project).length;
+        } catch (err) {
+            rec.bytes = 0;
+        }
     }
     return rec;
 }

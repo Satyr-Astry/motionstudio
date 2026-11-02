@@ -410,17 +410,18 @@ test('源码守卫：saveProject 的回写分支与自动保存的回写路都�
     const io = read('../app/shell/project-io.mjs');
     const body = io.slice(io.indexOf('async function saveProject('), io.indexOf('async function writeProjectFile'));
     assert.match(body, /const file = String\(project\.file \|\| ''\);/, '回写目标必须取 project.file');
-    assert.match(body, /if \(file\) return|const back = file \? await writeBackProjectFile/, '只有绑定了文件才回写');
-    assert.match(body, /writeBackProjectFile\(label, file\)/, '回写走无对话框通道');
+    assert.match(body, /const back = file[\s\S]{0,220}writeBackProjectFile\(label, file, \{ json:/, '绑定文件才回写，且复用同一份序列化结果');
+    assert.match(body, /writeBackProjectFile\(label, file, \{ json:/, '回写走无对话框通道并带上已序列化的 json');
     assert.match(body, /saveFlash\(\{ label: label, file: file, back: back \}\)/, '三种结局的提示统一由 saveFlash 决定');
     assert.match(body, /flash\(out\.text, out\.level\)/, '提示要带档位（error 会长留）');
-    // 回写用的必须是和「另存为」同一份序列化
+    // 回写用的必须是和「另存为」同一份序列化（C1 之后改为调用方传入同一份节点）
     const wb = io.slice(io.indexOf('async function writeBackProjectFile'), io.indexOf('async function saveProject('));
-    assert.match(wb, /JSON\.stringify\(await projectFilePayload\(label\)\)/, '回写必须复用 projectFilePayload');
+    assert.match(wb, /JSON\.stringify\(await projectFilePayload\(label\)\)/, '不传 json 时回写仍复用 projectFilePayload');
+    assert.match(wb, /typeof o\.json === 'string' \? o\.json : ''/, '传了 json 就直接用（不再第二次编码位图）');
     assert.match(wb, /ipc\.saveProjectTo\(file, json\)/, '回写走 ms:save-project-to 通道，不重弹对话框');
     assert.match(wb, /if \(!out\.file\)/, '回了成功却没给路径时不能签收');
     const auto = io.slice(io.indexOf('export async function autoSaveProject'));
-    assert.match(auto, /writeBackProjectFile\(name, file\)/, '自动保存也要回写绑定文件（否则库有底、文件还是旧的）');
+    assert.match(auto, /writeBackProjectFile\(name, file, \{ json:/, '自动保存也要回写绑定文件（否则库有底、文件还是旧的）');
     assert.match(auto, /if \(file && !back\.ok\) flash\(saveFlash\(/, '自动保存回写失败必须用错误档说出来');
 });
 
@@ -1105,4 +1106,35 @@ test('源码守卫：openHistory 两级确认，restoreVersion 先存当前再�
     assert.match(restore, /updateChrome\(\)/);
     assert.match(restore, /notifyProjects\(\)/);
     assert.match(io, /history: \(id\) => openHistory\(id\)/, 'projectApi 必须挂 history（面板照名字调）');
+});
+
+/* ─────── C1：保存路径只序列化文档一次（库记录 / 版本快照 / 回写文件共用同一份节点） ─────── */
+
+test('C1 源码守卫：saveProject / autoSaveProject 只 docToJSON 一次，回写复用同一份节点', () => {
+    const io = read('../app/shell/project-io.mjs');
+    const saveStart = io.indexOf('async function saveProject');
+    const saveEnd = io.indexOf('async function writeProjectFile');
+    assert.ok(saveStart > 0 && saveEnd > saveStart, '找不到 saveProject 区段');
+    const save = io.slice(saveStart, saveEnd);
+
+    assert.match(save, /serializeCurrentDoc\(label, now\)/, '保存必须先走一次 serializeCurrentDoc');
+    assert.match(save, /docJson: nodes \? nodes\.docJson : undefined/, 'makeRecord 要吃已编码的 docJson');
+    assert.match(save, /project: nodes \? nodes\.envelope : undefined/, '信封也要复用（版本快照读它）');
+    assert.match(save, /fileJsonOf\(nodes\.docJson, label, now\)/, '回写文件复用同一份节点');
+    assert.ok(!/docToFile|projectFilePayload\(/.test(save), '保存路径不能再走 docToFile / projectFilePayload（第二次编码位图）');
+
+    const autoStart = io.indexOf('export async function autoSaveProject');
+    assert.ok(autoStart > 0, '找不到 autoSaveProject');
+    const auto = io.slice(autoStart);
+    assert.match(auto, /serializeCurrentDoc\(name, now\)/, '自动保存同样只序列化一次');
+    assert.match(auto, /fileJsonOf\(nodes\.docJson, name, now\)/);
+    assert.ok(!/docToFile|projectFilePayload\(/.test(auto), '自动保存不能第二次编码位图');
+
+    // 回写函数保留兼容分支：不传 json 时仍自己序列化（「存为文件」路径不变）
+    assert.match(io, /async function writeBackProjectFile\(label, file, opts\)/);
+    assert.match(io, /typeof o\.json === 'string' \? o\.json : ''/, '写入前先认调用方给的 json');
+    // 同一批保存里三处时间戳共用 now（记录 savedAt / 版本 savedAt / 文件 savedAt）
+    assert.match(save, /const now = Date\.now\(\);/);
+    assert.match(save, /savedAt: now/, '记录 savedAt 用注入时刻');
+    assert.match(save, /fileJsonOf\(nodes\.docJson, label, now\)/, '文件 savedAt 用同一个 now');
 });

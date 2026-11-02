@@ -914,12 +914,15 @@ export function saveFlash(r) {
  * @param {string} file 已绑定的绝对路径
  * @returns {Promise<{ok:true,file:string}|{ok:false,unsupported?:true,error?:string}>}
  */
-async function writeBackProjectFile(label, file) {
-    let json = '';
-    try {
-        json = JSON.stringify(await projectFilePayload(label));
-    } catch (err) {
-        return { ok: false, error: t('shell.saveFile.serializeFailed') };
+async function writeBackProjectFile(label, file, opts) {
+    const o = opts && typeof opts === 'object' ? opts : {};
+    let json = typeof o.json === 'string' ? o.json : '';
+    if (!json) {
+        try {
+            json = JSON.stringify(await projectFilePayload(label));
+        } catch (err) {
+            return { ok: false, error: t('shell.saveFile.serializeFailed') };
+        }
     }
     if (!ipc.available()) return { ok: false, unsupported: true };
     let out = null;
@@ -959,6 +962,32 @@ async function pushVersionQuietly(rec) {
 }
 
 /**
+ * 当前文档一次序列化（C1）：`docToJSON` 每张位图一次 `toDataURL`，是保存路径上最贵的一步。
+ *
+ * saveProject / autoSaveProject 以前为了「入库 bytes」与「回写文件」各调一次 `docToJSON`，
+ * 大项目等于把所有位图编码两遍。现在两条路径都先走这里一次，拿到同一个文档节点，
+ * 再分别包成「库信封」（进记录/版本）与「扁平文件」（回写 .msp）。
+ *
+ * @param {string} label 项目名
+ * @param {number} savedAt 保存时刻（三处共用，避免时间戳不一致）
+ * @returns {{docJson:object,envelope:object}|null} 文档无效时 null
+ */
+function serializeCurrentDoc(label, savedAt) {
+    const docJson = store.docToJSON(state.doc);
+    if (!docJson) return null;
+    return {
+        docJson: docJson,
+        envelope: { format: store.FORMAT, version: store.VERSION, name: label, savedAt: savedAt, doc: docJson },
+    };
+}
+
+/** 同一份文档节点 → 扁平 `.msp` JSON 字符串（回写用；不再重新编码位图）。 */
+function fileJsonOf(docJson, label, savedAt) {
+    const node = store.fileNodeOf(docJson, { name: label, savedAt: savedAt });
+    return node ? JSON.stringify(node) : '';
+}
+
+/**
  * 保存到项目库（无对话框，立即生效）。
  * 命名规则：显式 name > 当前项目名 > 弹一次内联输入框（问一次，取消就放弃）。
  * 两者并存：项目库 = 草稿箱，`.msp` 文件 = 正式交付 —— 所以入库成功后，**若已绑定文件
@@ -978,10 +1007,16 @@ async function saveProject(name) {
     }
     saveBusy = true;
     try {
+        const now = Date.now();
+        const nodes = serializeCurrentDoc(label, now);
         const rec = store.makeRecord({
             id: project.id || '',
             name: label,
-            doc: doc,
+            // C1：节点已序列化过就不再传 doc，makeRecord 不会重复编码位图
+            docJson: nodes ? nodes.docJson : undefined,
+            project: nodes ? nodes.envelope : undefined,
+            doc: nodes ? undefined : doc,
+            savedAt: now,
             thumb: frameThumb(doc),
             file: project.file || '',
             // 保存不改「最近打开」：沿用打开时记下的值（没有就交给 makeRecord 退回 savedAt）
@@ -998,8 +1033,11 @@ async function saveProject(name) {
         await pushVersionQuietly({ id: project.id, name: label, savedAt: savedAtMs, project: rec.project });
         // 两者并存：库是草稿箱、.msp 是交付物。绑定过文件就必须同时回写，
         // 否则「已保存」只对了一半，磁盘上那份还是旧内容（交接文档 §3.3 bug 2）。
+        // C1：回写复用同一份文档节点（只做一次 JSON.stringify 成扁平文件），不再重新编码位图。
         const file = String(project.file || '');
-        const back = file ? await writeBackProjectFile(label, file) : { ok: true };
+        const back = file
+            ? await writeBackProjectFile(label, file, { json: nodes ? fileJsonOf(nodes.docJson, label, now) : '' })
+            : { ok: true };
         const out = saveFlash({ label: label, file: file, back: back });
         flash(out.text, out.level);
         updateChrome();
@@ -2829,10 +2867,16 @@ export async function autoSaveProject() {
             }
             return true;
         }
+        const now = Date.now();
+        const nodes = serializeCurrentDoc(name, now);
         const rec = store.makeRecord({
             id: project.id || '',
             name,
-            doc,
+            // C1：与 saveProject 同一条单次序列化路径（位图只编码一次）
+            docJson: nodes ? nodes.docJson : undefined,
+            project: nodes ? nodes.envelope : undefined,
+            doc: nodes ? undefined : doc,
+            savedAt: now,
             thumb: frameThumb(doc),
             file: project.file || '',
             // 自动保存也不该刷新「最近打开」
@@ -2850,7 +2894,9 @@ export async function autoSaveProject() {
         // 用户关掉窗口后打开 .msp 会少掉最后一次自动保存的内容（与 §3.3 bug 2 同一种骗法）。
         // 成功时沿用「已自动保存」那句（每 N 秒刷一条长句太吵），失败必须用错误档说出来。
         const file = String(project.file || '');
-        const back = file ? await writeBackProjectFile(name, file) : { ok: true };
+        const back = file
+            ? await writeBackProjectFile(name, file, { json: nodes ? fileJsonOf(nodes.docJson, name, now) : '' })
+            : { ok: true };
         if (file && !back.ok) flash(saveFlash({ label: name, file: file, back: back }).text, 'error');
         else flash(t('shell.autosave.done', { name }));
         updateChrome();

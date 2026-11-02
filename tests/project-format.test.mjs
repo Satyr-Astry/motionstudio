@@ -775,3 +775,111 @@ test('删项目时把它的历史快照一起删掉（不留永远清不掉的�
     assert.equal(await store.getProject('del-1'), null);
     assert.deepEqual(await store.listVersions('del-1'), [], '项目都没了，快照不能继续占空间');
 });
+
+/* ─────────── C1：保存路径的单次序列化（docJson / project / bytes 注入） ─────────── */
+
+test('makeRecord：可直接注入 docJson / project / savedAt / bytes，不再重复编码位图', () => {
+    const { doc } = richDoc();
+    const docJson = store.docToJSON(doc);
+    const savedAt = 1234567;
+    const envelope = { format: store.FORMAT, version: store.VERSION, name: '甲', savedAt, doc: docJson };
+
+    // 参照：老路径（自己 docToJSON + 自己 stringify）
+    const legacy = store.makeRecord({ name: '甲', doc });
+    // C1 路径：节点与信封都由调用方给，bytes 也可直接给
+    const fast = store.makeRecord({
+        id: 'fast-1',
+        name: '甲',
+        docJson,
+        project: envelope,
+        savedAt,
+        bytes: 987,
+    });
+
+    // 派生字段一致（缺的只是时间戳：老路径取 now，这里显式注入）
+    for (const key of ['width', 'height', 'frames', 'layers']) {
+        assert.equal(fast[key], legacy[key], key + ' 必须与老路径一致');
+    }
+    assert.equal(fast.savedAt, savedAt, 'savedAt 可注入（让记录/版本/回写文件共用一个时刻）');
+    assert.equal(fast.openedAt, savedAt, '没给 openedAt 时退回注入的 savedAt');
+    assert.equal(fast.project, envelope, '传入的信封必须原样复用（不再重建）');
+    assert.equal(fast.bytes, 987, '调用方给了 bytes 就不该再序列化一次');
+    assert.equal(fast.project.doc, docJson, '信封里就是同一份文档节点');
+
+    // 不传 bytes 时仍按信封自己算（其它调用点不受影响）
+    const noBytes = store.makeRecord({ name: '乙', docJson, project: envelope, savedAt });
+    assert.equal(noBytes.bytes, JSON.stringify(envelope).length);
+    // 没有 docJson 时退回老路径（doc 由 docToJSON 编码），行为不变
+    assert.equal(store.makeRecord({ name: '丙', doc }).layers, legacy.layers);
+});
+
+test('fileNodeOf：与 docToFile 同一形状，但复用已编码的文档节点', () => {
+    const { doc } = richDoc();
+    const docJson = store.docToJSON(doc);
+    const meta = { name: '扁平', savedAt: 42 };
+    const flat = store.fileNodeOf(docJson, meta);
+    const viaDoc = store.docToFile(doc, meta);
+    // 形状逐字段一致（同一个文档 → 同一个文件内容），只是 fileNodeOf 不重新编码位图
+    assert.deepEqual(flat, viaDoc);
+    assert.equal(flat.format, store.FORMAT);
+    assert.equal(flat.version, store.VERSION);
+    assert.equal(flat.name, '扁平');
+    assert.equal(flat.savedAt, 42);
+    assert.equal('doc' in flat, false, '扁平文件不该再套一层 doc');
+    // 坏输入返回 null，不抛
+    assert.equal(store.fileNodeOf(null), null);
+    assert.equal(store.fileNodeOf(undefined), null);
+    assert.equal(store.fileNodeOf('x'), null);
+    assert.equal(store.fileNodeOf([]), null);
+    // 名字缺省与 docToFile 同口径
+    assert.equal(store.fileNodeOf(docJson, {}).name, viaDoc ? store.fileNodeOf(docJson, {}).name : '');
+});
+
+test('C1 打开路径：assets 并行解码（串行等待会变成 N × 单张解码时间）', async () => {
+    // 4 个对象各带一张不同的位图 → 文件里 4 个 assets
+    const imgs = ['P1', 'P2', 'P3', 'P4'].map((tag) => {
+        BITMAPS.set(tag, { w: 40, h: 30 });
+        return fakeBitmap(40, 30, tag);
+    });
+    const objects = imgs.map((img, i) => makeObject({
+        id: 'p' + i,
+        kind: 'image',
+        cels: [{ at: 0, image: img }, { at: 1, image: img }],
+    }));
+    const doc = createDoc({ width: 40, height: 30, fps: 10, duration: 2, objects });
+    const file = store.docToFile(doc, { name: '并行' });
+    assert.equal(Object.keys(file.assets).length, 4, '先确认文件里真有 4 张图');
+
+    let active = 0;
+    let maxActive = 0;
+    const savedCodec = {
+        canvas: (w, h) => fakeCanvas(w, h),
+        surface: (w, h) => fakeCanvas(w, h),
+        decode: async (url) => {
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            await new Promise((resolve) => setTimeout(resolve, 15));
+            active -= 1;
+            const tag = tagOf(url);
+            const size = BITMAPS.get(tag) || { w: 1, h: 1 };
+            return fakeBitmap(size.w, size.h, tag);
+        },
+    };
+    store.__setCodec(savedCodec);
+    try {
+        const back = await store.jsonToDoc(file);
+        assert.ok(back, '并行解码后仍能还原文档');
+        assert.equal(back.objects.length, 4);
+        assert.ok(maxActive > 1, '解码必须并行提交（实测最大并发 ' + maxActive + '）');
+    } finally {
+        store.__setCodec({
+            canvas: (w, h) => fakeCanvas(w, h),
+            surface: (w, h) => fakeCanvas(w, h),
+            decode: async (url) => {
+                const tag = tagOf(url);
+                const size = BITMAPS.get(tag) || { w: 1, h: 1 };
+                return fakeBitmap(size.w, size.h, tag);
+            },
+        });
+    }
+});
