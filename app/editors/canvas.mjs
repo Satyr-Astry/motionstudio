@@ -19,10 +19,11 @@
 import { layerById, patchLayer } from '../core/cel.mjs';
 import { createTrack, addKey, setKeyState, stateAt } from '../core/transform.mjs';
 import {
-    elementLattice, handlePoints, elementWorldMatrix, applyMatrix, anchorPoint,
+    elementLattice, handlePoints, elementWorldMatrix, elementSize, applyMatrix, anchorPoint,
 } from '../core/element.mjs';
 import { BONE_DEFAULTS } from '../core/doc-model.mjs';
-import { skinOf } from '../core/skin.mjs';
+import { boneWorldMatrix, skinOf } from '../core/skin.mjs';
+import { ikChains, solveIk } from '../core/ik.mjs';
 import { WEIGHT_EPS, skinVertices, mainBoneIndex, boneColorOf } from '../core/weight-paint.mjs';
 import { HANDLE_NAMES, HANDLE_PX, handlePositions } from '../core/gizmo.mjs';
 import { buildChrome } from './canvas-chrome.mjs';
@@ -249,6 +250,67 @@ export function mount(el, ctx) {
     }
 
     /**
+     * IK 叠加层（P3 步 4）：把「链尾骨骼 → 目标对象」这条关系画出来。
+     *
+     * 为什么需要它：约束存在数据里，肉眼完全看不出来 —— 用户会看到骨头自己动，
+     * 却不知道是哪个对象在拽它，也不知道这根骨属不属于某条链。
+     *
+     * 只在「选中参与解算的骨」或「选中的正是目标对象」时画；其余时候整层不出现，
+     * 免得每根带 IK 的骨都在画布上拖一条虚线。
+     *
+     * 末端位置必须走 boneWorldMatrix(..., sol)：它与求值器、蒙皮是同一张覆盖表，
+     * 用 elementWorldMatrix 会画在**未解算**的位置上，连线与骨头对不上。
+     */
+    function drawIk(g) {
+        const doc = ctx && typeof ctx.doc === 'function' ? ctx.doc() : null;
+        if (!doc || !Array.isArray(doc.objects)) return;
+        const sel = typeof ctx.selection === 'function' ? ctx.selection() : null;
+        const selId = sel && sel.id ? String(sel.id) : null;
+        if (!selId) return;
+        const time = typeof ctx.time === 'function' ? ctx.time() : 0;
+        const chains = ikChains(doc);
+        if (!chains || !chains.length) return;
+        const sol = solveIk(doc, time);
+        const IK_LINK = '#7dd3fc';
+        for (const chain of chains) {
+            const ids = chain.bones.map((b) => b.id);
+            if (ids.indexOf(selId) < 0 && selId !== chain.targetId) continue;
+            const tipEl = chain.bones[chain.bones.length - 1];
+            const tb = tipEl && tipEl.bone && typeof tipEl.bone === 'object' ? tipEl.bone : {};
+            const len = Number.isFinite(tb.len) ? tb.len : BONE_DEFAULTS.len;
+            const width = Number.isFinite(tb.width) ? tb.width : BONE_DEFAULTS.width;
+            const tip = toScreen(applyMatrix(boneWorldMatrix(doc, tipEl, time, sol), { x: len, y: width / 2 }));
+            const targetEl = doc.objects.find((o) => o && o.id === chain.targetId);
+            if (!targetEl) continue;
+            const tParent = typeof ctx.objectParentMatrix === 'function' ? ctx.objectParentMatrix(targetEl.id, time) : null;
+            const tSize = elementSize(doc, targetEl, time);
+            const tm = elementWorldMatrix(targetEl, time, tSize, tParent);
+            const tp = toScreen(applyMatrix(tm, anchorPoint(targetEl, tSize)));
+
+            g.save();
+            g.setLineDash([6, 5]);
+            g.strokeStyle = IK_LINK;
+            g.lineWidth = 1.5;
+            g.beginPath();
+            g.moveTo(tip.x, tip.y);
+            g.lineTo(tp.x, tp.y);
+            g.stroke();
+            // 目标点：空心圆 + 十字。压在别的骨头上时，光一个圆会被误认成末端关节
+            g.setLineDash([]);
+            g.beginPath();
+            g.arc(tp.x, tp.y, 6, 0, Math.PI * 2);
+            g.stroke();
+            g.beginPath();
+            g.moveTo(tp.x - 9, tp.y);
+            g.lineTo(tp.x + 9, tp.y);
+            g.moveTo(tp.x, tp.y - 9);
+            g.lineTo(tp.x, tp.y + 9);
+            g.stroke();
+            g.restore();
+        }
+    }
+
+    /**
      * 权重叠加层（P2-C 步 1）：把蒙皮网格的顶点画在**形变之后**的位置上。
      *
      * 位置一律来自 core/weight-paint 的 skinVertices（applySkin 同密度分支）。
@@ -451,6 +513,8 @@ export function mount(el, ctx) {
         drawBones(g);
         // 权重顶点紧随骨架：同样要常显（编辑权重时选区可能落在骨骼上），也得在判空之前
         drawSkinWeights(g);
+        // IK 连线画在最后：它只在「选中参与解算的骨或它的目标」时出现，平时不打扰
+        drawIk(g);
 
         const info = selectionInfo();
         if (!info) return;
