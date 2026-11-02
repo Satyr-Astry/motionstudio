@@ -72,3 +72,33 @@ export function videoBitrate(width, height, fps) {
     const f = Math.max(1, Math.round(Number(fps) || 1));
     return Math.max(1200000, Math.round(w * h * f * 0.12));
 }
+
+/** 录制时间轴漂移容忍量（毫秒）：超过它说明浏览器把计时器节流了（窗口在后台）。 */
+export const RECORD_DRIFT_TOLERANCE_MS = 600;
+
+/**
+ * 录制期间「要不要中止」的判定（纯函数，待修清单 A3）。
+ *
+ * 背景：MediaRecorder 的时间轴是**墙上时钟**，而驱动帧循环的是 `setTimeout`。
+ * 窗口被最小化/完全遮挡时 Chromium 会把计时器节流到约 1 秒，循环跟不上 →
+ * 录出来的视频变慢、甚至整段是静止画面。以前只能在文档里写「请保持窗口前台」，
+ * 用户切走一会儿就得到一份坏文件且**不知道**。
+ *
+ * 这里把判据抽出来，让 recordVideo 在真出事时**主动中止并报错**：
+ *   - `'hidden'`    页面已经不可见（直接判据，最快）；
+ *   - `'throttled'` 墙钟比「应到第 i 帧的时刻」落后超过容忍量（间接判据：即使
+ *                   visibilityState 没变，节流也可能已经发生）；
+ *   - `''`          继续录。
+ *
+ * @param {{hidden?:boolean, driftMs?:number, toleranceMs?:number}} [state]
+ * @returns {''|'hidden'|'throttled'}
+ */
+export function recordingAbortReason(state) {
+    const s = state && typeof state === 'object' ? state : {};
+    if (s.hidden === true) return 'hidden';
+    const tolerance = Number(s.toleranceMs);
+    const limit = Number.isFinite(tolerance) && tolerance > 0 ? tolerance : RECORD_DRIFT_TOLERANCE_MS;
+    const drift = Number(s.driftMs);
+    if (Number.isFinite(drift) && drift > limit) return 'throttled';
+    return '';
+}

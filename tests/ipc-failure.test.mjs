@@ -1138,3 +1138,20 @@ test('C1 源码守卫：saveProject / autoSaveProject 只 docToJSON 一次，回
     assert.match(save, /savedAt: now/, '记录 savedAt 用注入时刻');
     assert.match(save, /fileJsonOf\(nodes\.docJson, label, now\)/, '文件 savedAt 用同一个 now');
 });
+
+/* ─────── A3：录制期间窗口进后台 → 主动中止（不产出静止视频） ─────── */
+
+test('A3 源码守卫：录制前后都检查可见性，后台/节流时中止且不产出视频', () => {
+    const io = read('../app/shell/project-io.mjs');
+    assert.match(io, /function pageHidden\(\)/, '缺可见性探测');
+    assert.match(io, /document\.visibilityState === 'hidden'/, '要认 visibilityState');
+    const body = io.slice(io.indexOf('export async function recordVideo'), io.indexOf('export async function exportVideo'));
+    assert.match(body, /if \(pageHidden\(\)\) return \{ ok: false, error: t\('shell\.video\.err\.hiddenStart'\) \}/, '开始录制前就要挡掉后台窗口');
+    assert.match(body, /recordingAbortReason\(\{[\s\S]{0,120}hidden: pageHidden\(\)/, '每帧都要问可见性');
+    assert.match(body, /if \(why\) \{[\s\S]{0,120}break;/, '命中后必须跳出帧循环');
+    const abortAt = body.indexOf('if (abortReason)');
+    const blobAt = body.indexOf('new Blob(');
+    assert.ok(abortAt > 0 && blobAt > abortAt, '中止判断必须排在建 Blob 之前（坏视频不出厂）');
+    assert.match(body, /shell\.video\.err\.hidden' : 'shell\.video\.err\.throttled'/, '两种原因要分别报');
+    assert.match(body, /shell\.video\.err\.empty/, '原有「空结果」兜底不能丢');
+});

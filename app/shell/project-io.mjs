@@ -35,7 +35,7 @@ import {
 import * as store from './project-store.mjs';
 import { asepriteJSON, buildSpritesheets, phaserJSON, sheetToDataURLAsync } from './spritesheet.mjs';
 import { icon } from '../core/icons.mjs';
-import { pickVideoMime, videoBitrate, videoCanvasSize, videoFps, videoFrameCount, videoSeconds } from './video-plan.mjs';
+import { pickVideoMime, recordingAbortReason, videoBitrate, videoCanvasSize, videoFps, videoFrameCount, videoSeconds } from './video-plan.mjs';
 import { t } from '../i18n/index.mjs';
 import {
     EXPORT_CHUNK,
@@ -2608,6 +2608,19 @@ function onFileAct(act) {
 /* ───────────────────────── WebM 视频导出 ───────────────────────── */
 
 /**
+ * 页面此刻是否不可见（窗口最小化 / 切到其它应用）。
+ *
+ * A3 的判据之一：录制的时间轴是墙上时钟，后台时 Chromium 会把计时器节流到约 1 秒，
+ * 帧循环跟不上 → 视频变慢或整段静止。`document.hidden` 是老 IE 时代就有的布尔，
+ * `visibilityState` 更明确，两者任一为真都按不可见处理。
+ */
+function pageHidden() {
+    if (typeof document === 'undefined' || !document) return false;
+    if (document.visibilityState === 'hidden') return true;
+    return document.hidden === true;
+}
+
+/**
  * 把当前文档录成 WebM（不弹对话框、不写盘，纯内存）。导出与自检都用它。
  *
  * 做法：把 composeFrame 画到一张离屏 canvas 上，用 captureStream(0) 手动推帧，
@@ -2623,6 +2636,9 @@ export async function recordVideo(opts) {
     if (!doc) return { ok: false, error: t('shell.video.err.noDoc') };
     if (typeof MediaRecorder !== 'function') return { ok: false, error: t('shell.video.err.noRecorder') };
     if (typeof document === 'undefined' || !document.createElement) return { ok: false, error: t('shell.video.err.noDom') };
+    // A3：窗口在后台时开始录制没有意义 —— 计时器会被节流，录出来是静止画面。
+    // 与其生成一份坏文件再让用户自己发现，不如当场说清。
+    if (pageHidden()) return { ok: false, error: t('shell.video.err.hiddenStart') };
     const mime = pickVideoMime((m) => typeof MediaRecorder === 'function' && MediaRecorder.isTypeSupported(m));
     if (!mime) return { ok: false, error: t('shell.video.err.noMime') };
 
@@ -2661,9 +2677,22 @@ export async function recordVideo(opts) {
     const stepMs = Math.max(4, Math.round(1000 / fps));
     // 第 32 批：`o.from` 让录制的起点跟着导出对话框的时间范围走（老调用不传，等价于 0）
     const fromSec = Math.max(0, Number(o.from) || 0);
+    let abortReason = '';
+    let startedAt = 0;
     try {
         rec.start();
+        startedAt = Date.now();
         for (let i = 0; i < frames; i += 1) {
+            // A3：每帧都问一次「窗口还在前台吗、时间轴有没有被节流」——
+            // 一旦命中就中止：坏视频不出厂，由 exportVideo 把原因如实报给用户。
+            const why = recordingAbortReason({
+                hidden: pageHidden(),
+                driftMs: Date.now() - startedAt - i * stepMs,
+            });
+            if (why) {
+                abortReason = why;
+                break;
+            }
             const t = fromSec + i / fps;
             compositeFrame(cv, doc, t, { clear: true, time: t });
             if (track && typeof track.requestFrame === 'function') track.requestFrame();
@@ -2672,7 +2701,7 @@ export async function recordVideo(opts) {
             await new Promise((r) => setTimeout(r, stepMs));
         }
         // 末帧再停一拍，否则最后一帧常常没进封装
-        await new Promise((r) => setTimeout(r, Math.max(120, stepMs * 2)));
+        if (!abortReason) await new Promise((r) => setTimeout(r, Math.max(120, stepMs * 2)));
     } finally {
         try {
             rec.stop();
@@ -2689,6 +2718,12 @@ export async function recordVideo(opts) {
         }
     }
     await stopped;
+    if (abortReason) {
+        return {
+            ok: false,
+            error: t(abortReason === 'hidden' ? 'shell.video.err.hidden' : 'shell.video.err.throttled'),
+        };
+    }
     const blob = new Blob(chunks, { type: mime });
     const bytes = await blob.arrayBuffer();
     if (!bytes.byteLength) return { ok: false, error: t('shell.video.err.empty') };

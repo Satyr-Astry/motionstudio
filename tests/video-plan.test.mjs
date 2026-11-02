@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    VIDEO_MIME_LIST, pickVideoMime, videoBitrate, videoCanvasSize, videoFps, videoFrameCount, videoSeconds,
+    VIDEO_MIME_LIST, RECORD_DRIFT_TOLERANCE_MS, pickVideoMime, recordingAbortReason, videoBitrate, videoCanvasSize, videoFps, videoFrameCount, videoSeconds,
 } from '../app/shell/video-plan.mjs';
 
 test('pickVideoMime：按 vp9 → vp8 → webm 的顺序挑第一个支持的', () => {
@@ -65,4 +65,28 @@ test('videoBitrate：按像素×帧率估，下限 1.2 Mbps', () => {
     // 超过下限时按公式走
     assert.equal(videoBitrate(1920, 1080, 30), Math.round(1920 * 1080 * 30 * 0.12));
     assert.ok(videoBitrate(1920, 1080, 30) > videoBitrate(900, 640, 12));
+});
+
+test('recordingAbortReason（A3）：后台/节流时中止，正常时继续', () => {
+    assert.equal(recordingAbortReason(), '', '没状态=继续');
+    assert.equal(recordingAbortReason(null), '');
+    assert.equal(recordingAbortReason({}), '');
+    assert.equal(recordingAbortReason({ hidden: false, driftMs: 0 }), '');
+    // 窗口不可见：直接中止（最硬的判据）
+    assert.equal(recordingAbortReason({ hidden: true }), 'hidden');
+    assert.equal(recordingAbortReason({ hidden: true, driftMs: 0 }), 'hidden');
+    // 漂移：超过容忍量（默认 600ms）才算节流
+    assert.equal(RECORD_DRIFT_TOLERANCE_MS, 600);
+    assert.equal(recordingAbortReason({ driftMs: 600 }), '', '刚好 600ms 不中止');
+    assert.equal(recordingAbortReason({ driftMs: 601 }), 'throttled');
+    assert.equal(recordingAbortReason({ driftMs: 5000 }), 'throttled');
+    // 容忍量可注入（测试/弱机调参用）
+    assert.equal(recordingAbortReason({ driftMs: 300, toleranceMs: 200 }), 'throttled');
+    assert.equal(recordingAbortReason({ driftMs: 300, toleranceMs: 0 }), '', '0/非法容忍量退回默认 600');
+    assert.equal(recordingAbortReason({ driftMs: 700, toleranceMs: -1 }), 'throttled');
+    // 坏值不抛：NaN/字符串/对象都按「继续」
+    assert.equal(recordingAbortReason({ driftMs: NaN }), '');
+    assert.equal(recordingAbortReason({ driftMs: 'x' }), '');
+    assert.equal(recordingAbortReason({ driftMs: {} }), '');
+    assert.equal(recordingAbortReason('nope'), '');
 });
