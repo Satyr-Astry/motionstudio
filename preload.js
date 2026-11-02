@@ -22,6 +22,11 @@ contextBridge.exposeInMainWorld('motionAPI', {
         ipcRenderer.invoke('ms:export-sheet', Object.assign({ name, png, json }, opts && typeof opts === 'object' ? opts : {})),
     /** 保存项目 JSON（弹出保存对话框） */
     saveProject: (name, json) => ipcRenderer.invoke('ms:save-project', { name, json }),
+    /**
+     * 写回已绑定的项目文件（**不弹对话框**，路径来自打开 / 另存为时记下的 file）。
+     * 返回 {ok:true,file} / {ok:false,error}；Ctrl+S 在有绑定文件时走这一路。
+     */
+    saveProjectTo: (file, json) => ipcRenderer.invoke('ms:save-project-to', { file, json }),
     /** 打开项目 JSON（弹出打开对话框），返回 {ok, file, json} */
     loadProject: () => ipcRenderer.invoke('ms:load-project'),
     /**

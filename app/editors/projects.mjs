@@ -37,7 +37,9 @@ import { t } from '../i18n/index.mjs';
 // 不重建常量，写成普通属性会把首次渲染时的语言冻在里面（docs/本地化.md §5）。
 // `act` / `icon` / `danger` / `sepBefore` 是行为与样式用的，不随语言变。
 
-/** 卡片上的次级动作。顺序即渲染顺序；`danger` 的那条走 `--danger`。 */
+/** 卡片上的次级动作。顺序即渲染顺序；`danger` 的那条走 `--danger`。
+ *  `export` 的语义是「把这份项目另存为 .msp 文件」（写完会把 project.file 绑到新路径），
+ *  文案与 title 在 `parts/projects.mjs` 里写清「另存为」，不再叫含糊的「存为文件」。 */
 export const CARD_ACTIONS = [
     {
         act: 'rename',
@@ -82,6 +84,18 @@ export const MENU_ITEMS = [
         },
         get title() {
             return t('projects.menu.import.hint');
+        },
+    },
+    {
+        // 「另存为」显式入口：把**当前文档**写成一个新的 .msp（弹保存对话框，可换路径）。
+        // 与卡片上的 export 不同：那个写的是库里那条记录，有未保存改动时它是旧内容。
+        act: 'saveAs',
+        icon: 'export',
+        get label() {
+            return t('projects.menu.saveAs');
+        },
+        get title() {
+            return t('projects.menu.saveAs.hint');
         },
     },
     {
@@ -183,8 +197,14 @@ export function actVerdict(out) {
 }
 
 
-/** 规范化记录，容忍外壳给的不完整数据。 */
-function norm(rec, i) {
+/**
+ * 规范化记录，容忍外壳给的不完整数据。
+ *
+ * `frames` 是**记录里真实存在的字段**（`project-store.mjs` 的 `makeRecord` / `stripRecord`
+ * 都写它，口径是「纹理时间点数」）；早期一行 `if (r.cels)` 判断了一个记录里根本没有的
+ * 字段，卡片 meta 那一项于是永远被静默跳过 —— 老记录只有 `cels` 时在这里兜一下。
+ */
+export function normRecord(rec, i) {
     const r = rec || {};
     return {
         id: String(r.id || 'rec-' + i),
@@ -192,8 +212,8 @@ function norm(rec, i) {
         savedAt: Number(r.savedAt) || 0,
         width: Number(r.width) || 0,
         height: Number(r.height) || 0,
-        // v6：记录里数的是纹理数。老记录只有 frames（帧数），读的时候兼容，写的时候不再写 frames。
-        cels: Number(r.cels) || Number(r.frames) || 0,
+        // v6：记录里数的是纹理时间点数，真实字段是 frames；老记录若只有 cels 也读得出来
+        frames: Number(r.frames) || Number(r.cels) || 0,
         layers: Number(r.layers) || 0,
         thumb: typeof r.thumb === 'string' ? r.thumb : '',
         bytes: Number(r.bytes) || 0,
@@ -220,6 +240,24 @@ function fmtBytes(n) {
     if (n < 1024) return n + ' B';
     if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
     return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+/**
+ * 卡片第二行：纹理时间点数 · 尺寸 · 对象数 · 体积。
+ *
+ * 读的是 `normRecord` 归一后的 `r.frames`（记录真实字段），不是记录里不存在的 `r.cels`。
+ * 纯函数（只查词条表），Node 里可直接测。
+ */
+export function metaLine(r) {
+    const row = r || {};
+    const parts = [];
+    if (row.frames) parts.push(t('projects.meta.cels', { n: row.frames }));
+    if (row.width && row.height) parts.push(row.width + '×' + row.height);
+    // v2 起 doc.layers 语义是「对象」，展示口径跟着改（记录字段名仍叫 layers）
+    if (row.layers) parts.push(t('projects.meta.layers', { n: row.layers }));
+    const size = fmtBytes(row.bytes);
+    if (size) parts.push(size);
+    return parts.join(' · ') || t('projects.meta.empty');
 }
 
 function mk(tag, cls, text) {
@@ -361,10 +399,15 @@ export function mount(host, ctx) {
     const list = mk('div', 'prj-grid');
     const empty = mk('div', 'prj-empty', t('projects.empty'));
     const noresult = mk('div', 'prj-noresult', noResultText());
+    // 项目库只住在浏览器 IndexedDB：清站点数据 / 换浏览器用户 = 全丢。
+    // 这条必须常驻在面板里（用户不会去读文档），所以和空态并列、不随列表刷新消失。
+    // 样式在 styles/projects.css 的 .prj-note（面板样式归 Lead，见该文件头）。
+    const libraryNote = mk('div', 'prj-note', t('projects.library.warning'));
 
     panel.appendChild(head);
     panel.appendChild(hint);
     panel.appendChild(list);
+    panel.appendChild(libraryNote);
     panel.appendChild(fileInput);
 
     let rows = [];
@@ -429,17 +472,6 @@ export function mount(host, ctx) {
         panel.appendChild(mk('div', 'prj-off', t('projects.offline.text')));
         host.appendChild(panel);
         return { refresh() {}, destroy() {} };
-    }
-
-    function metaLine(r) {
-        const parts = [];
-        if (r.cels) parts.push(t('projects.meta.cels', { n: r.cels }));
-        if (r.width && r.height) parts.push(r.width + '×' + r.height);
-        // v2 起 doc.layers 语义是「对象」，展示口径跟着改（记录字段名仍叫 layers）
-        if (r.layers) parts.push(t('projects.meta.layers', { n: r.layers }));
-        const size = fmtBytes(r.bytes);
-        if (size) parts.push(size);
-        return parts.join(' · ') || t('projects.meta.empty');
     }
 
     function card(r) {
@@ -529,7 +561,7 @@ export function mount(host, ctx) {
         try {
             const [items, cur] = await Promise.all([api.list(), Promise.resolve(api.current && api.current())]);
             if (!live) return;
-            rows = (items || []).map(norm);
+            rows = (items || []).map(normRecord);
             currentId = cur && cur.id ? String(cur.id) : '';
             paint();
         } catch (err) {
@@ -679,6 +711,14 @@ export function mount(host, ctx) {
         }
         if (act === 'import') {
             await run(() => api.importFile(), t('projects.importFile.done'));
+            return;
+        }
+        if (act === 'saveAs') {
+            // 另存为：当前文档 → 新的 .msp（外壳弹保存对话框并回填 project.file）。
+            // 不传 id：传 id 会让外壳去写库里那条**旧**存档，而不是用户眼前的这份。
+            const v = await run(() => api.exportFile());
+            if (v.ok && v.out && v.out.file) say(t('projects.save.done', { file: v.out.file }));
+            else if (v.ok) say(t('projects.save.noPath'), 'error');
             return;
         }
         if (act === 'sheet') {

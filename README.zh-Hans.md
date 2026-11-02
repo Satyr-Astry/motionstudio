@@ -55,6 +55,10 @@ MotionStudio 面向**独立游戏的 2D 美术资产**与**短动效**，不做�
 - 分段帧率（VFR），时间轴底部彩色细条即帧率段
 - 时间轴 `Ctrl+滚轮` 以指针时刻为锚缩放、**双击刻度尺 = 适应全长**；工具条按宽度分级收字并可横滚，1280 以下不会把字切半行
 
+**纹理**
+- 一个对象拥有一个**纹理库**；关键帧上的 `drawing` id 决定「从这一刻起显示哪张纹理」（`null` = 显式空白），所以同一张纹理可以在多个时刻复用
+- 属性面板里有**纹理抽屉**：库里每张纹理一行 —— 缩略图、尺寸、曝光时刻（或「未使用」），当前时刻生效的那张高亮。点一行＝把这张纹理放到播放头（一步撤销）；行内删除需两次点击确认；没被用到的纹理留在库里、随项目一起存档
+
 **对象**
 - 变换：位置 / 缩放 / 旋转 / 斜切 / 不透明度
 - 层级父子、混合模式、裁剪蒙版
@@ -63,7 +67,7 @@ MotionStudio 面向**独立游戏的 2D 美术资产**与**短动效**，不做�
 
 **导入导出**
 - 导入：PSD / PSB（零依赖自研解析器，保留图层、可见性、不透明度、混合模式、父组）、PNG / JPG / WebP
-- 保存：`.msp` 项目文件（JSON，位图内联）、项目库（IndexedDB）+ 静默自动保存
+- 保存：项目库（IndexedDB，静默自动保存）**与** `.msp` 项目文件（JSON，位图内联）**两者并存**。项目一旦绑定到某个文件，`Ctrl+S` 既写项目库、也把同一份序列化回写到该文件；**另存为…** 写出新的 `.msp` 并重新绑定。回写失败会明说「库已保存、项目文件未更新」，绝不假装成功
 - 导出：PNG 序列、精灵图 + 坐标 JSON（自家格式，另有 **Phaser 3** 与 **Aseprite / TexturePacker / Godot / Love2D / Unity** 三种帧表）、**GIF 动图**与 **APNG**（零依赖编码器；APNG 保留全彩与 8 位 alpha）、WebM 视频（VP9）；带四档导出预设（引擎 / 网页 / 聊天 / 排版）
 
 ## 运行方式
@@ -90,11 +94,11 @@ npm start
 
 `app/` **本身就是**一个静态站点：渲染层只用相对路径的 ES Module，没有裸说明符、没有 `node:`、不需要打包、没有 `http://` 引用。用 http(s) 托管这个目录即可（`.mjs` 必须以 JavaScript 的 MIME 类型发出；`file://` 会被模块 CORS 挡住）。
 
-整个应用只有一个模块接触桌面能力 —— [app/shell/ipc.mjs](app/shell/ipc.mjs)，它的 `bridge()` 读 `globalThis.window.motionAPI`（`app/shell/ipc.mjs:51-52`）。没有桌面壳时，`project-io.mjs` / `import-file.mjs` 里那些调用点会失去本机文件对话框与「导出到指定路径」，所以**网页桥**把它们全顶掉了：[`app/shell/bridge-web.mjs`](app/shell/bridge-web.mjs) 通过 `ipc.setBridge()` 装六路浏览器实现（打开/导入用 `input[type=file]`，导出/保存用 `a[download]`），`app/index.html` 把它排在 `app.mjs` 之前加载。所以浏览器会话**能画、能动、能播、能导入、也能真的导出**——做不到的只有「选一个文件夹」（`openFolder` 会如实说明，而不是假装），以及导出会落在下载目录。哪一步忘了接，报的就是失败而不是成功：`alpha.16` 把「没写文件却说存好了」的路径全删了。
+整个应用只有一个模块接触桌面能力 —— [app/shell/ipc.mjs](app/shell/ipc.mjs)，它的 `bridge()` 读 `globalThis.window.motionAPI`（`app/shell/ipc.mjs:51-52`）。没有桌面壳时，`project-io.mjs` / `import-file.mjs` 里那些调用点会失去本机文件对话框与「导出到指定路径」，所以**网页桥**把它们全顶掉了：[`app/shell/bridge-web.mjs`](app/shell/bridge-web.mjs) 通过 `ipc.setBridge()` 装六路浏览器实现（打开/导入用 `input[type=file]`，导出/保存用 `a[download]`），`app/index.html` 把它排在 `app.mjs` 之前加载。所以浏览器会话**能画、能动、能播、能导入、也能真的导出**——做不到的只有「选一个文件夹」（`openFolder` 会如实说明，而不是假装）、「就地写回已绑定的项目文件」（`saveProjectTo` 明确回 `unsupported`，而不是假成功），以及导出会落在下载目录。哪一步忘了接，报的就是失败而不是成功：`alpha.16` 把「没写文件却说存好了」的路径全删了。
 
 ### 仓库拆分
 
-桌面**壳**（`main.js`、`preload.js`、Electron 打包脚本）将迁到独立仓库，桌面发行版在那边发布；本仓库成为**核**：渲染层（`app/`）、测试、文档与质量门。两半之间的契约是那 7 个 IPC 通道名。拆分落地前，两者同在本仓库。
+桌面**壳**（`main.js`、`preload.js`、Electron 打包脚本）将迁到独立仓库，桌面发行版在那边发布；本仓库成为**核**：渲染层（`app/`）、测试、文档与质量门。两半之间的契约是那 8 个 IPC 通道名。拆分落地前，两者同在本仓库。
 
 ## 三个工作区
 
@@ -116,7 +120,7 @@ npm start
 - **曝光（exposure）**：关键帧上的 `drawing` 决定「这一刻起显示哪张纹理」。`null` 是显式空白（这一次曝光存在，只是空的）；缺字段表示沿用上一张。
 - **关键帧（key）**：`{ t, state, ease, h1, h2, drawing }`。
 - **通道（channel）**：每条可动画的量一条轨道，独立缓动。效果参数也是通道（`fx.<effectId>.<参数>`）。
-- **IPC 桥**：渲染层可调用的 7 个通道 —— `exportFrames` / `exportSheet` / `saveProject` / `loadProject` / `saveBinary` / `importFile` / `openFolder`。`ipc.mjs` 的函数名、`preload.js` 的方法名、`main.js` 的通道字符串必须完全一致；拆分时会补一条契约测试把这条缝焊住。
+- **IPC 桥**：渲染层可调用的 8 个通道 —— `exportFrames` / `exportSheet` / `saveProject` / `saveProjectTo`（无对话框写回已绑定文件）/ `loadProject` / `saveBinary` / `importFile` / `openFolder`。`ipc.mjs` 的函数名、`preload.js` 的方法名、`main.js` 的通道字符串必须完全一致；拆分时会补一条契约测试把这条缝焊住。
 
 ## 快捷键
 
@@ -190,7 +194,7 @@ npm run smoke          # 无壳窗口里把 app/ 起起来，逐个挂载全部�
 
 `npm run smoke` 用一个临时 HTTP 服务器把 `app/` 起起来，在**不挂 preload、不开 nodeIntegration** 的 Electron 窗口里加载 —— 也就是浏览器拿到的东西。它随后把一个面板轮着切过注册表里的每一个编辑器，再把界面语言来回切一遍，全程收集 console 错误。它同时是浏览器模式的验收：`window.motionAPI` 必须不存在、网页桥必须已就位。
 
-当前基线：**1609 tests / 1607 pass / 2 skipped / 0 fail**（121 个测试文件）；静态检查扫描 105 个模块，残留 0、坏 import 0、未使用 import 0；语法检查 111/111（105 个 app/ 模块 + 6 个根工具脚本）；分层检查 0 处跨层 import；本地化检查报告 129 条文案尚未进词条表、结构缺口 0 处；冒烟 **15/15** 个编辑器挂载成功、0 条 console 错误。改代码后 `npm test`、`npm run check` 与 `npm run smoke` 都跑一遍。
+当前基线：**1631 tests / 1629 pass / 2 skipped / 0 fail**（121 个测试文件）；静态检查扫描 105 个模块，残留 0、坏 import 0、未使用 import 0；语法检查 111/111（105 个 app/ 模块 + 6 个根工具脚本）；分层检查 0 处跨层 import；本地化检查报告 129 条文案尚未进词条表、结构缺口 0 处；冒烟 **15/15** 个编辑器挂载成功、0 条 console 错误。改代码后 `npm test`、`npm run check` 与 `npm run smoke` 都跑一遍。
 
 ## 设计原则
 
@@ -203,7 +207,7 @@ npm run smoke          # 无壳窗口里把 app/ 起起来，逐个挂载全部�
 - 目前只在 Windows（Electron）上验证过。
 - WebM 导出用 `MediaRecorder` 按**真实时间**录制，导出时窗口需保持前台；VP9 的 alpha 通道未开，透明背景会变黑底。
 - GIF 受格式本身的三个限制：**透明只有 1 位**（半透明边缘会被切成全透或全不透）、**256 色**（渐变会出现色带）、同样内容比 WebM 大得多。
-- 曲线区与纹理库的多选 / 拖放还在打磨；PSB 的智能对象、文字层不解析。
+- 曲线区与纹理抽屉的多选 / 拖放还在打磨（单选切换已可用）；PSB 的智能对象、文字层不解析。
 - 项目文件把位图内联成 dataURL，几百 MB 级素材的项目会明显变慢。
 - 浏览器形态靠网页桥（见「运行方式」）；「选文件夹」没有对应 API，导出落下载目录；要桌面对话框与精确路径就用桌面壳。
 

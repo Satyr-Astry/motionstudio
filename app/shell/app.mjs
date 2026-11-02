@@ -1895,6 +1895,8 @@ function boot() {
         // 顶栏「上次保存 HH:MM:SS · 存储：indexeddb」的数据源（chrome.mjs 里已经写好取到就用的分支）
         projectSavedAt: () => Number(currentProject().savedAt) || 0,
         projectStoreKind: () => String(currentProject().storeKind || ''),
+        // 已绑定的 .msp 路径：顶栏显示它、保存按钮的 title 据此说清「写库 + 回写」还是「仅入库」
+        projectFile: () => String(currentProject().file || ''),
     });
     shell.statusbar = buildStatusbar(dom.stb, {});
 

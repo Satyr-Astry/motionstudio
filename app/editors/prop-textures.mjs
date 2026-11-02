@@ -90,6 +90,60 @@ export function textureSummary(obj, t) {
     };
 }
 
+/** 像素尺寸归一：非数字/非正数一律按 0（缩略图与行数据用不到负数）。 */
+function pixelSize(v) {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * 纹理抽屉的一行：把「资产 + 曝光」摊平成 DOM 直接可排的字段（DOM-free，node 直测）。
+ * 顺序沿用 drawingsOf（首次曝光升序，未使用的排最后）；`current` 与摘要里的「第 k 张」
+ * 同口径（textureIndexOfTime；当前时刻没有任何曝光时全 false）。
+ *
+ * @param {object|null} obj 对象
+ * @param {number} now 当前时刻（秒）
+ * @returns {{id:string,index:number,width:number,height:number,times:number[],current:boolean,unused:boolean}[]}
+ */
+export function textureRows(obj, now) {
+    const list = obj ? drawingsOf(obj) : [];
+    if (!list.length) return [];
+    // 先认「这一刻到底有没有图」：空白曝光（drawing:null）或早于第一次曝光时，
+    // textureIndexOfTime 仍可能给出一个曝光下标，但那张图并没有显示 → 任何行都不算当前，
+    // 与摘要的 empty / noExposure 分支同口径。
+    const currentIndex = obj && textureAt(obj, now) ? textureIndexOfTime(obj, now) : -1;
+    return list.map((d, i) => {
+        const times = Array.isArray(d.times) ? d.times.slice() : [];
+        return {
+            id: d.id,
+            index: i + 1, // 用户看到的序号从 1 起
+            width: pixelSize(d.image && d.image.width),
+            height: pixelSize(d.image && d.image.height),
+            times,
+            current: i === currentIndex,
+            unused: times.length === 0,
+        };
+    });
+}
+
+/** 秒 → 抽屉里的读数：两位小数（与 xform / 时间轴上的 t=0.00s 同一口径）。 */
+export function formatTextureTime(seconds) {
+    const v = Number(seconds);
+    return Number.isFinite(v) ? v.toFixed(2) : '0.00';
+}
+
+/**
+ * 一行的「引用」说明：未使用 → 未使用；只一处 → @0.00s；多处 → @0.00s · N 处。
+ * 只算 key + vars，取词在渲染处（模块级常量在 import 时就求值，不能在这里调 t）。
+ */
+export function textureRowRef(row) {
+    const times = row && Array.isArray(row.times) ? row.times : [];
+    if (!times.length) return { key: 'props.tex.lib.unused', vars: {} };
+    const at = formatTextureTime(times[0]);
+    if (times.length === 1) return { key: 'props.tex.lib.at', vars: { t: at } };
+    return { key: 'props.tex.lib.usesAt', vars: { t: at, n: times.length } };
+}
+
 /** 尺寸框单值解析：取整后必须落在 1–TEXTURE_SIZE_MAX，否则 null（调用方给中文提示）。 */
 export function parseTextureSize(raw) {
     if (raw == null || raw === '') return null;
@@ -153,7 +207,7 @@ export function workspaceSwitchTarget(ctx) {
 }
 
 export function mount(el, ctx) {
-    // runNew/runUnique/runDelete 的第二个参数叫 `t`（时间），与词条函数撞名；挂载内部统一走 tr。
+    // i18n 的 t 容易被局部量（时间 / 事件对象）遮蔽；挂载内部统一走 tr，写时间的地方叫 when/now。
     const tr = t;
     const body = makeGroup(el, tr('props.tex.group'), 'textures');
     const has = (name) => typeof ctx[name] === 'function';
@@ -177,6 +231,31 @@ export function mount(el, ctx) {
     summary.className = 'ptx-summary';
     summary.textContent = '—';
     countField.appendChild(summary);
+
+    /* ②b 纹理抽屉：摘要只说「第几张」，这里给出「点哪张」。
+       行数据由 textureRows 算（DOM-free，test 直测），展开态只活在这个闭包里 ——
+       refresh() 只换内容，不重建这个结构，所以开合状态在刷新之间保持。 */
+    const libField = makeRow(body, tr('props.tex.lib'));
+    const libRow = libField.parentNode;
+    libRow.classList.add('ptx-lib-row');
+    const toggleBtn = document.createElement('button');
+    toggleBtn.type = 'button';
+    toggleBtn.className = 'prop-seg ptx-toggle';
+    toggleBtn.dataset.k = 'ptx-lib-toggle';
+    libField.appendChild(toggleBtn);
+
+    const drawer = document.createElement('div');
+    drawer.className = 'ptx-drawer';
+    drawer.dataset.k = 'ptx-drawer';
+    drawer.hidden = true;
+    // 此刻后面几行还没 append，挂在「库」行之后就是抽屉的位置
+    body.appendChild(drawer);
+
+    let openDrawer = false;
+    let drawerSig = '';
+    let pendingDelete = null; // 已点过一次删除、等待二次确认的纹理 id
+    let confirmTimer = 0; // 确认态 4 秒后自动收回
+    const deleteBtns = new Map(); // 纹理 id → 行内删除按钮
 
     /* ③ 四个动作。图标按钮沿用 .ms-icon-btn 的房子样式，title/aria-label 一律带中文全称。 */
     const actField = makeRow(body, tr('props.tex.actions'));
@@ -243,17 +322,215 @@ export function mount(el, ctx) {
 
     /* ── 渲染 ── */
 
-    function paintThumb(img) {
-        const g = thumb.getContext('2d');
-        if (g) g.clearRect(0, 0, thumb.width, thumb.height);
-        thumb.classList.toggle('is-empty', !img);
+    /* 等比缩放画进一个小 canvas（大缩略图与抽屉行缩略图共用）。 */
+    function fitCanvas(canvas, img) {
+        const g = canvas.getContext('2d');
+        if (g) g.clearRect(0, 0, canvas.width, canvas.height);
         if (!g || !img || !img.width || !img.height) return;
-        const s = Math.min(thumb.width / img.width, thumb.height / img.height);
+        const s = Math.min(canvas.width / img.width, canvas.height / img.height);
         const w = Math.max(1, Math.round(img.width * s));
         const h = Math.max(1, Math.round(img.height * s));
         g.imageSmoothingEnabled = true;
         if ('imageSmoothingQuality' in g) g.imageSmoothingQuality = 'high';
-        g.drawImage(img, Math.round((thumb.width - w) / 2), Math.round((thumb.height - h) / 2), w, h);
+        g.drawImage(img, Math.round((canvas.width - w) / 2), Math.round((canvas.height - h) / 2), w, h);
+    }
+
+    function paintThumb(img) {
+        thumb.classList.toggle('is-empty', !img);
+        fitCanvas(thumb, img);
+    }
+
+    /* ── 纹理抽屉 ── */
+
+    /** 行数据签名：只有「库里有什么 / 当前是哪张」变了才重建 DOM（播放时每帧 refresh 不该重建列表）。 */
+    function rowsSig(rows) {
+        return rows
+            .map((r) => [r.id, r.index, r.width, r.height, r.times.join(','), r.current ? 1 : 0].join(':'))
+            .join('|');
+    }
+
+    /** 把「待确认删除」收回初始态（换行/收起/超时/删除完成后都走这里）。 */
+    function resetDeleteConfirm() {
+        const armed = pendingDelete != null || confirmTimer !== 0;
+        pendingDelete = null;
+        if (confirmTimer) {
+            clearTimeout(confirmTimer);
+            confirmTimer = 0;
+        }
+        // 本来就没有确认态时直接返回：刷新每秒会跑很多次，不必重写一遍按钮内容
+        if (!armed) return;
+        for (const [, b] of deleteBtns) {
+            b.classList.remove('is-armed');
+            b.innerHTML = icon('trash', { label: tr('props.tex.lib.delete') });
+            b.title = tr('props.tex.lib.deleteTitle');
+            b.setAttribute('aria-label', tr('props.tex.lib.deleteTitle'));
+        }
+    }
+
+    /** 行内删除的第一下：按钮变成「确认？」并在 4 秒后自己收回 —— 不许一次误删。 */
+    function armDelete(id) {
+        pendingDelete = id;
+        if (confirmTimer) clearTimeout(confirmTimer);
+        const confirmText = tr('props.tex.lib.confirm');
+        const confirmTitle = tr('props.tex.lib.confirmTitle');
+        const deleteTitle = tr('props.tex.lib.deleteTitle');
+        for (const [key, b] of deleteBtns) {
+            const armed = key === id;
+            b.classList.toggle('is-armed', armed);
+            if (armed) b.textContent = confirmText;
+            else b.innerHTML = icon('trash', { label: tr('props.tex.lib.delete') });
+            b.title = armed ? confirmTitle : deleteTitle;
+            b.setAttribute('aria-label', armed ? confirmTitle : deleteTitle);
+        }
+        confirmTimer = setTimeout(() => {
+            confirmTimer = 0;
+            resetDeleteConfirm();
+        }, 4000);
+    }
+
+    /** 点行 = 把这个时刻换成这张纹理（ctx.placeDrawing，一次 setDoc = 一条撤销）。 */
+    function placeRow(row) {
+        if (row.current) return; // 已经是这一刻生效的那张：不写一条「没变化」的撤销
+        const obj = targetObj();
+        if (!obj || !has('placeDrawing')) {
+            say(tr('props.tex.say.placedFail'));
+            return;
+        }
+        if (ctx.placeDrawing(obj.id, nowTime(ctx), row.id) !== true) {
+            say(tr('props.tex.say.placedFail'));
+            return;
+        }
+        say(tr('props.tex.say.placed'));
+        refresh();
+    }
+
+    /** 行内删除：第一次只上确认态，第二次才真的走 ctx.removeDrawing。 */
+    function deleteRow(row) {
+        if (pendingDelete !== row.id) {
+            armDelete(row.id);
+            return;
+        }
+        resetDeleteConfirm();
+        const obj = targetObj();
+        if (!obj || !has('removeDrawing')) {
+            say(tr('props.tex.say.deletedFail'));
+            return;
+        }
+        if (ctx.removeDrawing(obj.id, row.id) !== true) {
+            say(tr('props.tex.say.deletedFail'));
+            return;
+        }
+        say(tr('props.tex.say.deleted'));
+        refresh();
+    }
+
+    /** 32×32 行缩略图（棋盘格由 textures.css 垫在 canvas 底下）。 */
+    function makeRowThumb(image) {
+        const cv = document.createElement('canvas');
+        cv.className = 'ptx-row-thumb';
+        cv.width = 32;
+        cv.height = 32;
+        cv.setAttribute('aria-hidden', 'true');
+        fitCanvas(cv, image);
+        return cv;
+    }
+
+    /** 重建抽屉列表：一行 = [放置按钮（缩略图/序号/尺寸/引用/当前徽标）][行内删除]。 */
+    function rebuildDrawer(obj, rows) {
+        drawer.textContent = '';
+        deleteBtns.clear();
+        resetDeleteConfirm();
+        const images = new Map();
+        for (const d of obj ? drawingsOf(obj) : []) images.set(d.id, d.image);
+        for (const row of rows) {
+            const item = document.createElement('div');
+            item.className = 'ptx-row';
+            item.dataset.id = row.id;
+            item.classList.toggle('is-current', row.current);
+            item.classList.toggle('is-unused', row.unused);
+
+            const main = document.createElement('button');
+            main.type = 'button';
+            main.className = 'ptx-row-main';
+            main.dataset.k = 'ptx-row';
+            if (row.current) main.setAttribute('aria-current', 'true');
+            const sizeText = row.width + ' × ' + row.height;
+            const aria = tr(row.current ? 'props.tex.lib.rowCurrentAria' : 'props.tex.lib.rowAria', {
+                index: row.index,
+                size: sizeText,
+            });
+            main.title = aria;
+            main.setAttribute('aria-label', aria);
+
+            const idxEl = document.createElement('span');
+            idxEl.className = 'ptx-row-idx';
+            idxEl.textContent = String(row.index);
+
+            const sizeEl = document.createElement('span');
+            sizeEl.className = 'ptx-row-size';
+            sizeEl.textContent = sizeText;
+
+            // 引用信息：未使用 / @时刻 / @时刻 · N 处；完整时刻表挂在 title 里
+            const ref = textureRowRef(row);
+            const refEl = document.createElement('span');
+            refEl.className = 'ptx-row-ref';
+            refEl.textContent = tr(ref.key, ref.vars);
+            refEl.title = row.unused
+                ? tr('props.tex.lib.unusedTitle')
+                : tr('props.tex.lib.timesTitle', {
+                    times: row.times.map((s) => formatTextureTime(s) + 's').join(', '),
+                });
+
+            main.append(makeRowThumb(images.get(row.id)), idxEl, sizeEl, refEl);
+            if (row.current) {
+                const badge = document.createElement('span');
+                badge.className = 'ptx-row-badge';
+                badge.textContent = tr('props.tex.lib.current');
+                main.appendChild(badge);
+            }
+            main.addEventListener('click', () => placeRow(row));
+
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'ptx-row-del';
+            del.dataset.k = 'ptx-row-del';
+            del.innerHTML = icon('trash', { label: tr('props.tex.lib.delete') });
+            del.title = tr('props.tex.lib.deleteTitle');
+            del.setAttribute('aria-label', tr('props.tex.lib.deleteTitle'));
+            del.addEventListener('click', () => deleteRow(row));
+            deleteBtns.set(row.id, del);
+
+            item.append(main, del);
+            drawer.appendChild(item);
+        }
+    }
+
+    /** 抽屉与摘要行同步：无纹理时整块隐藏（空态由摘要那条词条负责说明），不显示空列表。 */
+    function syncDrawer(obj, rows) {
+        const hasRows = rows.length > 0;
+        libRow.hidden = !hasRows;
+        if (!hasRows) {
+            drawer.hidden = true;
+            drawer.textContent = '';
+            deleteBtns.clear();
+            drawerSig = '';
+            resetDeleteConfirm();
+            return;
+        }
+        toggleBtn.textContent = openDrawer ? tr('props.tex.lib.hide') : tr('props.tex.lib.show');
+        toggleBtn.title = tr('props.tex.lib.toggleTitle');
+        toggleBtn.setAttribute('aria-label', tr('props.tex.lib.toggleTitle'));
+        toggleBtn.setAttribute('aria-expanded', openDrawer ? 'true' : 'false');
+        drawer.hidden = !openDrawer;
+        if (!openDrawer) {
+            drawerSig = '';
+            resetDeleteConfirm();
+            return;
+        }
+        const sig = rowsSig(rows);
+        if (sig === drawerSig) return;
+        drawerSig = sig;
+        rebuildDrawer(obj, rows);
     }
 
     function syncActions(sum) {
@@ -307,18 +584,21 @@ export function mount(el, ctx) {
 
     function refresh() {
         const obj = targetObj();
+        const now = nowTime(ctx);
         const img = currentImage();
-        const sum = textureSummary(obj, typeof ctx.time === 'function' ? nowTime(ctx) : 0);
+        const sum = textureSummary(obj, now);
         paintThumb(img);
         summary.textContent = obj ? tr(sum.key, sum.vars) : '—';
         summary.title = obj ? tr(sum.key, sum.vars) : tr('props.tex.noObject');
         syncActions(sum);
         syncSize(img);
+        // 抽屉的行数据与摘要同一个时间口径；无对象/无纹理时 syncDrawer 会把整块藏起来
+        syncDrawer(obj, textureRows(obj, now));
     }
 
     /* ── 动作 ── */
 
-    function runNew(obj, t) {
+    function runNew(obj, when) {
         if (!has('newDrawing')) {
             say(tr('props.tex.say.newNotWired'));
             return false;
@@ -328,24 +608,24 @@ export function mount(el, ctx) {
             say(tr('props.tex.say.fail'));
             return false;
         }
-        const placed = has('placeDrawing') && ctx.placeDrawing(obj.id, t, made) === true;
+        const placed = has('placeDrawing') && ctx.placeDrawing(obj.id, when, made) === true;
         say(placed ? tr('props.tex.say.created') : tr('props.tex.say.createdLib'));
         return true;
     }
 
-    function runUnique(obj, t) {
+    function runUnique(obj, when) {
         if (!has('makeUniqueCel')) {
             say(tr('props.tex.say.uniqueNotWired'));
             return false;
         }
-        if (ctx.makeUniqueCel(obj.id, t) !== true) {
+        if (ctx.makeUniqueCel(obj.id, when) !== true) {
             say(tr('props.tex.block.unique'));
             return false;
         }
         return true;
     }
 
-    function runDelete(obj, t) {
+    function runDelete(obj, when) {
         const ids = has('drawingsOf') ? ctx.drawingsOf(obj.id).map((d) => d && d.id) : [];
         const cur = has('currentDrawingId') ? ctx.currentDrawingId(obj.id) : null;
         const id = deleteCandidateId(ids, cur, null);
@@ -406,19 +686,25 @@ export function mount(el, ctx) {
     for (const [id, b] of actBtns) {
         b.addEventListener('click', () => {
             const obj = targetObj();
-            const t = nowTime(ctx);
-            const sum = textureSummary(obj, t);
+            const now = nowTime(ctx);
+            const sum = textureSummary(obj, now);
             const blocked = actionBlocked(id, { hasObj: !!obj, count: sum.count });
             if (blocked) {
                 say(tr(blocked));
                 return;
             }
-            if (id === 'new') runNew(obj, t);
-            else if (id === 'unique') runUnique(obj, t);
-            else if (id === 'delete') runDelete(obj, t);
+            if (id === 'new') runNew(obj, now);
+            else if (id === 'unique') runUnique(obj, now);
+            else if (id === 'delete') runDelete(obj, now);
             else if (id === 'trim') runTrim(obj);
         });
     }
+
+    // 展开/收起：状态留在闭包里，refresh() 只换内容；收起时顺手把「待确认删除」收回
+    toggleBtn.addEventListener('click', () => {
+        openDrawer = !openDrawer;
+        refresh();
+    });
 
     applyBtn.addEventListener('click', () => applySizeFromInputs());
     for (const [val, b] of alignBtns) {
@@ -440,6 +726,11 @@ export function mount(el, ctx) {
     return {
         refresh,
         destroy() {
+            // 确认态的超时计时器不清理的话，面板重挂后还会回调一次已摘掉的按钮
+            if (confirmTimer) {
+                clearTimeout(confirmTimer);
+                confirmTimer = 0;
+            }
             const group = body ? body.parentNode : null;
             if (group && typeof group.remove === 'function') group.remove();
         },

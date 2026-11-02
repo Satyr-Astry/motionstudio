@@ -55,6 +55,10 @@ The payoff is direct: paint one drawing at 0.2s and the next at 3s without inser
 - Segmented variable frame rate; the colored strip under the timeline is the fps segmentation
 - Timeline `Ctrl+wheel` zooms anchored at the pointer; **double-click the ruler = fit the whole duration**; the toolbar degrades by width instead of clipping labels
 
+**Textures**
+- An object owns a **texture library**; a keyframe's `drawing` id picks which texture shows from that moment on (`null` = explicit blank), so one texture can be reused at many moments
+- The properties panel has a **texture drawer**: one row per texture — thumbnail, size, exposure times or *Unused*, current one highlighted. Click a row to place that texture at the playhead (one undo step), delete a row with a two-click confirm; unused textures stay in the library and are saved with the project
+
 **Objects**
 - Transform: position / scale / rotate / skew / opacity
 - Parenting, blend modes, clipping masks
@@ -63,7 +67,7 @@ The payoff is direct: paint one drawing at 0.2s and the next at 3s without inser
 
 **Import / export**
 - Import: PSD / PSB (zero-dependency parser; keeps layers, visibility, opacity, blend mode, parent groups), PNG / JPG / WebP
-- Save: `.msp` project files (JSON, bitmaps inlined), plus an IndexedDB project library with silent autosave
+- Save: project library (IndexedDB, silent autosave) **and** `.msp` project files (JSON, bitmaps inlined) — the two coexist. Once a project is bound to a file, `Ctrl+S` writes the library **and** writes that same serialization back to the file; **Save as…** writes a new `.msp` and rebinds. A failed write-back is reported ("library saved, project file not updated"), never silently reported as success
 - Export: PNG sequence, spritesheet + coordinate JSON (own format, **Phaser 3** and **Aseprite / TexturePacker / Godot / Love2D / Unity** frame tables), **animated GIF** and **APNG** (zero-dependency encoders; APNG keeps full colour and 8-bit alpha), WebM (VP9)
 
 ## Running it
@@ -90,11 +94,11 @@ Electron starts a local static server (43117 by default, next free port otherwis
 
 `app/` **is** a plain static site: the renderer uses only relative ES module imports — no bare specifiers, no `node:` imports, no bundles, no `http://` references. Serve the folder over http(s) (`.mjs` must be served as JavaScript; `file://` will not work because of module CORS) and it loads.
 
-Exactly one module touches desktop capability — [app/shell/ipc.mjs](app/shell/ipc.mjs), whose `bridge()` reads `globalThis.window.motionAPI` (`app/shell/ipc.mjs:51-52`). Without the shell, the calls in `project-io.mjs` / `import-file.mjs` would lose the native file dialogs and exact-path export — so the **web bridge** replaces them: [`app/shell/bridge-web.mjs`](app/shell/bridge-web.mjs) installs six browser implementations (`input[type=file]` for open/import, `a[download]` for export/save) through `ipc.setBridge()`, and `app/index.html` loads it before `app.mjs`. A browser session therefore **draws, animates, plays, imports and exports for real** — what it cannot do is pick a folder (`openFolder` reports that instead of pretending), and exports land in the download folder. Forget a step and the failure is reported as a failure: `alpha.16` removed every path that used to say "done" without writing a file.
+Exactly one module touches desktop capability — [app/shell/ipc.mjs](app/shell/ipc.mjs), whose `bridge()` reads `globalThis.window.motionAPI` (`app/shell/ipc.mjs:51-52`). Without the shell, the calls in `project-io.mjs` / `import-file.mjs` would lose the native file dialogs and exact-path export — so the **web bridge** replaces them: [`app/shell/bridge-web.mjs`](app/shell/bridge-web.mjs) installs six browser implementations (`input[type=file]` for open/import, `a[download]` for export/save) through `ipc.setBridge()`, and `app/index.html` loads it before `app.mjs`. A browser session therefore **draws, animates, plays, imports and exports for real** — what it cannot do is pick a folder (`openFolder` reports that instead of pretending) or overwrite a bound project file in place (`saveProjectTo` returns a structured `unsupported` instead of a fake success), and exports land in the download folder. Forget a step and the failure is reported as a failure: `alpha.16` removed every path that used to say "done" without writing a file.
 
 ### Repository split
 
-The desktop **shell** (`main.js`, `preload.js`, the Electron packaging scripts) is being moved to its own repository, which will be where desktop releases are published. This repository becomes the **core**: the renderer (`app/`), tests, docs and the quality gates. The contract between the two halves is the seven IPC channel names — see [Core concepts](#core-concepts). Until the split lands, both live here.
+The desktop **shell** (`main.js`, `preload.js`, the Electron packaging scripts) is being moved to its own repository, which will be where desktop releases are published. This repository becomes the **core**: the renderer (`app/`), tests, docs and the quality gates. The contract between the two halves is the eight IPC channel names — see [Core concepts](#core-concepts). Until the split lands, both live here.
 
 ## Three workspaces
 
@@ -116,7 +120,7 @@ The paint board has its own canvas and camera — that is the precondition for "
 - **Drawing / exposure** — a keyframe's `drawing` id selects which texture shows from that moment on. `null` is an explicit blank; a missing field inherits the previous one.
 - **Keyframe** — `{ t, state, ease, h1, h2, drawing }`.
 - **Channel** — one track per animatable quantity, each with its own easing. Effect parameters are channels too (`fx.<effectId>.<param>`).
-- **IPC bridge** — the seven channels the renderer may call: `exportFrames`, `exportSheet`, `saveProject`, `loadProject`, `saveBinary`, `importFile`, `openFolder`. The function name in `ipc.mjs`, the method name in `preload.js` and the channel string in `main.js` must stay identical; a contract test for this is on the list when the split happens.
+- **IPC bridge** — the eight channels the renderer may call: `exportFrames`, `exportSheet`, `saveProject`, `saveProjectTo` (write back without a dialog), `loadProject`, `saveBinary`, `importFile`, `openFolder`. The function name in `ipc.mjs`, the method name in `preload.js` and the channel string in `main.js` must stay identical; a contract test for this is on the list when the split happens.
 
 ## Shortcuts
 
@@ -193,7 +197,7 @@ npm run smoke          # boots app/ in a shell-less window and mounts every edit
 
 `npm run smoke` serves `app/` from a throwaway HTTP server and loads it in an Electron window **with no preload and no nodeIntegration** — i.e. exactly what a browser gets. It then switches a panel through every editor in the registry and flips the language both ways, collecting any console error along the way. It is also the browser-mode acceptance test: `window.motionAPI` must be absent and the web bridge must be in place.
 
-Current baseline: **1609 tests / 1607 pass / 2 skipped / 0 fail** across 121 test files; static check scans 105 modules with 0 leftovers, 0 broken imports and 0 unused imports; syntax check 111/111 (105 app/ modules + 6 root tool scripts); layering check reports 0 cross-layer imports; i18n check reports 129 strings still outside the dictionary and 0 structural gaps; smoke mounts **15/15** editors with 0 console errors. Run `npm test`, `npm run check` and `npm run smoke` before handing work over.
+Current baseline: **1631 tests / 1629 pass / 2 skipped / 0 fail** across 121 test files; static check scans 105 modules with 0 leftovers, 0 broken imports and 0 unused imports; syntax check 111/111 (105 app/ modules + 6 root tool scripts); layering check reports 0 cross-layer imports; i18n check reports 129 strings still outside the dictionary and 0 structural gaps; smoke mounts **15/15** editors with 0 console errors. Run `npm test`, `npm run check` and `npm run smoke` before handing work over.
 
 ## Design principles
 

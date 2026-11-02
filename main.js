@@ -340,6 +340,26 @@ app.whenReady().then(async () => {
         return { ok: true, file: picked.filePath };
     });
 
+    // 写回**已绑定**的项目文件：不弹对话框，直接覆盖（Ctrl+S 且 project.file 非空时走这里）。
+    // 路径由渲染进程从「打开 / 另存为」的结果里带回来，所以这里只做校验 + 写盘。
+    // 任何错误都转成 {ok:false,error} 返回，不抛到渲染层 —— 那边要的是「能说清的失败」。
+    ipcMain.handle('ms:save-project-to', (_e, payload) => {
+        try {
+            const file = payload && typeof payload.file === 'string' ? payload.file.trim() : '';
+            const json = payload && typeof payload.json === 'string' ? payload.json : '';
+            if (!file) return { ok: false, error: '没有已绑定的项目文件路径' };
+            // 只接受绝对路径：相对路径会以进程 cwd 为基准，写到哪里完全不可预期
+            if (!path.isAbsolute(file)) return { ok: false, error: '项目文件路径必须是绝对路径：' + file };
+            if (!json) return { ok: false, error: '没有可写入的项目内容' };
+            fs.writeFileSync(file, json, 'utf8');
+            log('[save-project-to]', file, json.length);
+            return { ok: true, file };
+        } catch (err) {
+            log('[save-project-to] failed', err && err.message);
+            return { ok: false, error: String((err && err.message) || err) };
+        }
+    });
+
     // 二进制导出（WebM 视频等）：对话框选路径后直接把字节写盘。
     // 不把字节塞进 JSON、也不走 base64 —— 视频动辄几 MB，结构化克隆直接搬 ArrayBuffer。
     ipcMain.handle('ms:save-binary', async (_e, payload) => {

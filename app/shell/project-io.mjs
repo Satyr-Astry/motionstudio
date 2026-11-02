@@ -800,9 +800,91 @@ function currentProject() {
 }
 
 /**
+ * 当前文档 → .msp 文件 payload（**唯一**的「当前文档序列化」实现）。
+ *
+ * 「存为文件 / 另存为」与 Ctrl+S 的「回写已绑定文件」必须写出一模一样的字节：
+ * 两份手写的序列化迟早会漂，而这两条路径的差异恰恰最难被发现 ——
+ * 一个落文件、一个入库，事后互相对不上就是「文件还是旧的」。
+ *
+ * @param {string} [name] 项目名；不给就用顶栏那个名字
+ * @returns {Promise<object>} v2 扁平文件（format/version/elements/assets 平铺在顶层）
+ */
+async function projectFilePayload(name) {
+    const label = String(name == null || name === '' ? projectLabel() : name);
+    // v2 扁平文件：format/version/elements/frames/assets 全部平铺在顶层
+    if (typeof store.docToFile === 'function') return store.docToFile(state.doc, { name: label });
+    return {
+        format: store.FORMAT,
+        version: store.VERSION,
+        name: label,
+        savedAt: Date.now(),
+        doc: store.docToJSON(state.doc),
+    };
+}
+
+/**
+ * 保存结果 → 一句提示（纯函数，Node 里可直接测）。
+ *
+ * 三种结局必须**可分辨**：库和文件都更新了 / 只进了库 / 库更新了但文件还是旧的。
+ * 最后一种正是最容易让人丢工作成果的一种 —— 界面说「已保存」，磁盘上的交付物却是旧的。
+ *
+ * @param {{label?:string,file?:string,back?:{ok?:boolean,unsupported?:boolean,error?:string}}} r
+ * @returns {{text:string,level:'info'|'error'}}
+ */
+export function saveFlash(r) {
+    const res = r || {};
+    const label = String(res.label == null ? '' : res.label);
+    const file = String(res.file == null ? '' : res.file);
+    const back = res.back && typeof res.back === 'object' ? res.back : {};
+    if (!file) return { text: t('shell.save.doneLibrary', { label: label }), level: 'info' };
+    if (back.ok) return { text: t('shell.save.doneWithFile', { label: label, file: file }), level: 'info' };
+    if (back.unsupported) return { text: t('shell.save.writeBackUnsupported', { label: label }), level: 'error' };
+    const msg = String(back.error || t('shell.saveFile.failedBase'));
+    return { text: t('shell.save.writeBackFailed', { label: label, msg: msg }), level: 'error' };
+}
+
+/**
+ * 把当前文档写回**已绑定**的 .msp（无对话框）。
+ *
+ * 只在 `project.file` 非空时调用：路径来自「打开 / 另存为」，不再弹保存框。
+ * 失败必须把原因带回来 —— 库写成功之后，这一句是用户判断「磁盘上那份交付物
+ * 是不是最新的」的唯一依据；静默或谎报成功都等于让他带着旧文件离开。
+ *
+ * @param {string} label 项目名（写进文件内容，不是路径）
+ * @param {string} file 已绑定的绝对路径
+ * @returns {Promise<{ok:true,file:string}|{ok:false,unsupported?:true,error?:string}>}
+ */
+async function writeBackProjectFile(label, file) {
+    let json = '';
+    try {
+        json = JSON.stringify(await projectFilePayload(label));
+    } catch (err) {
+        return { ok: false, error: t('shell.saveFile.serializeFailed') };
+    }
+    if (!ipc.available()) return { ok: false, unsupported: true };
+    let out = null;
+    try {
+        out = await Promise.resolve(ipc.saveProjectTo(file, json));
+    } catch (err) {
+        return { ok: false, error: (err && err.message) || String(err) };
+    }
+    if (!out) return { ok: false, error: t('shell.saveFile.noResponse') };
+    if (out.ok === false) {
+        if (out.unsupported) return { ok: false, unsupported: true };
+        return { ok: false, error: String(out.error || t('shell.saveFile.failedBase')) };
+    }
+    if (!out.file) {
+        // 回了成功却没给路径：与「存为文件」同一条判据，不替桥签收
+        return { ok: false, error: t('shell.saveFile.noPath') };
+    }
+    return { ok: true, file: String(out.file) };
+}
+
+/**
  * 保存到项目库（无对话框，立即生效）。
  * 命名规则：显式 name > 当前项目名 > 弹一次内联输入框（问一次，取消就放弃）。
- * 只入库、不碰任何系统文件对话框 —— 「存成文件」是另一个显式动作（`存为文件` / 导出）。
+ * 两者并存：项目库 = 草稿箱，`.msp` 文件 = 正式交付 —— 所以入库成功后，**若已绑定文件
+ * 就顺手回写**（Ctrl+S 的语义：写库 + 回写）；没绑定文件时就只入库，提示里说明用「另存为」。
  */
 async function saveProject(name) {
     const doc = state.doc;
@@ -831,7 +913,12 @@ async function saveProject(name) {
         project.name = label;
         project.dirty = false;
         store.setCurrentProjectId(project.id);
-        flash(t('shell.save.done', { label }));
+        // 两者并存：库是草稿箱、.msp 是交付物。绑定过文件就必须同时回写，
+        // 否则「已保存」只对了一半，磁盘上那份还是旧内容（交接文档 §3.3 bug 2）。
+        const file = String(project.file || '');
+        const back = file ? await writeBackProjectFile(label, file) : { ok: true };
+        const out = saveFlash({ label: label, file: file, back: back });
+        flash(out.text, out.level);
         updateChrome();
         notifyProjects();
         return true;
@@ -860,20 +947,7 @@ async function writeProjectFile(id, opts) {
         const rec = await store.getProject(id);
         if (rec && rec.project) payload = rec.project;
     }
-    if (!payload) {
-        // v2 扁平文件：format/version/elements/frames/assets 全部平铺在顶层
-        if (typeof store.docToFile === 'function') {
-            payload = await store.docToFile(state.doc, { name: projectLabel() });
-        } else {
-            payload = {
-                format: store.FORMAT,
-                version: store.VERSION,
-                name: projectLabel(),
-                savedAt: Date.now(),
-                doc: store.docToJSON(state.doc),
-            };
-        }
-    }
+    if (!payload) payload = await projectFilePayload();
     let json = '';
     try {
         json = JSON.stringify(payload);
@@ -901,9 +975,16 @@ async function writeProjectFile(id, opts) {
         // 回了成功却不给路径：主进程那一步一定没走完。宁可报失败，也不替它签收。
         return report(t('shell.saveFile.noPath'));
     }
-    project.file = out.file;
-    if (id) {
-        const rec = await store.getProject(id);
+    // 「另存为」在给文件定归属：**只有写的就是当前打开的项目**时才能改当前绑定。
+    // 给别的卡片写文件时动 project.file 会出大事 —— 当前项目会被静默绑到别人的文件上，
+    // 下一次 Ctrl+S 的回写就把当前内容覆盖进去（真丢数据的路径，本批必须堵住）。
+    const sameProject = id ? String(id) === String(project.id || '') : true;
+    if (sameProject) project.file = out.file;
+    // 库记录里的「绑定文件」跟着改：id 是卡片那条；没给 id 时是当前文档另存为。
+    // 只改 file 字段，库里的内容仍是草稿内容 —— 下一次 Ctrl+S 才写内容。
+    const targetId = id || (sameProject ? project.id || '' : '');
+    if (targetId) {
+        const rec = await store.getProject(targetId);
         if (rec) {
             rec.file = out.file;
             await store.putProject(rec);
@@ -2086,7 +2167,13 @@ export async function autoSaveProject() {
         savedAtMs = (saved && saved.savedAt) || Date.now();
         project.dirty = false;
         store.setCurrentProjectId(project.id);
-        flash(t('shell.autosave.done', { name }));
+        // 自动保存也是一次「保存」：绑定了文件就一起回写，否则库里有底、磁盘上是旧的，
+        // 用户关掉窗口后打开 .msp 会少掉最后一次自动保存的内容（与 §3.3 bug 2 同一种骗法）。
+        // 成功时沿用「已自动保存」那句（每 N 秒刷一条长句太吵），失败必须用错误档说出来。
+        const file = String(project.file || '');
+        const back = file ? await writeBackProjectFile(name, file) : { ok: true };
+        if (file && !back.ok) flash(saveFlash({ label: name, file: file, back: back }).text, 'error');
+        else flash(t('shell.autosave.done', { name }));
         updateChrome();
         notifyProjects();
         return true;

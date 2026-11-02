@@ -9,10 +9,11 @@
  * 需要区分取消与失败的调用点用 `saveBinaryChecked()`（或自己先判 `available()`），
  * 别把 null 当取消、更别把它当成功 —— 那正是「没存下来却报已导出」的旧毛病。
  *
- * preload.js 暴露的七个通道（名字必须逐字对齐，写错了会静默返回 null）：
+ * preload.js 暴露的八个通道（名字必须逐字对齐，写错了会静默返回 null）：
  *   exportFrames(name, frames)  → 'ms:export-frames' payload {name, frames}
  *   exportSheet(name, png, json) → 'ms:export-sheet' payload {name, png, json}
- *   saveProject(name, json)     → 'ms:save-project'  payload {name, json}
+ *   saveProject(name, json)     → 'ms:save-project'  payload {name, json}（弹对话框，另存为）
+ *   saveProjectTo(file, json)   → 'ms:save-project-to' payload {file, json}（无对话框，回写已绑定文件）
  *   loadProject()               → 'ms:load-project'  无 payload
  *   importFile(exts)            → 'ms:import-file'   payload {exts}
  *   saveBinary(name, bytes, …)  → 'ms:save-binary'   payload {name, bytes, ext, label}
@@ -37,7 +38,7 @@ let injected = null;
 
 /**
  * 装上（或卸掉）一份桥实现。
- * @param {object|null} impl 六路通道对象；传 null 等于卸掉
+ * @param {object|null} impl 八路通道对象；传 null 等于卸掉
  * @returns {boolean} 是否装上了
  */
 export function setBridge(impl) {
@@ -161,6 +162,35 @@ export function saveProject(name, json) {
     if (typeof payload !== 'string' || !payload) return null;
     // preload 的 saveProject 是 (name, json)：少传 name 会让主进程把内容写丢。
     return call('saveProject', [label, payload]);
+}
+
+/**
+ * 写回**已绑定**的项目文件（无对话框）。
+ *
+ * 和 `saveProject()` 的区别是「路径从哪来」：这个函数的 file 必须已经存在
+ * （打开 .msp / 另存为时记下的 `project.file`），主进程不弹任何对话框，直接覆盖写。
+ * Ctrl+S 在有绑定文件时必须走这一路，否则界面说「已保存」而磁盘上还是旧内容。
+ *
+ * 返回 null 的三种情况与其它通道一致（无桥 / 无函数 / 同步抛错），调用方不能
+ * 把 null 当成功；空 file / 空内容也直接挡在这里，不交给主进程。
+ *
+ * @param {string} file 目标文件绝对路径
+ * @param {string|object} json 项目 JSON（对象会被 stringify）
+ * @returns {Promise<object>|object|null} `{ok:true,file}` / `{ok:false,error}` / null
+ */
+export function saveProjectTo(file, json) {
+    const target = String(file == null ? '' : file).trim();
+    if (!target) return null;
+    let payload = json;
+    if (payload && typeof payload === 'object') {
+        try {
+            payload = JSON.stringify(payload);
+        } catch (err) {
+            return null;
+        }
+    }
+    if (typeof payload !== 'string' || !payload) return null;
+    return call('saveProjectTo', [target, payload]);
 }
 
 /**

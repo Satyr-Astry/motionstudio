@@ -34,16 +34,20 @@ export const WS_TABS = Object.freeze([
 export const WS_IDS = WS_TABS.map((tab) => tab.id);
 
 /**
- * 文件按钮：[act, 图标名, 按钮文字（null = 纯图标）, 中文标题（带快捷键）]。
+ * 文件按钮：[act, 图标名, 按钮文字（null = 纯图标）, 标题词条键（null = 运行时按状态选）]。
  * 图标来自 core/icons.mjs（自绘 24×24 线性图标，无第三方依赖）。
  * 文字一个都不删：图标解决「扫描成本」，文字解决「这个按钮到底是什么」，
  * 纯图标只用在「＋ / 撤销 / 重做」这种全行业已有共识的动作上。
  * 放在品牌与工作区 tab 之间：左边「文件」是项目级操作，右边才是视图级切换。
+ *
+ * `save` 的 title 是唯一一个**两种语义**的：绑定了 .msp 时是「写库 + 回写文件」，
+ * 没绑定时是「只写库，要落盘请用另存为」—— 这正好是用户最容易误解的一处，
+ * 所以它不写死词条键，交给 saveTitle() 按当前状态选（见 syncLabels）。
  */
 // 第 3/4 项是词条键：文字与 title 在 buildTopbar 里按当前语言解析（切语言时能重写）
 const FILE_ACTIONS = [
     ['new', 'plus', null, 'shell.file.newTitle'],
-    ['save', 'save', 'shell.file.saveLabel', 'shell.file.saveTitle'],
+    ['save', 'save', 'shell.file.saveLabel', null],
     ['open', 'folder-open', 'shell.file.openLabel', 'shell.file.openTitle'],
     ['import', 'import', 'shell.file.importLabel', 'shell.file.importTitle'],
     ['export', 'export', 'shell.file.exportLabel', 'shell.file.exportTitle'],
@@ -82,10 +86,23 @@ function fmtClock(ms) {
 }
 
 /**
+ * 顶栏宽度有限：路径只保留**尾巴**（文件名是最有用的那段），完整路径挂 title。
+ * 不用 CSS direction:rtl 那类技巧 —— 反斜杠会跟着反转，Windows 路径会看着像乱码。
+ */
+function shortPath(file, max) {
+    const s = String(file || '');
+    const n = Number(max) > 8 ? Number(max) : 42;
+    if (s.length <= n) return s;
+    return '…' + s.slice(s.length - (n - 1));
+}
+
+/**
  * 构建顶栏。host 通常是 #topbar（可能已有其它内容，这里整体接管）。
  * @param {Element} host
  * @param {{workspace?:Function,setWorkspace?:Function,hint?:Function,file?:Function,
- *          projectName?:Function,dirty?:Function}} api
+ *          projectName?:Function,dirty?:Function,projectSavedAt?:Function,
+ *          projectStoreKind?:Function,projectFile?:Function}} api
+ *   `projectFile` = 当前项目绑定的 .msp 绝对路径（空串 = 没绑定，Ctrl+S 只入库）。
  * @returns {{update:Function, el:Element}}
  */
 export function buildTopbar(host, api) {
@@ -117,10 +134,14 @@ export function buildTopbar(host, api) {
     const projectIcon = el('span', 'top-project-ico', '');
     projectIcon.setAttribute('aria-hidden', 'true');   // 语义已由文字表达
     const projectText = el('span', 'top-project-text', '');
+    // 已绑定的 .msp 路径：用户要能一眼看见 Ctrl+S 到底会回写到哪。
+    // 样式在 styles/shell.css 的 .top-project-file（长度受限、尾巴截断）；完整路径挂在 title 上。
+    const projectFileText = el('span', 'top-project-file', '');
+    projectFileText.hidden = true;
     const projectDot = el('span', 'top-project-dot', '•');
     projectDot.setAttribute('role', 'img');
     projectDot.hidden = true;
-    project.append(projectIcon, projectText, projectDot);
+    project.append(projectIcon, projectText, projectFileText, projectDot);
 
     // 返回编排：画板 / 设置是从编排「进去」的子视图，必须有一条显眼的回路。
     const back = el('button', 'top-back ms-icon-label');
@@ -169,11 +190,26 @@ export function buildTopbar(host, api) {
         }, SAVE_FLASH_MS);
     }
 
+    /**
+     * 「保存」按钮的 title：必须说清这一下会不会回写文件。
+     *
+     * 这是「项目管理重大缺陷」里最容易丢成果的一条 —— 用户以为 Ctrl+S 存了 .msp，
+     * 实际只进了 IndexedDB。所以有绑定文件时说「写库 + 回写 {file}」，
+     * 没有时明说「只写库，要落盘请用另存为」。
+     */
+    function saveTitle() {
+        const file = String(call(a.projectFile, '') || '');
+        return file ? t('shell.file.saveTitleFile', { file: file }) : t('shell.file.saveTitleLibrary');
+    }
+
     function projectTitle(f) {
         const bits = [];
         if (f.inLibrary) bits.push(t('shell.topbar.currentProject', { name: f.pname }));
         else bits.push(t('shell.topbar.notInLibrary'));
         if (f.dirty) bits.push(t('shell.topbar.dirtyShort'));
+        // 文件路径是「这一下 Ctrl+S 会写哪」的唯一线索：有就写全路径，没有就明说只入库
+        if (f.file) bits.push(t('shell.topbar.projectFile', { file: f.file }));
+        else bits.push(t('shell.topbar.noFile'));
         // 这两项要存储层提供（app.mjs 的 api 里还没有），拿不到就整段省略，
         // 不猜时间、也不猜介质 —— 缺字段时 title 依然每句为真。
         const clock = fmtClock(f.savedAt);
@@ -190,7 +226,8 @@ export function buildTopbar(host, api) {
     function syncLabels() {
         for (const f of fileButtons) {
             const text = f.textKey ? t(f.textKey) : null;
-            const title = t(f.titleKey);
+            // titleKey 为 null 的只有「保存」：它的语义随「有没有绑定文件」变，见 saveTitle()
+            const title = f.titleKey ? t(f.titleKey) : saveTitle();
             if (f.text !== text) {
                 f.text = text;
                 f.b.className = 'top-file-btn ' + (text ? 'ms-icon-label' : 'ms-icon-btn');
@@ -234,6 +271,7 @@ export function buildTopbar(host, api) {
 
         const pname = String(call(a.projectName, '') || '').trim();
         const dirty = !!call(a.dirty, false);
+        const file = String(call(a.projectFile, '') || '');
         const inLibrary = pname.length > 0;
         // 「未命名且未入库」与「有名字但没保存」以前看起来一模一样，这里把前者说清。
         const label = inLibrary ? pname : t('shell.topbar.untitled');
@@ -242,6 +280,17 @@ export function buildTopbar(host, api) {
 
         projectIcon.innerHTML = icon(inLibrary ? 'save' : 'folder-open', { size: 'sm' });
         projectText.textContent = (justSaved || flashOn) ? t('shell.topbar.justSaved', { label: label }) : label;
+        // 绑定过的 .msp 路径：可见一段路径尾巴 + 完整路径挂 title；没绑定就整段收掉
+        projectFileText.hidden = !file;
+        projectFileText.textContent = file ? shortPath(file, 42) : '';
+        if (file) {
+            const full = t('shell.topbar.projectFile', { file: file });
+            projectFileText.title = full;
+            projectFileText.setAttribute('aria-label', full);
+        } else {
+            projectFileText.removeAttribute('title');
+            projectFileText.removeAttribute('aria-label');
+        }
         projectDot.hidden = !dirty;
         project.classList.toggle('is-dirty', dirty);
         project.classList.toggle('is-just-saved', justSaved || flashOn);
@@ -249,6 +298,7 @@ export function buildTopbar(host, api) {
             inLibrary,
             pname,
             dirty,
+            file: file,
             savedAt: call(a.projectSavedAt, 0),
             storeKind: call(a.projectStoreKind, ''),
         });

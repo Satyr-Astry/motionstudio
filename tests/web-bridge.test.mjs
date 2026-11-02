@@ -124,11 +124,11 @@ test('桌面上已有 window.motionAPI 时 installWebBridge 不接管', () => {
     globalThis.window.motionAPI = undefined;
 });
 
-test('纯浏览器里装上桥，六路通道都齐', () => {
+test('纯浏览器里装上桥，八路通道都齐', () => {
     fakeDom();
     ipc.setBridge(null);
     assert.equal(installWebBridge(), true);
-    for (const name of ['exportFrames', 'exportSheet', 'saveProject', 'loadProject', 'importFile', 'saveBinary', 'openFolder']) {
+    for (const name of ['exportFrames', 'exportSheet', 'saveProject', 'saveProjectTo', 'loadProject', 'importFile', 'saveBinary', 'openFolder']) {
         assert.equal(typeof ipc[name], 'function', name + ' 应该是个函数');
     }
     assert.equal(ipc.available(), true);
@@ -142,6 +142,28 @@ test('saveProject 走下载，并且回非空 file', async () => {
     assert.equal(out.ok, true);
     assert.equal(out.file, '测试项目.msp'); // 调用方靠这个字段判断真的落了盘
     assert.deepEqual(dom.downloads, ['测试项目.msp']);
+});
+
+test('saveProjectTo：浏览器写不了任意路径 → unsupported，不下载、不假装成功', async () => {
+    const dom = fakeDom();
+    ipc.setBridge(null);
+    installWebBridge();
+    // 「打开过的 .msp」在网页版只是个文件名，没有可写的真实路径
+    const out = await ipc.saveProjectTo('C:/work/a.msp', '{"version":4}');
+    assert.equal(out.ok, false, '浏览器不能回写文件，绝不能回 ok:true');
+    assert.equal(out.unsupported, true, '调用方要靠这个标记分辨「环境不支持」与「桥没响应」');
+    assert.equal(typeof out.error, 'string');
+    assert.deepEqual(dom.downloads, [], '写回失败不该悄悄变成一次下载');
+});
+
+test('saveProjectTo：空路径 / 空内容在 ipc 层就挡下（返回 null，不惊动桥）', async () => {
+    fakeDom();
+    ipc.setBridge(null);
+    installWebBridge();
+    assert.equal(await ipc.saveProjectTo('', '{"version":4}'), null);
+    assert.equal(await ipc.saveProjectTo('   ', '{"version":4}'), null);
+    assert.equal(await ipc.saveProjectTo('C:/work/a.msp', ''), null);
+    assert.equal(await ipc.saveProjectTo('C:/work/a.msp', null), null);
 });
 
 test('空内容在 ipc 层就被挡下：返回 null，桥压根收不到空活', async () => {

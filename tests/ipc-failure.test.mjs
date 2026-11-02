@@ -253,3 +253,182 @@ test('错误提示停留更久且不被下一条普通提示顶掉', () => {
     const chrome = read('../app/shell/chrome.mjs');
     assert.match(chrome, /hint\.title = text/, '顶栏被省略号截断时，悬停要能读到全句');
 });
+
+/* ─────── ⑥ Ctrl+S 的「两者并存」：写库 + 回写已绑定文件（真行为 + 源码守卫） ─────── */
+
+/**
+ * `project-io.mjs` / `doc-state.mjs` 在 import 期就碰 document，所以装一套最小 DOM 桩
+ * 再动态 import。这套桩只够模块求值 + 一次保存（画布拿不到 2D 上下文，缩略图会退回空串）。
+ */
+function stubDom() {
+    const fakeNode = () => ({
+        width: 0,
+        height: 0,
+        style: {},
+        getContext: () => null,
+        toDataURL: () => '',
+        appendChild() {},
+        addEventListener() {},
+        removeAttribute() {},
+        setAttribute() {},
+        classList: { add() {}, remove() {}, toggle() {} },
+    });
+    globalThis.document = {
+        documentElement: { lang: '' },
+        body: { appendChild() {}, removeChild() {} },
+        addEventListener() {},
+        removeEventListener() {},
+        createElement: fakeNode,
+        querySelector: () => null,
+    };
+}
+
+async function loadProjectIo() {
+    stubDom();
+    const [io, ds, cel, store] = await Promise.all([
+        import('../app/shell/project-io.mjs'),
+        import('../app/shell/doc-state.mjs'),
+        import('../app/core/cel.mjs'),
+        import('../app/shell/project-store.mjs'),
+    ]);
+    return { io, ds, cel, store };
+}
+
+/** 每个用例从一个干净的文档 + 未绑定文件的状态开始。 */
+function freshDoc(cel, ds) {
+    ds.state.doc = cel.createDocument({ width: 20, height: 10, fps: 10, layerName: 'L' });
+    ds.project.id = '';
+    ds.project.name = '';
+    ds.project.file = '';
+    ds.project.dirty = true;
+}
+
+test('saveProject：绑定了文件就回写该文件，没绑定就只入库（真行为断言）', async () => {
+    const { io, ds, cel } = await loadProjectIo();
+    freshDoc(cel, ds);
+    const writes = [];
+    const api = {
+        // 「另存为」对话框这一路不该被 Ctrl+S 碰到
+        saveProject: () => {
+            throw new Error('Ctrl+S 不应该弹保存对话框');
+        },
+        saveProjectTo: (file, json) => {
+            writes.push({ file, json });
+            return { ok: true, file };
+        },
+    };
+    await withBridge(api, async () => {
+        assert.equal(await io.saveProject('ProjA'), true);
+        assert.equal(writes.length, 0, '没绑定文件时不该回写：Ctrl+S 此时只入库');
+        assert.equal(ds.project.file, '', '没有文件时不该凭空造出一个绑定');
+
+        ds.project.file = 'C:/work/a.msp';
+        assert.equal(await io.saveProject('ProjA'), true);
+        assert.equal(writes.length, 1, '绑定文件后 Ctrl+S 必须回写，否则磁盘上还是旧内容');
+        assert.equal(writes[0].file, 'C:/work/a.msp');
+        const payload = JSON.parse(writes[0].json);
+        assert.equal(payload.format, 'motionstudio-project', '回写的必须是完整项目文件，不是裸 doc');
+        assert.equal(payload.name, 'ProjA');
+        assert.ok(Array.isArray(payload.elements), '扁平文件顶层要有 elements');
+        assert.equal(payload.version, 4);
+    });
+});
+
+test('saveProject：回写失败必须说「库已保存、文件未更新」，不许静默', async () => {
+    const { io, ds, cel } = await loadProjectIo();
+    freshDoc(cel, ds);
+    ds.project.file = 'C:/work/b.msp';
+    const api = {
+        saveProjectTo: () => ({ ok: false, error: 'EACCES: permission denied' }),
+    };
+    await withBridge(api, async () => {
+        // 库确实写成功了：返回值仍是 true（内容有底，切项目/关窗口不会丢）
+        assert.equal(await io.saveProject('ProjB'), true);
+        const msg = ds.hintText();
+        assert.match(msg, /项目库/, '必须说明内容已进库');
+        assert.match(msg, /未更新/, '必须说明文件没更新');
+        assert.match(msg, /EACCES/, '必须带出原因，不能只说「失败」');
+    });
+});
+
+test('saveFlash：三种结局的文案与档位必须可分辨（纯函数）', async () => {
+    const { io } = await loadProjectIo();
+    const libraryOnly = io.saveFlash({ label: '甲', file: '' });
+    assert.equal(libraryOnly.level, 'info');
+    assert.match(libraryOnly.text, /项目库/);
+    assert.match(libraryOnly.text, /另存为/, '只入库时要指出「另存为」这条出路');
+
+    const both = io.saveFlash({ label: '甲', file: 'C:/work/a.msp', back: { ok: true } });
+    assert.equal(both.level, 'info');
+    assert.match(both.text, /回写/);
+    assert.match(both.text, /a\.msp/);
+
+    const failed = io.saveFlash({ label: '甲', file: 'C:/work/a.msp', back: { ok: false, error: 'EACCES' } });
+    assert.equal(failed.level, 'error', '回写失败走错误档（停留更久、不被普通提示顶掉）');
+    assert.match(failed.text, /项目库/);
+    assert.match(failed.text, /未更新/);
+    assert.match(failed.text, /EACCES/);
+
+    const unsupported = io.saveFlash({ label: '甲', file: 'C:/work/a.msp', back: { ok: false, unsupported: true } });
+    assert.equal(unsupported.level, 'error');
+    assert.match(unsupported.text, /另存为/, '没有回写能力时要给出补救动作');
+
+    // 三种结局两两不同：用户必须能区分「都更新了 / 只进了库 / 文件还是旧的」
+    assert.equal(new Set([libraryOnly.text, both.text, failed.text, unsupported.text]).size, 4);
+});
+
+test('另存为给别的项目写文件时，不把当前项目绑到那个文件上（防 Ctrl+S 覆盖错文件）', async () => {
+    const { io, ds, cel, store } = await loadProjectIo();
+    freshDoc(cel, ds);
+    ds.project.name = '当前项目';
+    ds.project.file = 'C:/work/current.msp';
+    const recB = store.makeRecord({ id: 'proj-b', name: 'B', doc: ds.state.doc, file: '' });
+    await store.putProject(recB);
+
+    const api = { saveProject: () => ({ ok: true, file: 'C:/work/b.msp' }) };
+    await withBridge(api, async () => {
+        const out = await io.projectApi.exportFile('proj-b');
+        assert.equal(out.ok, true);
+        assert.equal(ds.project.file, 'C:/work/current.msp', '别的卡片另存为不能改当前项目的绑定');
+        const back = await store.getProject('proj-b');
+        assert.equal(back.file, 'C:/work/b.msp', '被另存为的那条记录要记住新路径');
+
+        // 当前文档自己另存为：绑定要跟着换到新路径（否则顶栏与下一次 Ctrl+S 指着旧文件）
+        const api2 = { saveProject: () => ({ ok: true, file: 'C:/work/new.msp' }) };
+        await withBridge(api2, async () => {
+            const out2 = await io.projectApi.exportFile();
+            assert.equal(out2.ok, true);
+            assert.equal(ds.project.file, 'C:/work/new.msp', '当前文档另存为后绑定要更新');
+        });
+    });
+});
+
+test('源码守卫：saveProject 的回写分支与自动保存的回写路都在', () => {
+    const io = read('../app/shell/project-io.mjs');
+    const body = io.slice(io.indexOf('async function saveProject('), io.indexOf('async function writeProjectFile'));
+    assert.match(body, /const file = String\(project\.file \|\| ''\);/, '回写目标必须取 project.file');
+    assert.match(body, /if \(file\) return|const back = file \? await writeBackProjectFile/, '只有绑定了文件才回写');
+    assert.match(body, /writeBackProjectFile\(label, file\)/, '回写走无对话框通道');
+    assert.match(body, /saveFlash\(\{ label: label, file: file, back: back \}\)/, '三种结局的提示统一由 saveFlash 决定');
+    assert.match(body, /flash\(out\.text, out\.level\)/, '提示要带档位（error 会长留）');
+    // 回写用的必须是和「另存为」同一份序列化
+    const wb = io.slice(io.indexOf('async function writeBackProjectFile'), io.indexOf('async function saveProject('));
+    assert.match(wb, /JSON\.stringify\(await projectFilePayload\(label\)\)/, '回写必须复用 projectFilePayload');
+    assert.match(wb, /ipc\.saveProjectTo\(file, json\)/, '回写走 ms:save-project-to 通道，不重弹对话框');
+    assert.match(wb, /if \(!out\.file\)/, '回了成功却没给路径时不能签收');
+    const auto = io.slice(io.indexOf('export async function autoSaveProject'));
+    assert.match(auto, /writeBackProjectFile\(name, file\)/, '自动保存也要回写绑定文件（否则库有底、文件还是旧的）');
+    assert.match(auto, /if \(file && !back\.ok\) flash\(saveFlash\(/, '自动保存回写失败必须用错误档说出来');
+});
+
+test('源码守卫：预加载与主进程都接上了无对话框的回写通道', () => {
+    const ipcSrc = read('../app/shell/ipc.mjs');
+    assert.match(ipcSrc, /call\('saveProjectTo', \[target, payload\]\)/, 'ipc 包装没接通道');
+    assert.match(ipcSrc, /八个通道/, '通道数注释要与实际一致');
+    const preload = read('../preload.js');
+    assert.match(preload, /saveProjectTo: \(file, json\) => ipcRenderer\.invoke\('ms:save-project-to'/, 'preload 没暴露 saveProjectTo');
+    const main = read('../main.js');
+    assert.match(main, /ipcMain\.handle\('ms:save-project-to'/, 'main 没注册通道');
+    assert.match(main, /path\.isAbsolute\(file\)/, '主进程要拒绝相对路径（写到哪里不可预期）');
+    assert.match(main, /fs\.writeFileSync\(file, json, 'utf8'\)/, '主进程要真的写盘');
+});

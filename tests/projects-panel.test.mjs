@@ -12,7 +12,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CARD_ACTIONS, MENU_ITEMS, countLabel, filterRows, noResultText } from '../app/editors/projects.mjs';
+import { CARD_ACTIONS, MENU_ITEMS, countLabel, filterRows, metaLine, noResultText, normRecord } from '../app/editors/projects.mjs';
 import { ICON_NAMES } from '../app/core/icons.mjs';
 import { DEFAULT_LOCALE, setLocale, t } from '../app/i18n/index.mjs';
 
@@ -36,6 +36,30 @@ const rows = [
     { id: 'b', name: '项目B 草稿' },
     { id: 'c', name: 'Hero Walk' },
 ];
+
+test('normRecord：读记录里真实存在的 frames（纹理时间点数），不是记录没有的 cels', () => {
+    const row = normRecord({ id: 'p1', name: 'P', frames: 3, width: 40, height: 30, layers: 2, bytes: 1024 });
+    assert.equal(row.frames, 3);
+    assert.equal(row.cels, undefined, '规范化结果里不该再冒出记录没有的 cels 字段');
+    // 老记录只有 cels 时也读得出来（兼容读取，不再作为写入口径）
+    assert.equal(normRecord({ cels: 2 }).frames, 2);
+    assert.equal(normRecord({ frames: 0, cels: 2 }).frames, 2);
+    // 脏记录不炸
+    assert.equal(normRecord(null).frames, 0);
+    assert.equal(normRecord({ frames: '4' }).frames, 4);
+});
+
+test('metaLine：有 frames 才显示「N 纹理」，缺字段时整项省略而不是恒消失', () => {
+    withLocale('en', () => {
+        assert.equal(metaLine(normRecord({ frames: 3, width: 40, height: 30, layers: 2 })), '3 textures · 40×30 · 2 objects');
+        // 关键回归：记录里没有 cels 字段，旧判据 `if (r.cels)` 让这一项永远不显示
+        assert.ok(!metaLine(normRecord({ width: 40, height: 30 })).includes('textures'));
+        assert.equal(metaLine(normRecord({})), 'Empty project');
+    });
+    withLocale('zh-Hans', () => {
+        assert.ok(metaLine(normRecord({ frames: 5 })).startsWith('5 纹理'));
+    });
+});
 
 test('filterRows：空查询原样返回，且是同一个数组引用', () => {
     assert.equal(filterRows(rows, ''), rows);
@@ -91,19 +115,23 @@ test('countLabel：空库不出文案，有库给总数，有查询给「匹配 
     });
 });
 
-test('CARD_ACTIONS：只剩重命名 / 存为文件 / 删除，删除是危险档', () => {
+test('CARD_ACTIONS：只剩重命名 / 另存为 / 删除，删除是危险档', () => {
     assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'export', 'delete']);
     withLocale('zh-Hans', () => {
-        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['重命名', '存为文件', '删除']);
+        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['重命名', '另存为…', '删除']);
     });
     // label/title 是访问器而非普通属性：否则 setLocale() 之后卡片还挂着旧语言
     withLocale('en', () => {
-        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['Rename', 'Save to file', 'Delete']);
+        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['Rename', 'Save as…', 'Delete']);
         assert.deepEqual(CARD_ACTIONS.map((a) => a.title), [
             'Change the project name (double-clicking the card also works)',
-            'Save as a .msp project file (legacy .json also works)',
+            'Save this project as a .msp file and bind it to the new file (legacy .json also works)',
             'Remove from the library (undo is available for 8 seconds)',
         ]);
+    });
+    // 「另存为」的文案不许再含糊成「存为文件」：它是本批要显式化的交付动作
+    withLocale('en', () => {
+        for (const a of CARD_ACTIONS) assert.ok(!/Save to file/.test(a.label), a.act + ' 还在用旧文案');
     });
     // 卡片整块可点即载入，所以「载入」不该再作为一个按钮存在
     assert.ok(!CARD_ACTIONS.some((a) => a.act === 'open'));
@@ -119,8 +147,12 @@ test('CARD_ACTIONS：每条都有 title 与合法图标名', () => {
     }
 });
 
-test('MENU_ITEMS：低频项全收进菜单，且「导入图片」被分隔线标为另一层级', () => {
-    assert.deepEqual(MENU_ITEMS.map((a) => a.act), ['import', 'sheet', 'refresh', 'image']);
+test('MENU_ITEMS：低频项全收进菜单，含显式「另存为」，且「导入图片」被分隔线标为另一层级', () => {
+    assert.deepEqual(MENU_ITEMS.map((a) => a.act), ['import', 'saveAs', 'sheet', 'refresh', 'image']);
+    // 「另存为」是项目文件动作，不是「不属于项目库」的那一项：分隔线只留给最后一条
+    const saveAs = MENU_ITEMS.find((a) => a.act === 'saveAs');
+    assert.ok(saveAs, '菜单里必须有显式的另存为入口');
+    assert.ok(!saveAs.sepBefore);
     // 这四项都不该再作为 head 上的平铺按钮出现
     assert.ok(!MENU_ITEMS.some((a) => a.act === 'new'));
     const img = MENU_ITEMS.find((a) => a.act === 'image');

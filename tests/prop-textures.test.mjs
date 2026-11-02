@@ -11,8 +11,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
-import { makeObject } from '../app/core/doc-model.mjs';
+import { drawingsOf, makeObject } from '../app/core/doc-model.mjs';
 import { ICON_NAMES } from '../app/core/icons.mjs';
 import {
     ACTION_HINTS,
@@ -22,8 +23,11 @@ import {
     TEXTURE_SIZE_MAX,
     actionBlocked,
     deleteCandidateId,
+    formatTextureTime,
     parseTextureSize,
     resizePayload,
+    textureRowRef,
+    textureRows,
     textureSummary,
     trimPayload,
     workspaceSwitchTarget,
@@ -37,6 +41,15 @@ function fakeImage(w, h, tag) {
 /** 用 cels 造对象：[[时刻, 图], ...]。 */
 function objectWith(pairs) {
     return makeObject({ name: 'A', cels: pairs.map(([at, image]) => ({ at, image })) });
+}
+
+/** 造一个「库里有未使用纹理」的对象：cels 是曝光，unused 只进 drawings 库。 */
+function objectWithLibrary(pairs, unused) {
+    return makeObject({
+        name: 'A',
+        cels: pairs.map(([at, image]) => ({ at, image })),
+        drawings: (unused || []).map((image) => ({ image })),
+    });
 }
 
 test('TEXTURE_ACTIONS：四个动作、顺序固定（新建 / 独特化 / 删除 / 裁到内容）', () => {
@@ -207,4 +220,139 @@ test('workspaceSwitchTarget：ctx 有 setWorkspace 就用它，否则退 window.
         if (had) globalThis.motionStudio = prev;
         else delete globalThis.motionStudio;
     }
+});
+
+/* ─────────────── 纹理抽屉：行数据（textureRows / textureRowRef） ───────────────
+ * 行列表是这次修复的核心：摘要说「当前第 k 张」，用户要能点第 1 张或第 5 张。
+ * 这里只测 DOM-free 的数据层；「点行 → ctx.placeDrawing」「两步删除」用下面的源码守卫钉。 */
+
+test('textureRows：没有对象 / 没有纹理 → 空数组（空列表不渲染，空态交给摘要词条）', () => {
+    assert.deepEqual(textureRows(null, 0), []);
+    assert.deepEqual(textureRows(undefined, 0), []);
+    // 只有一张空画格（image null）不是纹理
+    assert.deepEqual(textureRows(objectWith([[0, null]]), 0), []);
+});
+
+test('textureRows：一行一张纹理，序号 1 起；尺寸 / times / 未使用都来自 drawingsOf', () => {
+    const a = fakeImage(8, 8, 'a');
+    const b = fakeImage(4, 6, 'b');
+    const spare = fakeImage(16, 12, 'spare');
+    const obj = objectWithLibrary(
+        [
+            [0, a],
+            [1, a],
+            [2, b],
+        ],
+        [spare],
+    );
+
+    const rows = textureRows(obj, 1);
+    // 顺序沿用 drawingsOf：首次曝光升序，未使用的排最后
+    assert.deepEqual(rows.map((r) => r.id), drawingsOf(obj).map((d) => d.id));
+    assert.deepEqual(
+        rows.map((r) => [r.index, r.width, r.height, r.times, r.current, r.unused]),
+        [
+            [1, 8, 8, [0, 1], true, false],
+            [2, 4, 6, [2], false, false],
+            [3, 16, 12, [], false, true],
+        ],
+    );
+    // 行数据只带 DOM 要用的字段，不把位图对象塞进来
+    assert.deepEqual(Object.keys(rows[0]).sort(), [
+        'current',
+        'height',
+        'id',
+        'index',
+        'times',
+        'unused',
+        'width',
+    ]);
+});
+
+test('textureRows：current 跟着时间走；同一张多处曝光时仍算「它就是当前这张」', () => {
+    const a = fakeImage(8, 8, 'a');
+    const b = fakeImage(4, 4, 'b');
+    const obj = objectWithLibrary(
+        [
+            [0, a],
+            [1, a],
+            [2, b],
+        ],
+        [fakeImage(2, 2, 'spare')],
+    );
+    assert.deepEqual(textureRows(obj, 0).map((r) => r.current), [true, false, false]);
+    assert.deepEqual(textureRows(obj, 1).map((r) => r.current), [true, false, false], '第二次曝光还是 a');
+    assert.deepEqual(textureRows(obj, 1.5).map((r) => r.current), [true, false, false], '沿用上一张');
+    assert.deepEqual(textureRows(obj, 2).map((r) => r.current), [false, true, false]);
+    // 早于所有曝光：这一刻没有生效的纹理，任何行都不算当前（与摘要的 noExposure 同口径）
+    assert.deepEqual(textureRows(obj, -1).map((r) => r.current), [false, false, false]);
+});
+
+test('textureRows：空白曝光（drawing:null）那一刻没有图，不把某一行标成当前', () => {
+    const a = fakeImage(8, 8, 'a');
+    // 0s 有图、1s 是一次空白曝光（key.drawing = null）
+    const obj = objectWith([
+        [0, a],
+        [1, null],
+    ]);
+    assert.deepEqual(textureRows(obj, 0).map((r) => r.current), [true]);
+    assert.deepEqual(textureRows(obj, 1).map((r) => r.current), [false], '空白曝光不显示任何纹理');
+});
+
+test('formatTextureTime：两位小数；非法值退回 0.00', () => {
+    assert.equal(formatTextureTime(0), '0.00');
+    assert.equal(formatTextureTime(1.5), '1.50');
+    assert.equal(formatTextureTime(2), '2.00');
+    assert.equal(formatTextureTime('3'), '3.00');
+    assert.equal(formatTextureTime(NaN), '0.00');
+    assert.equal(formatTextureTime(undefined), '0.00');
+});
+
+test('textureRowRef：未使用 / 单处 @t / 多处 @t · N 处（只给 key+var，取词在渲染处）', () => {
+    assert.deepEqual(textureRowRef({ times: [] }), { key: 'props.tex.lib.unused', vars: {} });
+    assert.deepEqual(textureRowRef({ times: [0] }), { key: 'props.tex.lib.at', vars: { t: '0.00' } });
+    assert.deepEqual(textureRowRef({ times: [1.5, 2] }), {
+        key: 'props.tex.lib.usesAt',
+        vars: { t: '1.50', n: 2 },
+    });
+    // 没有 times 字段的行也按「未使用」处理，不抛
+    assert.deepEqual(textureRowRef({}), { key: 'props.tex.lib.unused', vars: {} });
+    assert.deepEqual(textureRowRef(null), { key: 'props.tex.lib.unused', vars: {} });
+});
+
+/* ─────────────── 纹理抽屉：源码守卫（DOM 部分 node 测不了，钉接线） ─────────────── */
+
+const PANEL_SRC = readFileSync(new URL('../app/editors/prop-textures.mjs', import.meta.url), 'utf8');
+const CSS_SRC = readFileSync(new URL('../app/styles/textures.css', import.meta.url), 'utf8');
+
+test('抽屉已经接在 refresh 上，且展开态是闭包状态（refresh 不重建/不重置）', () => {
+    assert.ok(PANEL_SRC.includes('syncDrawer(obj, textureRows(obj, now))'), 'refresh 没接抽屉');
+    assert.ok(PANEL_SRC.includes('let openDrawer = false'), '展开态不是闭包变量，refresh 之间保不住');
+    assert.ok(PANEL_SRC.includes('openDrawer = !openDrawer'), '缺展开/收起切换');
+    // 抽屉 DOM 只建一次，refresh 只换内容（重建列表必须发生在 syncDrawer 里）
+    assert.ok(PANEL_SRC.includes('drawer.textContent = '), '重建列表没清空旧行');
+});
+
+test('点行 = ctx.placeDrawing（一步撤销）；当前那张不重复写文档', () => {
+    assert.ok(PANEL_SRC.includes('ctx.placeDrawing(obj.id, nowTime(ctx), row.id)'), '点行没走 placeDrawing');
+    assert.ok(PANEL_SRC.includes('if (row.current) return'), '点当前行会写一条无变化的撤销');
+    assert.ok(PANEL_SRC.includes('props.tex.say.placedFail'), '放置失败没有提示');
+});
+
+test('行内删除是两步确认 + ctx.removeDrawing，不许一次误删', () => {
+    assert.ok(PANEL_SRC.includes('ctx.removeDrawing(obj.id, row.id)'), '行内删除没走 removeDrawing');
+    assert.ok(PANEL_SRC.includes('if (pendingDelete !== row.id)'), '删除没有二次确认');
+    assert.ok(PANEL_SRC.includes('armDelete(row.id)'), '缺第一次点击的确认态');
+    assert.ok(PANEL_SRC.includes("classList.toggle('is-armed'"), '确认态没有视觉状态');
+    assert.ok(PANEL_SRC.includes('clearTimeout(confirmTimer)'), '确认态超时/销毁没清理计时器');
+    assert.ok(PANEL_SRC.includes('props.tex.say.deletedFail'), '删除失败没有提示');
+});
+
+test('样式：抽屉限高滚动，当前行高亮，隐藏态压过 .prop-row 的 display', () => {
+    assert.ok(CSS_SRC.includes('.ptx-drawer'), '缺抽屉样式');
+    assert.ok(/\.ptx-drawer\s*\{[^}]*max-height:[^;]*;/.test(CSS_SRC), '抽屉没有限高');
+    assert.ok(/\.ptx-drawer\s*\{[^}]*overflow-y:\s*auto/.test(CSS_SRC), '抽屉没有滚动');
+    assert.ok(CSS_SRC.includes('.ptx-row.is-current'), '当前行没有高亮样式');
+    assert.ok(CSS_SRC.includes('.ptx-row-thumb'), '缺行缩略图样式');
+    assert.ok(CSS_SRC.includes('.ptx-lib-row[hidden]'), '「库」行 hidden 会被 .prop-row 的 display 压掉');
 });

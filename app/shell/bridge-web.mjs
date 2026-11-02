@@ -1,5 +1,5 @@
 /**
- * MotionStudio —— 浏览器桥（纯网页版没有 preload 时补上那六路通道）
+ * MotionStudio —— 浏览器桥（纯网页版没有 preload 时补上那八路通道）
  *
  * 这个文件只在**没有桌面壳**时做事：检测到 `window.motionAPI` 就直接返回，
  * 所以同一份 `app/index.html` 既能被 Electron 加载（走真实 IPC），
@@ -9,6 +9,8 @@
  *   ✅ 导出 PNG 序列 / 精灵图 / WebM / 项目文件 —— 走**下载**，文件进浏览器的下载目录
  *   ✅ 打开 .msp / 导入 PSD、图片 —— 走 `<input type="file">` 的文件选择框
  *   ⚠️ 没有「选目录」「打开文件夹」：浏览器没有对应 API，`openFolder` 明确报错
+ *   ⚠️ 不能**写回**一个已绑定的任意路径：`saveProjectTo` 明确回 unsupported，
+ *      调用方据此说「库已保存、文件没更新」，而不是假装回写成功
  *   ⚠️ 一次导出几百张 PNG 时，浏览器会连着弹下载并把它们合并成一批；
  *      用户在地址栏右侧会看到「已拦截多个下载」的提示，那是浏览器行为，不是丢文件
  *
@@ -134,7 +136,7 @@ function pickFile(accept) {
     });
 }
 
-/** 浏览器版六路通道。返回形状与主进程 IPC 逐字对齐（见 shell/ipc.mjs 头注释）。 */
+/** 浏览器版八路通道。返回形状与主进程 IPC 逐字对齐（见 shell/ipc.mjs 头注释）。 */
 function createWebBridge() {
     return {
         /** 逐帧 PNG → 连续下载。返回 `{ok,dir,count}`，调用方只读 dir/count。 */
@@ -189,6 +191,21 @@ function createWebBridge() {
             const file = safeName(name, 'motionstudio') + '.msp';
             download(new Blob([text], { type: 'application/json' }), file);
             return { ok: true, file };
+        },
+
+        /**
+         * 写回已绑定路径：浏览器做不到，**诚实回 unsupported**。
+         *
+         * 为什么不是 null：null 在 ipc 层是「这条通道没跑起来」（无桥 / 无函数），
+         * 调用方没法分辨「环境不支持」与「preload 漏了这一路」。这里给结构化结果，
+         * 调用方就能说清「库已保存、文件没更新，请用另存为下载」。
+         */
+        async saveProjectTo() {
+            return {
+                ok: false,
+                unsupported: true,
+                error: 'the browser cannot overwrite an arbitrary path',
+            };
         },
 
         /** 任意字节（WebM / GIF …）→ 下载。 */

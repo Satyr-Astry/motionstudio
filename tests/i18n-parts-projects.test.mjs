@@ -207,8 +207,8 @@ test('zh-Hans 表：文案与词条化之前的原文逐字一致', () => {
         'projects.card.badge': '当前',
         'projects.card.delete': '删除',
         'projects.card.delete.hint': '从项目库删除（8 秒内可撤销）',
-        'projects.card.export': '存为文件',
-        'projects.card.export.hint': '另存为 .msp 项目文件（旧版 .json 也行）',
+        'projects.card.export': '另存为…',
+        'projects.card.export.hint': '把这份项目另存为 .msp 文件，并把项目绑定到新文件（旧版 .json 也行）',
         'projects.card.rename': '重命名',
         'projects.card.rename.hint': '修改项目名称（双击卡片也可以）',
         'projects.card.time': '保存于 {when}',
@@ -229,12 +229,15 @@ test('zh-Hans 表：文案与词条化之前的原文逐字一致', () => {
         'projects.import.notImage': '不是图片文件',
         'projects.importFile.done': '已导入项目',
         'projects.importFile.noPicker': '这个环境不支持选择文件',
+        'projects.library.warning': '项目库存在浏览器 IndexedDB 里：清除站点数据或更换浏览器用户会丢失全部项目。重要项目请「另存为」.msp 文件。',
         'projects.menu.image': '导入图片到当前文档',
         'projects.menu.image.hint': '把一张图片作为对象插入当前文档（PNG / JPG / WebP）',
         'projects.menu.import': '导入项目文件',
         'projects.menu.import.hint': '从 .msp 或 .json 项目文件导入到库并打开',
         'projects.menu.refresh': '刷新',
         'projects.menu.refresh.hint': '重新读取项目库',
+        'projects.menu.saveAs': '另存为…',
+        'projects.menu.saveAs.hint': '把当前文档另存为新的 .msp 文件（会更新绑定的文件路径）',
         'projects.menu.sheet': '导出精灵图',
         'projects.menu.sheet.hint': '把整段动画排成一张精灵图（PNG + 坐标 JSON）',
         'projects.meta.cels': '{n} 纹理',
@@ -305,7 +308,7 @@ test('落盘值不许改：导出选项的默认值与格式 id 没被词条化�
 
 test('落盘值不许改：卡片动作与菜单项的 act id 不随语言变', () => {
     assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'export', 'delete']);
-    assert.deepEqual(MENU_ITEMS.map((a) => a.act), ['import', 'sheet', 'refresh', 'image']);
+    assert.deepEqual(MENU_ITEMS.map((a) => a.act), ['import', 'saveAs', 'sheet', 'refresh', 'image']);
     withLocale('zh-Hans', () => {
         assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'export', 'delete']);
         assert.equal(MENU_ITEMS.filter((a) => a.act === 'image')[0].sepBefore, true);
@@ -314,12 +317,12 @@ test('落盘值不许改：卡片动作与菜单项的 act id 不随语言变', 
 
 test('面板文案是现取的：切语言后 label / 提示跟着变', () => {
     withLocale('zh-Hans', () => {
-        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['重命名', '存为文件', '删除']);
+        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['重命名', '另存为…', '删除']);
         assert.equal(noResultText(), '没有匹配的项目');
         assert.equal(countLabel(4, 1, 'x'), '匹配 1 / 4');
     });
     withLocale('en', () => {
-        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['Rename', 'Save to file', 'Delete']);
+        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['Rename', 'Save as…', 'Delete']);
         assert.equal(noResultText(), 'No matching projects');
         assert.equal(countLabel(4, 1, 'x'), 'Matched 1 / 4');
         assert.ok(!HAN.test(countLabel(4, 1, 'x')), '英文计数里还有中文');

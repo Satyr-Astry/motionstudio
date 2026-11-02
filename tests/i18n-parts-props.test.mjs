@@ -183,6 +183,68 @@ test('术语统一：纹理区的中文不出现「画格」', () => {
     }
 });
 
+test('纹理抽屉：新增条目两表齐全（列表 / 当前 / 未使用 / 两步删除 / 行数据）', () => {
+    const added = [
+        'props.tex.lib',
+        'props.tex.lib.at',
+        'props.tex.lib.confirm',
+        'props.tex.lib.confirmTitle',
+        'props.tex.lib.current',
+        'props.tex.lib.delete',
+        'props.tex.lib.deleteTitle',
+        'props.tex.lib.hide',
+        'props.tex.lib.rowAria',
+        'props.tex.lib.rowCurrentAria',
+        'props.tex.lib.show',
+        'props.tex.lib.timesTitle',
+        'props.tex.lib.toggleTitle',
+        'props.tex.lib.unused',
+        'props.tex.lib.unusedTitle',
+        'props.tex.lib.usesAt',
+        'props.tex.say.deleted',
+        'props.tex.say.deletedFail',
+        'props.tex.say.placed',
+        'props.tex.say.placedFail',
+    ];
+    for (const k of added) {
+        assert.ok(has(k), '运行期词典里没有抽屉词条：' + k);
+        assert.equal(typeof EN[k], 'string');
+        assert.equal(typeof ZH[k], 'string');
+        assert.ok(EN[k].trim().length > 0 && ZH[k].trim().length > 0, k + ' 的两表文案不能为空');
+    }
+});
+
+test('纹理抽屉：行引用与行 aria 按整句取词，占位符都填得上', () => {
+    const prev = getLocale();
+    try {
+        setLocale('zh-Hans');
+        // 未使用 / 单处 / 多处：与 textureRowRef 的三条分支一一对应
+        assert.equal(t('props.tex.lib.unused'), '未使用');
+        assert.equal(t('props.tex.lib.at', { t: '0.00' }), '@0.00s');
+        assert.equal(t('props.tex.lib.usesAt', { t: '0.00', n: 2 }), '@0.00s · 2 处');
+        assert.equal(
+            t('props.tex.lib.rowAria', { index: 2, size: '40 × 40' }),
+            '第 2 张纹理（40 × 40）。点一下放到当前时刻',
+        );
+        assert.equal(t('props.tex.lib.confirm'), '确认？');
+        assert.equal(t('props.tex.lib.show'), '展开列表');
+        setLocale('en');
+        assert.equal(t('props.tex.lib.unused'), 'Unused');
+        assert.equal(t('props.tex.lib.usesAt', { t: '1.50', n: 3 }), '@1.50s · 3 uses');
+        assert.equal(
+            t('props.tex.lib.rowCurrentAria', { index: 1, size: '8 × 8' }),
+            'Texture #1 (8 × 8) is showing at the current time',
+        );
+        assert.equal(t('props.tex.lib.hide'), 'Hide list');
+        // 两句都必须是整条词条：占位符全被替换，界面不会残留 {x}
+        for (const text of [t('props.tex.lib.timesTitle', { times: '0.00s, 1.50s' }), t('props.tex.lib.toggleTitle')]) {
+            assert.ok(!/\{\w+\}/.test(text), '词条里还有没替换的占位符：' + text);
+        }
+    } finally {
+        setLocale(prev);
+    }
+});
+
 /* ─────────────────────────── 存档纯净性 ─────────────────────────── */
 
 test('偏好项的落盘值（第一列）一个字都没动', async () => {

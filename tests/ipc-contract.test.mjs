@@ -26,8 +26,8 @@ const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
  */
 const HAS_SHELL = existsSync(new URL('../preload.js', import.meta.url)) && existsSync(new URL('../main.js', import.meta.url));
 
-/** 七个真通道（`ms:` 前缀是壳侧的东西，核侧只认方法名）。 */
-const CHANNEL_NAMES = ['exportFrames', 'exportSheet', 'importFile', 'loadProject', 'openFolder', 'saveProject', 'saveBinary'];
+/** 八个真通道（`ms:` 前缀是壳侧的东西，核侧只认方法名）。 */
+const CHANNEL_NAMES = ['exportFrames', 'exportSheet', 'importFile', 'loadProject', 'openFolder', 'saveProject', 'saveProjectTo', 'saveBinary'];
 /** `ipc.mjs` 里的兼容兜底老名字，不是通道。 */
 const SOFT = ['openInFolder'];
 
@@ -70,7 +70,7 @@ test('preload 暴露的方法，main 都注册了同名通道', { skip: !HAS_SHE
     assert.equal(map.size, channels.size, 'preload 与 main 的通道数量应该相等');
 });
 
-test('通道名集合就是那七个，改名要同步三处', { skip: !HAS_SHELL && '核仓形态：没有 main.js' }, () => {
+test('通道名集合就是那八个，改名要同步三处', { skip: !HAS_SHELL && '核仓形态：没有 main.js' }, () => {
     const channels = [...mainChannels()].sort();
     assert.deepEqual(channels, [
         'ms:export-frames',
@@ -80,17 +80,18 @@ test('通道名集合就是那七个，改名要同步三处', { skip: !HAS_SHEL
         'ms:open-folder',
         'ms:save-binary',
         'ms:save-project',
+        'ms:save-project-to',
     ]);
 });
 
-test('核侧快照：ipc.mjs 的桥函数集合 = 七个通道 + 一个兼容老名', () => {
+test('核侧快照：ipc.mjs 的桥函数集合 = 八个通道 + 一个兼容老名', () => {
     // 这条在合仓与核仓两种形态下都跑：它只读 app/，不碰壳。
     const calls = [...bridgeCalls()].sort();
     const expected = [...CHANNEL_NAMES, ...SOFT].sort();
     assert.deepEqual(calls, expected, '桥函数集合变了：改名/新增/删除都要同步本文件、bridge-web.mjs 与壳仓');
 });
 
-test('核侧快照：浏览器桥实现了全部七个通道', () => {
+test('核侧快照：浏览器桥实现了全部八个通道', () => {
     const src = read('../app/shell/bridge-web.mjs');
     const names = new Set([...src.matchAll(/^\s{8}(?:async )?([A-Za-z]+)\(/gm)].map((m) => m[1]));
     const missing = CHANNEL_NAMES.filter((n) => !names.has(n));

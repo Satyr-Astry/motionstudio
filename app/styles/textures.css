@@ -47,6 +47,164 @@
     word-break: break-word;
 }
 
+/* ── ②b 纹理抽屉：摘要行下方的「一张一行」列表 ──────────────────────
+   展开/收起按钮直接穿 .prop-seg 的外观（panels.css），这里只管盒子、行与缩略图。
+   列表限高 164px 自己滚：面板本身已是滚动容器，抽屉不能再把整组撑长。
+   行的排布：[整行的放置按钮：缩略图 32×32 / 序号 / W×H / 引用] [行内删除]。
+   当前时刻生效那张用左侧强调条 + 淡蓝底（与对象列表的选中态同一套 token），
+   未被引用的整行压暗，但删除照样可点。 */
+
+/* .prop-row 自带 display:flex，hidden 属性会被它压掉，这里补一条显式规则 */
+.prop-body[data-k="textures"] .ptx-lib-row[hidden] {
+    display: none;
+}
+
+.prop-body[data-k="textures"] .ptx-toggle {
+    min-width: 64px;
+}
+
+.prop-body[data-k="textures"] .ptx-drawer {
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 auto;
+    gap: var(--sp-1);
+    max-height: 164px;
+    overflow-y: auto;
+    padding: var(--sp-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r-1);
+    background: var(--bg);
+}
+
+.prop-body[data-k="textures"] .ptx-drawer[hidden] {
+    display: none;
+}
+
+.prop-body[data-k="textures"] .ptx-row {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: var(--sp-1);
+    min-height: 36px;
+    border-left: 2px solid transparent;
+    border-bottom: 1px solid var(--line);
+}
+
+.prop-body[data-k="textures"] .ptx-row:last-child {
+    border-bottom: 0;
+}
+
+.prop-body[data-k="textures"] .ptx-row:hover {
+    background: var(--panel-2);
+}
+
+.prop-body[data-k="textures"] .ptx-row.is-current {
+    background: var(--sel-bg);
+    border-left-color: var(--sel-bar);
+}
+
+/* 未使用 = 库里留着、暂时没有任何时刻曝光它；只是视觉压暗，动作不锁 */
+.prop-body[data-k="textures"] .ptx-row.is-unused {
+    opacity: 0.6;
+}
+
+.prop-body[data-k="textures"] .ptx-row-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: auto;
+    min-height: 34px;
+    justify-content: flex-start;
+    gap: var(--sp-2);
+    padding: var(--sp-1) var(--sp-2);
+    border: 0;
+    background: transparent;
+    text-align: left;
+}
+
+.prop-body[data-k="textures"] .ptx-row-main:hover {
+    border-color: transparent;
+    background: var(--surface);
+}
+
+/* 32×32 行缩略图：棋盘格与 ① 的 40×40 同一套画法（8px 方格、错位 4px） */
+.prop-body[data-k="textures"] .ptx-row-thumb {
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-1);
+    background-color: var(--panel-2);
+    background-image:
+        linear-gradient(45deg, var(--line) 25%, transparent 25%, transparent 75%, var(--line) 75%),
+        linear-gradient(45deg, var(--line) 25%, transparent 25%, transparent 75%, var(--line) 75%);
+    background-size: 8px 8px;
+    background-position: 0 0, 4px 4px;
+}
+
+.prop-body[data-k="textures"] .ptx-row-idx {
+    flex: 0 0 auto;
+    min-width: 14px;
+    color: var(--ink-faint);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+.prop-body[data-k="textures"] .ptx-row-size {
+    flex: 0 0 auto;
+    color: var(--ink-dim);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* 引用信息独占剩余宽度；太长就省略，完整时刻表在 title 里 */
+.prop-body[data-k="textures"] .ptx-row-ref {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--ink-faint);
+    font-size: 10px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.prop-body[data-k="textures"] .ptx-row.is-unused .ptx-row-ref {
+    color: var(--ink-dim);
+}
+
+.prop-body[data-k="textures"] .ptx-row-badge {
+    flex: 0 0 auto;
+    color: var(--accent-ink);
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+/* 行内删除：默认只有一个图标；第一次点变「确认？」（危险色加宽），第二次才真删 */
+.prop-body[data-k="textures"] .ptx-row-del {
+    flex: 0 0 auto;
+    width: var(--h-btn);
+    min-width: var(--h-btn);
+    padding: 0;
+    border-color: transparent;
+    background: transparent;
+    color: var(--ink-dim);
+}
+
+.prop-body[data-k="textures"] .ptx-row-del:hover {
+    border-color: var(--line);
+    background: var(--panel-2);
+    color: var(--danger);
+}
+
+.prop-body[data-k="textures"] .ptx-row-del.is-armed {
+    width: auto;
+    min-width: 52px;
+    padding: 0 var(--sp-3);
+    border-color: var(--danger);
+    background: var(--danger);
+    color: #fff;
+    font-size: 10px;
+}
+
 /* ── ③ 四个动作 ──────────────────────────────────────────────────
    盒子/图标尺寸来自 icons.css 的 button.ms-icon-btn（22×22 + 图标居中），
    这里只管「不可用时的视觉置灰」。刻意不写 pointer-events: none：

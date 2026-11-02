@@ -173,6 +173,7 @@ test('落盘契约没被翻译动过：IPC 通道名一个一个都还是原样'
         'openInFolder',
         'saveBinary',
         'saveProject',
+        'saveProjectTo',
     ], 'IPC 通道名是 preload/main.js 的契约，一个都不许跟着文案动');
     // 通道名不许过词条：`call(t('…'), …)` 这种写法等于把契约交给语言设置
     assert.doesNotMatch(src, /call\(\s*t\(/, '通道名被塞进了词条');

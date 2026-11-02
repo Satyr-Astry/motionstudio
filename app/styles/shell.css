@@ -166,6 +166,25 @@ body {
     text-overflow: ellipsis;
 }
 
+/* 已绑定的 .msp 路径（Ctrl+S 会回写到哪）：只露尾巴，完整路径在 title / aria-label。
+   与项目名同处一个 flex 容器：名字先让位、路径最多 18ch，谁都不会把顶栏撑破。 */
+.top-project-file {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 18ch;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--ink-faint);
+    font-size: 11px;
+}
+
+/* [hidden] 的 display:none 与 .top-project-dot[hidden] 同一套做法：显式收回来，
+   免得以后有人给这里加 display:inline 之后「没绑定文件」也露出一个空壳。 */
+.top-project-file[hidden] {
+    display: none;
+}
+
 .top-project-ico,
 .top-project-dot {
     flex: 0 0 auto;

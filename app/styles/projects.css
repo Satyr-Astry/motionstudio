@@ -378,3 +378,13 @@
 
 /* 重命名进行中：卡片不再响应「点卡载入」，光标也跟着改，避免误触后才发现名字没改完。 */
 .ms-modal .prj-card.is-renaming { cursor: default; }
+
+/* 项目库提示行：库只住在浏览器 IndexedDB，清站点数据 / 换浏览器用户会丢 —— 常驻面板底部，
+   不随列表刷新消失。用 --ink-faint 压一级，避免和卡片抢注意力。 */
+.prj-note {
+    flex: 0 0 auto;
+    padding: 6px 2px 0;
+    color: var(--ink-faint);
+    font-size: 11px;
+    line-height: 1.45;
+}
