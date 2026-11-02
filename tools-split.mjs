@@ -44,6 +44,12 @@ export const CORE_ENTRIES = [
     '.gitignore',
 ];
 
+/**
+ * 核仓里**要删掉**的东西：测的就是本迁移工具，而工具本身不进核仓。
+ * 留着只会让核仓第一次 `npm test` 就红（import 一个不存在的文件）。
+ */
+export const PRUNE_IN_CORE = ['tests/split-plan.test.mjs'];
+
 /** 壳仓要搬的东西。 */
 export const SHELL_ENTRIES = ['main.js', 'preload.js', 'tools-pack.mjs', '.gitignore'];
 
@@ -202,6 +208,13 @@ function main(argv) {
         return;
     }
     for (const p of plan) copyEntry(p.from, p.to);
+    for (const rel of PRUNE_IN_CORE) {
+        const victim = path.join(out, 'motionstudio', rel);
+        if (fs.existsSync(victim)) {
+            fs.rmSync(victim);
+            console.log('  裁剪', rel, '（它测的是迁移工具本身）');
+        }
+    }
     for (const t of transforms) {
         fs.mkdirSync(path.dirname(t.to), { recursive: true });
         if (typeof t.text === 'string') fs.writeFileSync(t.to, t.text);
@@ -209,27 +222,15 @@ function main(argv) {
         if (t.warn) console.warn('  !', t.warn);
     }
     // 壳仓的跨仓通道测试骨架：只有壳仓能同时看见 preload/main 与核仓的 ipc.mjs
+    // 壳仓的跨仓通道测试：模板放在仓库根的 tools-shell-channels.tpl.mjs（不进核仓）
     const testDir = path.join(out, 'motionstudio-desktop', 'test');
     fs.mkdirSync(testDir, { recursive: true });
-    fs.writeFileSync(path.join(testDir, 'channels.test.mjs'), [
-        '// 跨仓契约：preload ↔ main ↔ 核仓 ipc.mjs 三方通道名一致。',
-        '// 拆仓前这条断言住在核仓的 tests/ipc-contract.test.mjs 里（合仓形态）。',
-        "import test from 'node:test';",
-        "import assert from 'node:assert/strict';",
-        "import { readFileSync } from 'node:fs';",
-        '',
-        "const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');",
-        '',
-        "test('preload 暴露的方法与 main 注册的通道一一对应', () => {",
-        "    const pre = read('../preload.js');",
-        "    const main = read('../main.js');",
-        "    const preNames = [...pre.matchAll(/(\\w+):\\s*\\([^)]*\\)\\s*=>\\s*ipcRenderer\\.invoke\\('([^']+)'\\)/g)];",
-        "    const mainNames = [...main.matchAll(/ipcMain\\.handle\\('([^']+)'/g)].map((m) => m[1]);",
-        "    assert.ok(preNames.length >= 7, 'preload 至少 7 个方法，实际 ' + preNames.length);",
-        '    assert.equal(preNames.length, mainNames.length, \'preload 与 main 的通道数量必须相等\');',
-        '});',
-        '',
-    ].join('\n'));
+    const tplPath = path.join(ROOT, 'tools-shell-channels.tpl.mjs');
+    if (fs.existsSync(tplPath)) {
+        fs.copyFileSync(tplPath, path.join(testDir, 'channels.test.mjs'));
+    } else {
+        console.warn('  ! 缺 tools-shell-channels.tpl.mjs，壳仓没有跨仓通道测试');
+    }
     console.log('\n完成。接下来是 git 操作（脚本不代劳，见 docs/拆仓方案-2026-11-02.md §7）：');
     console.log('  1) 在两个目录里各自 git init / 首次提交');
     console.log('  2) 壳仓：git submodule add <核仓地址> core');

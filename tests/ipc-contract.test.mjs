@@ -107,7 +107,15 @@ test('浏览器桥覆盖了同一组方法名（拆仓后这是跨仓契约）',
 });
 
 test('本文件是唯一允许读壳文件的地方，且缺壳时必须降级而不是崩', () => {
-    // 拆仓时这条会红，提醒「别忘了让契约测试跟着走」。
-    assert.equal(HAS_SHELL, true, '当前是合仓形态，应当读到 preload.js 与 main.js');
+    // 两种形态（合仓 / 核仓）都必须能跑：
+    //   · 合仓：main.js 与 preload.js 在同一树里 → 跑三方交叉
+    //   · 核仓：只剩 ipc.mjs 与 bridge-web.mjs → 交叉测试 skip，只跑核侧快照
+    // 所以这里**不再断言 HAS_SHELL 为真** —— 早期版本断言「必须是合仓形态」，
+    // 结果拆出来的核仓一跑就红。真正该钉的是「有降级分支」。
     assert.ok(read('../tests/ipc-contract.test.mjs').includes('skip: !HAS_SHELL'), '缺壳降级的分支不见了');
+    assert.ok(read('../tests/ipc-contract.test.mjs').includes('HAS_SHELL'), '形态探测本身不见了');
+    if (!HAS_SHELL) {
+        // 核仓形态下，跨仓那几条必须被 skip 掉而不是失败
+        assert.ok(!read('../app/shell/ipc.mjs').includes('require('), '核仓的 ipc.mjs 不应该碰 require');
+    }
 });
