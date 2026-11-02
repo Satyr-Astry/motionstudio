@@ -186,6 +186,26 @@ export function pickAnchor(anchorScreen, point, threshold) {
  * @param {{x:number,y:number}} p doc 空间点
  * @returns {{u:number,v:number}|null} 矩阵不可逆或尺寸退化时 null
  */
+/**
+ * 锚点拖动松手时该做什么（纯决策，不碰 DOM）。
+ *
+ * 规则只有三条，但每一条都踩过坑：
+ *   · **Esc 取消**（canceled）→ 什么都不写。曾经写成「取消也提交」，用户按 Esc 反而改了锚点。
+ *   · 有预览（hasPreview）且外壳提供了 setAnchor → 提交一次。整段拖动只在松手时写一次文档，
+ *     撤销记录由 setAnchor 内部产生，这里不再 push 第二条（否则要按两下才退得回去）。
+ *   · 有预览但外壳没提供 setAnchor → 什么都不做（不提示「已取消」，那会误导用户以为被拒绝了）。
+ *
+ * @param {{hasPreview?: boolean, canceled?: boolean, canSetAnchor?: boolean}} input
+ * @returns {'cancel'|'commit'|'none'}
+ */
+export function anchorDropAction(input) {
+    const o = input && typeof input === 'object' ? input : {};
+    if (!o.hasPreview) return 'none';
+    if (o.canceled) return 'cancel';
+    if (!o.canSetAnchor) return 'none';
+    return 'commit';
+}
+
 export function anchorUvFromMatrix(inv, size, p) {
     if (!inv || !size || !p) return null;
     const w = size.w;

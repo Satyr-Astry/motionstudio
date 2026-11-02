@@ -11,7 +11,7 @@ import {
     elementLattice, handlePoints, elementWorldMatrix, elementSize, elementState,
     applyMatrix, localUv, anchorPoint, invertMatrix,
 } from '../core/element.mjs';
-import { HIT_PX, pickHandle, pickAnchor, anchorUvFromMatrix, dragPatch, localDelta } from '../core/gizmo.mjs';
+import { HIT_PX, pickHandle, pickAnchor, anchorUvFromMatrix, anchorDropAction, dragPatch, localDelta } from '../core/gizmo.mjs';
 import { skinOf } from '../core/skin.mjs';
 import {
     brushVertices, cachedSkinVertices, nearestBone, paintWeights, pickSkinVertex,
@@ -533,13 +533,19 @@ export function createInput(deps) {
            撤销记录由 ctx.setAnchor 内部那次 setDoc 生成（label「改旋转原点」），
            这里不再 push 第二条，否则一次拖动要按两下撤销才退得回去。 */
         if (pv) {
-            if (dragCanceled) {
-                dragCanceled = false;
+            // 决策抽到 core/gizmo 的纯函数里，好测（Esc 不写 / 只写一次 / 没入口就静默）
+            const action = anchorDropAction({
+                hasPreview: true,
+                canceled: dragCanceled,
+                canSetAnchor: typeof ctx.setAnchor === 'function',
+            });
+            dragCanceled = false;
+            if (action === 'cancel') {
                 if (typeof ctx.requestRender === 'function') ctx.requestRender();
                 if (ctx.notify) ctx.notify(tr('canvas.canceled'));
                 return;
             }
-            if (typeof ctx.setAnchor === 'function') {
+            if (action === 'commit') {
                 ctx.setAnchor(elId, { x: pv.u, y: pv.v }, { keepPlace: true });
                 if (ctx.notify) ctx.notify(tr('canvas.anchor.done'));
             }

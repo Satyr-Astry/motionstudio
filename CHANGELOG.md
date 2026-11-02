@@ -1,3 +1,27 @@
+## v0.5.0-alpha.43 — 2026-11-02 · 把「只有真机验证过」的交互变成可测的
+
+待修清单里 D7 记着一条：**锚点拖动的松手逻辑只有真机验证，没有单测**。这段逻辑不长，但三条规则每条都踩过坑：
+
+- 按 `Esc` 取消时**不能写**文档（曾经写成「取消也提交」，用户按 Esc 反而改了锚点）；
+- 整段拖动**只在松手时写一次**（撤销记录由 `setAnchor` 内部产生，这里再 push 一条就要按两下才退得回去）；
+- 外壳没提供 `setAnchor` 时**既不能写、也不能提示「已取消」**（那会让用户以为操作被拒绝了）。
+
+这一版把这段决策从 DOM 事件流里抽出来，变成纯函数 `core/gizmo.mjs` 的 `anchorDropAction({ hasPreview, canceled, canSetAnchor })`，返回 `'cancel' | 'commit' | 'none'`。
+
+### 改了什么
+
+- `core/gizmo.mjs` 新增 `anchorDropAction`（纯函数，不碰 DOM）；
+- `canvas-input.mjs` 的锚点分支改为先算 `action` 再执行，三条分支各自只做一件事；
+- 新增 `tests/anchor-drop.test.mjs` 6 条：Esc → cancel、有预览且有入口 → commit、没入口 → none、没预览 → none（即使 canceled）、坏输入不抛、以及**接线守卫**（`setAnchor` 在整个文件里只被调用一次，就在 commit 分支）。
+
+### 验证
+
+`npm test` **1609 / 1607 pass / 2 skipped / 0 fail**（121 个测试文件）；`npm run check` 五道门全绿（静态 105 模块 0/0/0 · 语法 111/111 · 分层 0 违规 · 文档基线一致 · 本地化 129 条缺口 0）；`npm run smoke` 15/15、0 条 console 错误。
+
+### 需要知道的
+
+- 这次只把**决策**抽出来测，DOM 事件接线（pointerdown/move/up 与节流）仍然没有自动化 —— 但「按 Esc 会不会误写」「会不会写两次」这两个最容易出事的判断现在有护栏了。
+- 抽纯函数时顺手把历史写法固定住：guard 断言锚点分支里不会再出现「`if (!dragCanceled)` 里调 setAnchor」这种把取消写成提交的写法。
 ## v0.5.0-alpha.42 — 2026-11-02 · 删掉「可运行孤儿」，顺手修好对象命名
 
 这一版做两件相关的事：**删掉一条从来没人调用的代码链**，并把它暴露出来的「对象缺省名」问题修掉。
