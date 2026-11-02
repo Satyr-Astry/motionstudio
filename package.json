@@ -1,6 +1,6 @@
 {
   "name": "motionstudio",
-  "version": "0.5.0-alpha.39",
+  "version": "0.5.0-alpha.40",
   "private": true,
   "description": "MotionStudio — a time-driven 2D character and effects animation tool (alpha preview)",
   "main": "main.js",
@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test tests/*.test.mjs",
-    "check": "node _check-static.mjs && node _check-syntax.mjs && node _check-layers.mjs && node _check-i18n.mjs",
+    "check": "node _check-static.mjs && node _check-syntax.mjs && node _check-layers.mjs && node _check-docs.mjs && node _check-i18n.mjs",
     "check:static": "node _check-static.mjs",
     "check:syntax": "node _check-syntax.mjs",
     "check:i18n": "node _check-i18n.mjs",
@@ -19,7 +19,8 @@
     "serve": "node tools-serve.mjs",
     "split": "node tools-split.mjs",
     "split:apply": "node tools-split.mjs --apply",
-    "check:layers": "node _check-layers.mjs"
+    "check:layers": "node _check-layers.mjs",
+    "check:docs": "node _check-docs.mjs"
   },
   "devDependencies": {
     "electron": "^40.10.2",

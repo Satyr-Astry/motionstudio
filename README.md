@@ -185,6 +185,7 @@ npm run check          # static consistency + syntax + layering + i18n report
 npm run check:static   # static consistency only (frame-concept leftovers, dead imports, unused imports)
 npm run check:syntax   # syntax only (node --check per module, incl. the root tool scripts)
 npm run check:layers   # dependency direction inside app/ (core must not import shell/editors, …)
+npm run check:docs     # hand-filled baseline numbers (version, batch count, module/test counts) must match the code
 npm run smoke          # boots app/ in a shell-less window and mounts every editor
 ```
 
@@ -192,7 +193,7 @@ npm run smoke          # boots app/ in a shell-less window and mounts every edit
 
 `npm run smoke` serves `app/` from a throwaway HTTP server and loads it in an Electron window **with no preload and no nodeIntegration** — i.e. exactly what a browser gets. It then switches a panel through every editor in the registry and flips the language both ways, collecting any console error along the way. It is also the browser-mode acceptance test: `window.motionAPI` must be absent and the web bridge must be in place.
 
-Current baseline: **1599 tests / 1597 pass / 2 skipped / 0 fail** across 118 test files; static check scans 106 modules with 0 leftovers, 0 broken imports and 0 unused imports; syntax check 111/111 (106 app/ modules + 5 root tool scripts); layering check reports 0 cross-layer imports; i18n check reports 153 strings still outside the dictionary and 0 structural gaps; smoke mounts **15/15** editors with 0 console errors. Run `npm test`, `npm run check` and `npm run smoke` before handing work over.
+Current baseline: **1608 tests / 1606 pass / 2 skipped / 0 fail** across 119 test files; static check scans 106 modules with 0 leftovers, 0 broken imports and 0 unused imports; syntax check 112/112 (106 app/ modules + 6 root tool scripts); layering check reports 0 cross-layer imports; i18n check reports 153 strings still outside the dictionary and 0 structural gaps; smoke mounts **15/15** editors with 0 console errors. Run `npm test`, `npm run check` and `npm run smoke` before handing work over.
 
 ## Design principles
 
