@@ -17,6 +17,10 @@ export default {
         'canvas.anchor.done': 'Rotation origin moved',
         'canvas.transform.label': 'Transform',
         'canvas.transform.done': 'Keyframe updated',
+        'canvas.bone.create': 'Create bone',
+        'canvas.bone.created': 'Bone created: {name}',
+        'canvas.bone.tip': 'Bone length / angle',
+        'canvas.bone.tipDone': 'Bone updated',
     },
     'zh-Hans': {
         'canvas.lattice.label': '格点变形',
@@ -27,5 +31,9 @@ export default {
         'canvas.anchor.done': '已移动旋转原点',
         'canvas.transform.label': '变换',
         'canvas.transform.done': '已更新关键帧',
+        'canvas.bone.create': '创建骨骼',
+        'canvas.bone.created': '已创建骨骼：{name}',
+        'canvas.bone.tip': '骨骼长度与角度',
+        'canvas.bone.tipDone': '已更新骨骼',
     },
 };

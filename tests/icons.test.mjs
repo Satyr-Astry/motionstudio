@@ -449,7 +449,7 @@ test('E 键的语义分裂：编排是橡皮，画板是取色器', () => {
 const NEW_ICONS = ['brush-round', 'brush-soft', 'pencil', 'brush-pixel', 'brush-smudge', 'brush-scatter',
                     'flip-h', 'flip-v', 'flip-both', 'sliders', 'stabilizer', 'image-plus'];
 
-test('task-24：12 枚新图标都在表里，总数锁死 75', () => {
+test('task-24：12 枚新图标都在表里，总数锁死 76', () => {
     for (const name of NEW_ICONS) {
         assert.ok(hasIcon(name), '缺少新图标：' + name);
         const svg = icon(name);
@@ -460,8 +460,9 @@ test('task-24：12 枚新图标都在表里，总数锁死 75', () => {
     // + 2（v8 第二十批：画板纹理尺寸控件的 crop-content / canvas-resize）
     // + 5（v10 第二十一批：预览播放的 loop / pingpong / loop-reverse / play-once / gauge）
     // + 1（alpha.46 项目库收藏置顶的 star）。
+    // + 1（0.12.0 骨骼工具的 bone）。
     // 数量锁死是为了防「悄悄加一枚又删一枚」的净零漂移。
-    assert.equal(ICON_NAMES.length, 75, '图标表应为 52 旧 + 12 新 + 2 对象栈 + 2 尺寸控件 + 1 unlink + 5 播放 + 1 star = 75，实际 ' + ICON_NAMES.length);
+    assert.equal(ICON_NAMES.length, 76, '图标表应为 52 旧 + 12 新 + 2 对象栈 + 2 尺寸控件 + 1 unlink + 5 播放 + 1 star + 1 bone = 76，实际 ' + ICON_NAMES.length);
     for (const name of ['loop', 'pingpong', 'loop-reverse', 'play-once', 'gauge']) {
         assert.ok(hasIcon(name), '预览播放控件要用：' + name);
     }

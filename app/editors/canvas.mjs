@@ -22,6 +22,7 @@ import {
     elementLattice, handlePoints, elementWorldMatrix, elementSize, applyMatrix, anchorPoint,
 } from '../core/element.mjs';
 import { BONE_DEFAULTS } from '../core/doc-model.mjs';
+import { boneWorldEnds } from '../core/bone-tool.mjs';
 import { boneWorldMatrix, skinOf } from '../core/skin.mjs';
 import { ikChains, solveIk } from '../core/ik.mjs';
 import { WEIGHT_EPS, skinVertices, mainBoneIndex, boneColorOf } from '../core/weight-paint.mjs';
@@ -119,8 +120,8 @@ export function mount(el, ctx) {
 
     const engine = ctx && ctx.engine ? ctx.engine : null;
 
-    // 外壳通常先清空 el；万一没清，移除上一轮残留的 HUD，避免叠成两层
-    for (const old of Array.from(el.querySelectorAll(':scope > .cv-hud'))) old.remove();
+    // 外壳通常先清空 el；万一没清，移除上一轮残留的 HUD/工具开关，避免叠成两层
+    for (const old of Array.from(el.querySelectorAll(':scope > .cv-hud, :scope > .cv-tools'))) old.remove();
 
     const host = placeCanvas(el);
 
@@ -311,6 +312,63 @@ export function mount(el, ctx) {
     }
 
     /**
+     * 骨骼工具（K）的叠加层：末梢手柄 + 建骨预览。
+     *
+     * 骨骼平时只是「结构提示」，工具激活时末梢才变成可抓的点 —— 否则用户根本不知道
+     * 从哪儿开始拖。手柄用 boneWorldEnds 算，与 drawBones 是同一张矩阵，不会错位。
+     * 预览只读 canvas-input 的拖动状态，不写文档。
+     */
+    function drawBoneTool(g) {
+        if (typeof ctx.tool !== 'function' || ctx.tool() !== 'bone') return;
+        const doc = ctx && typeof ctx.doc === 'function' ? ctx.doc() : null;
+        if (!doc || !Array.isArray(doc.objects)) return;
+        const time = typeof ctx.time === 'function' ? ctx.time() : 0;
+        for (const el of doc.objects) {
+            if (!el || el.kind !== 'bone') continue;
+            const parentM = typeof ctx.objectParentMatrix === 'function' ? ctx.objectParentMatrix(el.id, time) : null;
+            const ends = boneWorldEnds(el, time, parentM);
+            if (!ends) continue;
+            const tip = toScreen(ends.tip);
+            g.save();
+            g.lineWidth = 1.5;
+            g.strokeStyle = '#ffd479';
+            g.fillStyle = 'rgba(255,212,121,0.22)';
+            g.beginPath();
+            g.arc(tip.x, tip.y, 7, 0, Math.PI * 2);
+            g.fill();
+            g.stroke();
+            g.restore();
+        }
+        const pv = typeof input.bonePreview === 'function' ? input.bonePreview() : null;
+        if (!pv) return;
+        const a = toScreen(pv.from);
+        const b = toScreen(pv.to);
+        g.save();
+        g.strokeStyle = '#ffd479';
+        g.lineWidth = 2;
+        g.setLineDash([6, 4]);
+        g.beginPath();
+        g.moveTo(a.x, a.y);
+        g.lineTo(b.x, b.y);
+        g.stroke();
+        g.setLineDash([]);
+        g.fillStyle = '#ffd479';
+        g.beginPath();
+        g.arc(a.x, a.y, 4, 0, Math.PI * 2);
+        g.fill();
+        g.beginPath();
+        g.arc(b.x, b.y, 4, 0, Math.PI * 2);
+        g.fill();
+        // 长度读数靠住终点：拖的时候心里有数（单位是文档像素，与属性面板的 Len 一致）
+        const len = Math.hypot(pv.to.x - pv.from.x, pv.to.y - pv.from.y);
+        g.font = '12px system-ui, sans-serif';
+        g.fillStyle = '#ffd479';
+        g.textBaseline = 'bottom';
+        g.fillText(`${len.toFixed(0)} px`, b.x + 10, b.y - 6);
+        g.restore();
+    }
+
+    /**
      * 权重叠加层（P2-C 步 1）：把蒙皮网格的顶点画在**形变之后**的位置上。
      *
      * 位置一律来自 core/weight-paint 的 skinVertices（applySkin 同密度分支）。
@@ -432,7 +490,7 @@ export function mount(el, ctx) {
         el, host, engine, ctx, gizmoClass: GIZMO_CLASS,
         toScreen, selectionInfo, placeCanvas,
     });
-    const { gizmo, syncZoom, ensureVisibleHost } = chrome;
+    const { gizmo, syncZoom, syncTool, ensureVisibleHost } = chrome;
 
     host.addEventListener('pointerdown', input.onDown, true);
     // 笔刷圈要跟手：hover 只更新状态（不排渲染），重画交给 gizmo 的每帧 rAF。
@@ -515,6 +573,8 @@ export function mount(el, ctx) {
         drawSkinWeights(g);
         // IK 连线画在最后：它只在「选中参与解算的骨或它的目标」时出现，平时不打扰
         drawIk(g);
+        // 骨骼工具激活时：末梢手柄常显 + 建骨预览（不选文档，也不改文档）
+        drawBoneTool(g);
 
         const info = selectionInfo();
         if (!info) return;
@@ -710,8 +770,8 @@ export function mount(el, ctx) {
         if (engine && typeof engine.scheduleRender === 'function') engine.scheduleRender();
         else if (ctx && typeof ctx.requestRender === 'function') ctx.requestRender();
         syncZoom();
-        // 外壳每次 render / setSelection 都会调 refresh，叠加层就地更新，
-        // 不依赖 rAF（后台窗口会被暂停）
+        // 工具可能在别处切换（K 键、命令面板、绘制区），按钮状态跟着刷新
+        if (typeof syncTool === 'function') syncTool();
         try { drawGizmo(); } catch (err) { /* 画布未就绪时忽略 */ }
     };
 

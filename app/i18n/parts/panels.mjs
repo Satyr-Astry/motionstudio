@@ -71,7 +71,8 @@ export default {
         'playback.mode.reverse.hint': 'Plays backwards from the end to the start, then jumps back',
         'playback.mode.reverse.label': 'Reverse loop',
 
-        // 工具条：六件工具的显示名（`id` 才是落盘值）
+        // 工具条：七件工具的显示名（`id` 才是落盘值）
+        'tool.bone.name': 'Bone',
         'tool.bucket.name': 'Fill',
         'tool.brush.name': 'Brush',
         'tool.eraser.name': 'Eraser',
@@ -122,6 +123,7 @@ export default {
 
         // 画布 HUD：缩放四键 + 适配结果提示
         'chrome.alreadyFitted': 'The view is already fitted: the whole canvas is visible',
+        'chrome.boneTool': 'Bone tool (K) — click to switch back to Select',
         'chrome.fit': 'Zoom to fit the whole view (0)',
         'chrome.fitLabel': 'Fit',
         'chrome.fitted': 'View fitted: the whole canvas fills the visible area',
@@ -181,6 +183,7 @@ export default {
         'playback.mode.reverse.hint': '从末尾倒着播到开头，再回到末尾',
         'playback.mode.reverse.label': '反向循环',
 
+        'tool.bone.name': '骨骼',
         'tool.bucket.name': '填充',
         'tool.brush.name': '画笔',
         'tool.eraser.name': '橡皮',
@@ -225,6 +228,7 @@ export default {
         'tree.row.withChain': '{name} · 父链 {chain}',
 
         'chrome.alreadyFitted': '视图已经在适配位置：整幅画布都可见',
+        'chrome.boneTool': '骨骼工具（K）—— 再点一下回到选择工具',
         'chrome.fit': '缩放到刚好铺满视图（0）',
         'chrome.fitLabel': '适配',
         'chrome.fitted': '已适配视图：整幅画布铺满可视区',

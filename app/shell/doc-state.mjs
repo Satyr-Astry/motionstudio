@@ -86,7 +86,7 @@ const NOTE_MS = 1600;
 // 失败消息要留到能读完：一句话里既有「没存下来」又有补救动作，1.6 秒读不完。
 // 不改成常驻：常驻会把顶栏当成日志栏用，用户第二次就不会再读它了。
 const NOTE_ERROR_MS = 6000;
-const TOOL_KEYS = { v: 'select', b: 'brush', e: 'eraser', g: 'bucket', i: 'picker', h: 'pan' };
+const TOOL_KEYS = { v: 'select', k: 'bone', b: 'brush', e: 'eraser', g: 'bucket', i: 'picker', h: 'pan' };
 // 值改成词条键而不是成品文案：这里只是「哪条消息」，译文在取用点由 t() 决定
 const NOTE_TEXT = {
     paint: 'shell.note.paint',

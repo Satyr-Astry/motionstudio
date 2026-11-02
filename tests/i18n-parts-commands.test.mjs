@@ -48,7 +48,7 @@ function staticIds() {
 const TOOL_IDS = TOOLS.map((tool) => 'tool.' + tool.id);
 const IDS = [...staticIds(), ...TOOL_IDS].sort();
 
-/** 词条化之前的命令 id 清单（37 条 + 骨骼任务追加 1 条 + 蒙皮绑定 2 条）。**这是契约快照，只许追加不许改名。** */
+/** 词条化之前的命令 id 清单（37 条 + 骨骼任务追加 1 条 + 蒙皮绑定 2 条 + 骨骼工具追加 1 条）。**这是契约快照，只许追加不许改名。** */
 const ID_CONTRACT = [
     'canvas.brush-bigger',
     'canvas.brush-smaller',
@@ -82,6 +82,7 @@ const ID_CONTRACT = [
     'play.prev-cel',
     'play.prev-key',
     'play.toggle',
+    'tool.bone',
     'tool.brush',
     'tool.bucket',
     'tool.eraser',
@@ -138,7 +139,7 @@ test('zh-Hans 表：每条都是真中文，没有把键名当值', () => {
     }
 });
 
-test('命令 id 集合没变：37 条契约 id，一条不许改名或消失', () => {
+test('命令 id 集合没变：38 条契约 id，一条不许改名或消失', () => {
     assert.deepEqual(IDS, [...ID_CONTRACT].sort(), '命令 id 集合被改动了 —— id 是快捷键表/面板/测试的契约');
 });
 

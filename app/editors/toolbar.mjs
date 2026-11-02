@@ -25,6 +25,7 @@ import { t } from '../i18n/index.mjs';
 // `nameKey` 而不是 `name`：显示名跟着语言走，`id` 才是落盘值。
 const TOOL_DEFS = Object.freeze([
     { id: 'select', icon: 'select', nameKey: 'tool.select.name', key: 'V' },
+    { id: 'bone', icon: 'bone', nameKey: 'tool.bone.name', key: 'K' },
     { id: 'brush', icon: 'brush', nameKey: 'tool.brush.name', key: 'B' },
     { id: 'eraser', icon: 'eraser', nameKey: 'tool.eraser.name', key: 'E' },
     { id: 'bucket', icon: 'bucket', nameKey: 'tool.bucket.name', key: 'G' },

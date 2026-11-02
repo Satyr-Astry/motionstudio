@@ -38,14 +38,14 @@ test('六件工具与五个纹理动作都不再用单字符字形当图标', ()
     assert.equal(badT.length, 0, `toolbar.mjs 还有符号字形当按钮内容: ${badT.map((m) => m[1]).join(',')}`);
 });
 
-test('六件工具的图标名互不相同且都是图标（不是文字）', () => {
+test('七件工具的图标名互不相同且都是图标（不是文字）', () => {
     // 词条化之后显示名不再是字面量：`nameKey` 指进词条表，`id` 才是落盘值。
     const defs = [...toolbar.matchAll(/\{ id: '(\w+)', icon: '([a-z][a-z0-9-]*)', nameKey: '([^']+)', key: '(\w+)' \}/g)];
-    assert.equal(defs.length, 6, '工具表应恰好 6 件');
+    assert.equal(defs.length, 7, '工具表应恰好 7 件');
     const icons = defs.map((d) => d[2]);
-    assert.equal(new Set(icons).size, 6, `六个工具图标名重复了: ${icons.join(',')}`);
+    assert.equal(new Set(icons).size, 7, `七个工具图标名重复了: ${icons.join(',')}`);
     const ids = defs.map((d) => d[1]);
-    for (const want of ['select', 'brush', 'eraser', 'bucket', 'picker', 'pan']) {
+    for (const want of ['select', 'bone', 'brush', 'eraser', 'bucket', 'picker', 'pan']) {
         assert.ok(ids.includes(want), `工具表缺 ${want}`);
     }
 });

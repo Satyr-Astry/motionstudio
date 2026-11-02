@@ -25,6 +25,7 @@ import { drawOnion } from './onion.mjs';
 
 export const TOOLS = Object.freeze([
     { id: 'select', name: '选择', key: 'V' },
+    { id: 'bone', name: '骨骼', key: 'K' },
     { id: 'brush', name: '画笔', key: 'B' },
     { id: 'eraser', name: '橡皮', key: 'E' },
     { id: 'bucket', name: '填充', key: 'G' },
@@ -73,6 +74,8 @@ export function downIntent(button, tool, space, alt) {
     // 时顺手按了 Alt 就变成取色。
     if (alt && button === 0 && !space && tool !== 'pan') return 'pick';
     if (button === 1 || space || tool === 'pan') return 'pan';
+    // 骨骼工具不落笔：画布输入层自己接管这一下（按键判据仍走这里，保证引擎永不画）。
+    if (tool === 'bone') return 'select';
     if (tool === 'select') return 'select';
     if (tool === 'picker') return 'pick';
     if (tool === 'bucket') return 'bucket';

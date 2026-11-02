@@ -281,7 +281,7 @@ function buildViews(saved) {
     state.workspace = want;
     // 冷启动就按工作区上锁：动画工作区不落笔，只做选择/变换/关键帧
     state.drawLocked = want === 'animate';
-    if (state.drawLocked && engine.state.tool !== 'select') engine.setTool('select');
+    if (state.drawLocked && engine.state.tool !== 'select' && engine.state.tool !== 'bone') engine.setTool('select');
 }
 
 function syncActiveTree() {
@@ -1009,10 +1009,15 @@ function setWorkspace(id) {
     const lock = id === 'animate';
     state.drawLocked = lock;
     if (lock) {
-        if (engine.state.tool !== 'select') {
+        // 骨骼工具本身属于动画工作区（抓骨/建骨），进区时不要把它收走；
+        // 其它非选择工具照旧收成 select，免得在动画工作区里落笔。
+        if (engine.state.tool !== 'select' && engine.state.tool !== 'bone') {
             lastDrawTool = engine.state.tool;
             engine.setTool('select');
         }
+    } else if (engine.state.tool === 'bone') {
+        // 骨骼工具离开动画工作区没有意义：切回 select，别把绘图板变成抓骨现场。
+        engine.setTool('select');
     } else if (engine.state.tool === 'select' && lastDrawTool && lastDrawTool !== 'select') {
         engine.setTool(lastDrawTool);
     }

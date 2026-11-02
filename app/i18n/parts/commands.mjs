@@ -68,6 +68,7 @@ export default {
         'cmd.ui.shortcuts': 'Keyboard shortcuts',
 
         'cmd.tool.select': 'Select',
+        'cmd.tool.bone': 'Bone tool',
         'cmd.tool.brush': 'Brush',
         'cmd.tool.eraser': 'Eraser',
         'cmd.tool.bucket': 'Fill',
@@ -178,6 +179,7 @@ export default {
         'cmd.ui.shortcuts': '快捷键一览',
 
         'cmd.tool.select': '选择',
+        'cmd.tool.bone': '骨骼工具',
         'cmd.tool.brush': '画笔',
         'cmd.tool.eraser': '橡皮',
         'cmd.tool.bucket': '填充',

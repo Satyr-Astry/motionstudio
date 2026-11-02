@@ -72,7 +72,7 @@ import { installLayerKeys } from '../editors/layer-keys.mjs';
 import { loadLayout } from './persist.mjs';
 import * as canvasEditor from '../editors/canvas.mjs';
 import * as DS from './doc-state.mjs';
-import { DEFAULT_OBJECT_NAME, nextObjectName, boneFromObjectSpec } from '../core/doc-model.mjs';
+import { DEFAULT_OBJECT_NAME, nextObjectName, boneFromObjectSpec, BONE_ANCHOR, BONE_DEFAULTS } from '../core/doc-model.mjs';
 
 import {
     buildViews,
@@ -659,8 +659,13 @@ function buildCtx() {
     tool: () => engine.tool(),
     setTool(id) {
         engine.setTool(id);
+        // 骨骼工具只在动画工作区有意义：从工具栏/命令面板选中它时顺带切过去，
+        // 免得用户在绘图工作区按 K 之后画布上什么也抓不到（对象叠加层只在动画工作区画）。
+        if (id === 'bone' && state.workspace !== 'animate') setWorkspace('animate');
         updateChrome();
     },
+    createBoneFromDrag,
+    writeBoneTip,
     color: () => engine.color(),
     setColor(hex) {
         engine.setColor(hex);
@@ -1318,6 +1323,71 @@ function addBoneFromObject() {
 }
 
 /**
+ * 骨骼工具（K）在画布上拖出来的一根新骨：几何由 `core/bone-tool.mjs` 算好，
+ * 这里只负责把参数落成文档对象 —— 一步撤销、选中新骨、顶栏闪一句确认。
+ *
+ * 挂接规则（Spine 式链）：**只有当前选中的就是一根骨骼**时才挂到它下面；
+ * 选中普通对象或没选中 → 建在顶层。否则「随手选了张图，新骨就成了它的子级」，
+ * 用户会以为工具坏了。
+ */
+function createBoneFromDrag(opts) {
+    const doc = state.doc;
+    if (!doc) return null;
+    const o = opts || {};
+    const x = Number(o.x);
+    const y = Number(o.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const rotate = Number.isFinite(Number(o.rotate)) ? Number(o.rotate) : 0;
+    const rawLen = Number(o.len);
+    const len = Math.max(8, Math.min(4096, Number.isFinite(rawLen) ? rawLen : BONE_DEFAULTS.len));
+    const wanted = o.parentId ? String(o.parentId) : '';
+    const parent = wanted ? objectById(doc, wanted) : null;
+    const parentId = parent && parent.kind === 'bone' ? parent.id : null;
+    const spec = {
+        name: nextObjectName(doc),
+        kind: 'bone',
+        parentId,
+        anchor: { x: BONE_ANCHOR.x, y: BONE_ANCHOR.y },
+        bone: { len, width: BONE_DEFAULTS.width, color: BONE_DEFAULTS.color },
+        // 一条 t=0 的关键帧写入初值：骨骼一旦要动就需要轨道，先给一条 key
+        // 让曲线/时间轴立刻看得见它（与命令入口建出来的骨形状一致）。
+        transform: addKey(createTrack(), 0, { x, y, rotate, scaleX: 1, scaleY: 1 }, 'linear'),
+    };
+    const next = addObject(doc, spec);
+    const list = objectsOf(next);
+    const created = list[list.length - 1];
+    if (!created) return null;
+    setDoc(() => next, { label: t('canvas.bone.create') });
+    ctx.setSelection({ id: created.id });
+    flash(t('canvas.bone.created', { name: created.name }));
+    return created.id;
+}
+
+/**
+ * 拖骨骼末梢的一帧：只改 rotate 关键帧（落在当前播放头）与 bone.len（非动画标量）。
+ * 返回新的 doc 但**不落栈** —— 拖动中要能逐帧预览，松手由画布输入层压一条撤销。
+ */
+function writeBoneTip(layerId, patch) {
+    const doc = state.doc;
+    const el = doc && layerId ? objectById(doc, layerId) : null;
+    if (!el || el.kind !== 'bone') return null;
+    const p = patch || {};
+    const hasRotate = Number.isFinite(Number(p.rotate));
+    const hasLen = Number.isFinite(Number(p.len));
+    if (!hasRotate && !hasLen) return null;
+    let next = doc;
+    if (hasRotate) next = writeKeyAt(next, el.id, state.time, { rotate: Number(p.rotate) });
+    if (hasLen) {
+        const len = Math.max(8, Math.min(4096, Math.round(Number(p.len) * 100) / 100));
+        const oldLen = el.bone && Number.isFinite(Number(el.bone.len)) ? Number(el.bone.len) : null;
+        if (len !== oldLen) {
+            next = patchObject(next, el.id, (o) => Object.assign({}, o, { bone: Object.assign({}, o.bone, { len }) }));
+        }
+    }
+    return next === doc ? null : next;
+}
+
+/**
  * 蒙皮 P2-B：把「当前对象」绑到「被选中的骨骼」上。
  *
  * 选择模型（读 app.mjs 的 state 得到）：画布单选是 `state.selection.id`，多选是
@@ -1790,6 +1860,8 @@ function onKeyDown(e) {
     const toolId = TOOL_KEYS[String(key).toLowerCase()];
     if (toolId) {
         engine.setTool(toolId);
+        // 骨骼工具只在动画工作区有对象可抓：从绘图工作区按 K 时顺手把工作区切过去。
+        if (toolId === 'bone' && state.workspace !== 'animate') setWorkspace('animate');
         const tool = TOOLS.find((x) => x.id === toolId);
         flash(tool ? tool.name : toolId);
         updateChrome();

@@ -1,6 +1,6 @@
 {
   "name": "motionstudio",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "private": true,
   "description": "MotionStudio core — renderer, tests, docs and quality gates (static site root: app/). The Electron desktop shell lives in the motionstudio-desktop repository.",
   "license": "MIT",

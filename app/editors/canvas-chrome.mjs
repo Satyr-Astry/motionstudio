@@ -66,6 +66,33 @@ export function buildChrome(deps) {
     hud.appendChild(fitBtn);
     el.appendChild(hud);
 
+    /* ── 画布左上角的常驻工具开关（0.12.0：骨骼工具） ──
+       编排工作区的默认布局刻意不放通用工具条（那里不画画，画笔是锁死的），
+       骨骼工具如果没有这个按钮，就只剩快捷键 K 与命令面板，用户在界面上找不到。
+       点一下切到骨骼工具，再点一下回选择工具；状态与其它入口保持同步。 */
+
+    const tools = document.createElement('div');
+    tools.className = 'cv-tools';
+    const boneBtn = mkBtn('bone', '', t('chrome.boneTool'), icon('bone'));
+    boneBtn.classList.add('cv-tool-btn');
+    tools.appendChild(boneBtn);
+    el.appendChild(tools);
+
+    const toolNow = () => (typeof ctx.tool === 'function' ? ctx.tool() : 'select');
+    const syncTool = () => {
+        const on = toolNow() === 'bone';
+        boneBtn.classList.toggle('is-on', on);
+        boneBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    };
+    const onBone = () => {
+        if (typeof ctx.setTool !== 'function') return;
+        ctx.setTool(toolNow() === 'bone' ? 'select' : 'bone');
+        syncTool();
+    };
+    boneBtn.addEventListener('click', onBone);
+    syncTool();
+    const offTool = engine && typeof engine.on === 'function' ? engine.on('tool', syncTool) : null;
+
     /* ── 叠加层画布（pointer-events:none，只负责显示） ── */
 
     const gizmo = document.createElement('canvas');
@@ -179,6 +206,8 @@ export function buildChrome(deps) {
         zoomBtn.removeEventListener('click', onZoom);
         outBtn.removeEventListener('click', onOut);
         inBtn.removeEventListener('click', onIn);
+        boneBtn.removeEventListener('click', onBone);
+        if (offTool) offTool();
         host.removeEventListener('wheel', onWheel);
         window.removeEventListener('resize', onWinResize);
         if (ro) ro.disconnect();
@@ -186,5 +215,5 @@ export function buildChrome(deps) {
         polls = 0;
     };
 
-    return { hud, fitBtn, zoomBtn, outBtn, inBtn, gizmo, syncZoom, ensureVisibleHost, disposeHud };
+    return { hud, tools, fitBtn, zoomBtn, outBtn, inBtn, boneBtn, gizmo, syncZoom, syncTool, ensureVisibleHost, disposeHud };
 }

@@ -299,6 +299,28 @@ canvas.kl-view {
     color: var(--ink);
 }
 
+/* 画布左上角的常驻工具开关（0.12.0：骨骼工具）。
+   编排工作区的默认布局不放通用工具条，骨骼工具需要这个可见入口；
+   独立于右下角缩放带，放左上角不挡视图中心。 */
+.cv-tools {
+    position: absolute; left: var(--sp-4); top: var(--sp-4); z-index: 2;
+    display: flex; gap: var(--sp-1);
+}
+
+.cv-tools .cv-hud-btn {
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-1);
+    background: var(--bg-2);
+    min-width: 26px;
+    padding: 0 var(--sp-1);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .4);
+}
+
+.cv-tools .cv-hud-btn.is-on {
+    border-color: var(--accent);
+    color: var(--accent-ink);
+}
+
 /* ═══════════════ 调色板 palette ═══════════════ */
 
 .pal {

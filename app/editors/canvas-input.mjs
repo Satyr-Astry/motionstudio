@@ -12,6 +12,8 @@ import {
     applyMatrix, localUv, anchorPoint, invertMatrix,
 } from '../core/element.mjs';
 import { HIT_PX, pickHandle, pickAnchor, anchorUvFromMatrix, anchorDropAction, dragPatch, localDelta } from '../core/gizmo.mjs';
+import { BONE_DEFAULTS } from '../core/doc-model.mjs';
+import { boneDragGeometry, boneTipGeometry, boneWorldEnds } from '../core/bone-tool.mjs';
 import { skinOf } from '../core/skin.mjs';
 import {
     brushVertices, cachedSkinVertices, nearestBone, paintWeights, pickSkinVertex,
@@ -261,6 +263,14 @@ export function createInput(deps) {
     /** 拖锚点期间的预览态：{ elId, u, v }。只画十字，不动文档。 */
     let preview = null;
     let dragCanceled = false;
+
+    /**
+     * 骨骼工具（K）的手势态：`{kind:'create'|'tip', ...}`。
+     * 与 drag 分开：骨骼不落笔、不进引擎的历史/节流，写文档走 ctx.writeBoneTip / createBoneFromDrag。
+     */
+    let boneDrag = null;
+    /** 末梢手柄的命中半径（屏幕像素）：比点选宽一点，末梢本来就小。 */
+    const BONE_TIP_HIT_PX = 12;
 
     /**
      * 网格软拖的落点：网格模式 + 指针在图像内部时返回 { u, v }，否则 null。
@@ -583,6 +593,175 @@ export function createInput(deps) {
         return { elId: drag.elId, u: drag.soft.u, v: drag.soft.v, radiusX, radiusY };
     }
 
+    /* ── 骨骼工具（K）：点/拖建骨、拖末梢改长度与角度 ── */
+
+    /**
+     * 指针压在哪根骨的末梢上：返回最近的骨骼（屏幕 12px 内）。
+     * 用 boneWorldEnds，与渲染同一张矩阵；IK 解算后的覆盖位置也包含在内。
+     */
+    function boneAtTip(probe) {
+        const doc = ctx.doc ? ctx.doc() : null;
+        if (!doc || !Array.isArray(doc.objects)) return null;
+        const time = ctx.time ? ctx.time() : 0;
+        let best = null;
+        for (const el of doc.objects) {
+            if (!el || el.kind !== 'bone') continue;
+            const parentM = typeof ctx.objectParentMatrix === 'function'
+                ? ctx.objectParentMatrix(el.id, time) : null;
+            const ends = boneWorldEnds(el, time, parentM);
+            if (!ends) continue;
+            const tip = toScreen(ends.tip);
+            const d = Math.hypot(tip.x - probe.sx, tip.y - probe.sy);
+            if (d <= BONE_TIP_HIT_PX && (!best || d < best.d)) best = { el, d };
+        }
+        return best ? best.el : null;
+    }
+
+    function attachBoneDrag() {
+        window.addEventListener('pointermove', onBoneMove, true);
+        window.addEventListener('pointerup', onBoneUp, true);
+        window.addEventListener('pointercancel', onBoneCancel, true);
+        window.addEventListener('keydown', onBoneKey, true);
+    }
+
+    function detachBoneDrag() {
+        window.removeEventListener('pointermove', onBoneMove, true);
+        window.removeEventListener('pointerup', onBoneUp, true);
+        window.removeEventListener('pointercancel', onBoneCancel, true);
+        window.removeEventListener('keydown', onBoneKey, true);
+    }
+
+    function scheduleBoneRender() {
+        if (ctx.engine && typeof ctx.engine.scheduleRender === 'function') ctx.engine.scheduleRender();
+    }
+
+    /**
+     * 按下：压住末梢 → 改长度/角度；否则从按下点拉一根新骨。
+     * 新骨的父级只认「当前选中的骨骼」（Spine 式链），选中普通对象不会误挂。
+     */
+    function startBoneDown(p, probe) {
+        const doc = ctx.doc ? ctx.doc() : null;
+        if (!doc) return;
+        const time = ctx.time ? ctx.time() : 0;
+        const tipEl = boneAtTip(probe);
+        if (tipEl) {
+            ctx.setSelection({ id: tipEl.id, mode: 'transform' });
+            const parentM = typeof ctx.objectParentMatrix === 'function'
+                ? ctx.objectParentMatrix(tipEl.id, time) : null;
+            const size = elementSize(doc, tipEl, time);
+            boneDrag = {
+                kind: 'tip',
+                elId: tipEl.id,
+                parentInv: parentM ? invertMatrix(parentM) : null,
+                width: size ? size.h : BONE_DEFAULTS.width,
+                before: doc,
+                after: doc,
+                x0: probe.sx,
+                y0: probe.sy,
+                moved: false,
+            };
+        } else {
+            const sel = typeof ctx.selection === 'function' ? ctx.selection() : null;
+            const selEl = sel && sel.id ? doc.objects.find((o) => o && o.id === sel.id) : null;
+            const parent = selEl && selEl.kind === 'bone' ? selEl : null;
+            const parentM = parent && typeof ctx.objectParentMatrix === 'function'
+                ? ctx.objectParentMatrix(parent.id, time) : null;
+            boneDrag = {
+                kind: 'create',
+                from: { x: p.x, y: p.y },
+                to: { x: p.x, y: p.y },
+                parentId: parent ? parent.id : null,
+                parentInv: parentM ? invertMatrix(parentM) : null,
+                width: BONE_DEFAULTS.width,
+                x0: probe.sx,
+                y0: probe.sy,
+                moved: false,
+            };
+        }
+        attachBoneDrag();
+        scheduleBoneRender();
+    }
+
+    function onBoneMove(e) {
+        const d = boneDrag;
+        if (!d) return;
+        const r = host.getBoundingClientRect();
+        const sx = e.clientX - r.left;
+        const sy = e.clientY - r.top;
+        if (Math.hypot(sx - d.x0, sy - d.y0) > 2) d.moved = true;
+        const p = toDocPoint(e);
+        if (d.kind === 'create') {
+            d.to = { x: p.x, y: p.y };
+            if (d.moved) scheduleBoneRender();
+            return;
+        }
+        // 拖末梢：换算到父空间，只改 rotate 关键帧 + bone.len（silent 写，松手才落撤销）
+        const doc = ctx.doc ? ctx.doc() : null;
+        const el = doc ? doc.objects.find((o) => o && o.id === d.elId) : null;
+        if (!el) return;
+        const time = ctx.time ? ctx.time() : 0;
+        const q = d.parentInv ? applyMatrix(d.parentInv, p) : p;
+        const geo = boneTipGeometry({ state: elementState(el, time), width: d.width, point: q });
+        if (!geo || typeof ctx.writeBoneTip !== 'function') return;
+        const next = ctx.writeBoneTip(d.elId, geo);
+        if (!next) return;
+        d.after = next;
+        ctx.setDoc(next, { silent: true });
+        if (d.moved) scheduleBoneRender();
+    }
+
+    function onBoneUp() {
+        const d = boneDrag;
+        if (!d) return;
+        boneDrag = null;
+        detachBoneDrag();
+        if (d.kind === 'create') {
+            // 单击画布不建骨：误触一下就在场景里冒出一根骨头，比「没反应」更糟
+            if (!d.moved) return;
+            const geo = boneDragGeometry({
+                from: d.from, to: d.to, parentInverse: d.parentInv, width: d.width,
+            });
+            if (!geo || typeof ctx.createBoneFromDrag !== 'function') return;
+            ctx.createBoneFromDrag({
+                x: geo.x, y: geo.y, rotate: geo.rotate, len: geo.len, parentId: d.parentId,
+            });
+            return;
+        }
+        // 末梢：拖动期间是 silent 写的，松手补一条可撤销记录（没有变化就不落空撤销）
+        if (!d.moved || d.after === d.before) return;
+        const before = d.before;
+        const after = d.after;
+        if (!ctx.engine || !ctx.engine.history) return;
+        ctx.engine.history.push({
+            label: tr('canvas.bone.tip'),
+            undo: () => ctx.setDoc(before, { silent: true }),
+            redo: () => ctx.setDoc(after, { silent: true }),
+        });
+        if (ctx.notify) ctx.notify(tr('canvas.bone.tipDone'));
+    }
+
+    function onBoneCancel() {
+        const d = boneDrag;
+        if (!d) return;
+        boneDrag = null;
+        detachBoneDrag();
+        if (d.kind === 'tip' && d.before) ctx.setDoc(d.before, { silent: true });
+        if (ctx.notify) ctx.notify(tr('canvas.canceled'));
+        scheduleBoneRender();
+    }
+
+    function onBoneKey(e) {
+        if (!e || e.key !== 'Escape') return;
+        e.preventDefault();
+        onBoneCancel();
+    }
+
+    /** 叠加层画建骨预览用：拖动中返回 `{from,to}`（文档坐标），其余时候 null。 */
+    function bonePreview() {
+        if (!boneDrag || boneDrag.kind !== 'create' || !boneDrag.moved) return null;
+        return { from: boneDrag.from, to: boneDrag.to };
+    }
+
     /* ── 指针入口（宿主捕获阶段，抢在引擎之前） ── */
 
     function onDown(e) {
@@ -594,6 +773,14 @@ export function createInput(deps) {
         const probe = { x: p.x, y: p.y, sx: e.clientX - r.left, sy: e.clientY - r.top };
         const tool = ctx.tool ? ctx.tool() : engine && engine.tool ? engine.tool() : 'brush';
         const isSelect = tool === 'select';
+
+        // 骨骼工具：输入层自己接管这一下（引擎的 downIntent 对 bone 返回 select，永不落笔）
+        if (tool === 'bone') {
+            e.preventDefault();
+            e.stopPropagation();
+            startBoneDown(p, probe);
+            return;
+        }
 
         // 手柄在任何工具下都能抓
         const onHandle = hitAt(probe, isSelect);
@@ -676,12 +863,14 @@ export function createInput(deps) {
         window.removeEventListener('pointerup', onDragEnd, true);
         window.removeEventListener('pointercancel', onDragEnd, true);
         window.removeEventListener('keydown', onDragKeyDown, true);
+        detachBoneDrag();
         if (dragRaf) cancelAnimationFrame(dragRaf);
         dragRaf = 0;
         pendingPointer = null;
         drag = null;
         preview = null;
         dragCanceled = false;
+        boneDrag = null;
     }
 
     /**
@@ -700,5 +889,5 @@ export function createInput(deps) {
         return { elId: target.el.id, verts: target.verts, u: at.u, v: at.v, radius };
     }
 
-    return { onDown, onHover, onHoverEnd, weightBrush, dispose, previewAnchor, previewSoftDrag };
+    return { onDown, onHover, onHoverEnd, weightBrush, dispose, previewAnchor, previewSoftDrag, bonePreview };
 }
