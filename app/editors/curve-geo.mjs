@@ -383,6 +383,83 @@ export function occupiedAt(track, chId, t, skipIndex = -1) {
     return keys.some((k, i) => i !== skipIndex && Math.abs(Number(k.t) - v) <= T_EPS);
 }
 
+/* ── 时间轴拖动通道键：把同一刻的一组通道键整组搬到另一个时刻 ──
+ *
+ * 时间轴上的通道键是「时刻 + 一组字段」，拖动时不能逐条乱放：只搬时刻、
+ * 不动 ease/h1/h2/值；同一效果的多个参数在同一刻会合成一颗菱形，所以必须整组搬。
+ * 目标时刻在同一通道上已经有别的键时**整组不动**并回报 blocked —— 覆盖等于静默删数据，
+ * 而且时间轴上只看得到一颗菱形换了个位置，用户根本发现不了。
+ *
+ * 纯函数：返回新 layer（没改动就原样返回入参），写盘由调用方一次 setDoc 完成。
+ *
+ * @param {object} layer
+ * @param {string[]} fields 通道 id（TRACK_FIELDS 的字段或 `fx.<fxId>.<param>`）
+ * @param {number} fromT
+ * @param {number} toT
+ * @returns {{layer:object, moved:number, blocked:boolean, fields:string[]}}
+ */
+export function retimeChannelKeys(layer, fields, fromT, toT) {
+    const base = layer && typeof layer === 'object' ? layer : null;
+    const ids = Array.isArray(fields) ? fields.filter((f) => typeof f === 'string' && f) : [];
+    const from = Number(fromT);
+    const to = Number(toT);
+    if (!base || !ids.length || !Number.isFinite(from) || !Number.isFinite(to)) {
+        return { layer: base, moved: 0, blocked: false, fields: [] };
+    }
+    if (Math.abs(to - from) <= T_EPS) return { layer: base, moved: 0, blocked: false, fields: [] };
+
+    // 第一遍只体检、不写：任何一条通道在目标时刻已有自己的键 → 整组放弃
+    const plan = [];
+    for (const id of ids) {
+        if (isEffectChannelId(id)) {
+            const parsed = parseEffectChannelId(id);
+            const effects = Array.isArray(base.effects) ? base.effects : [];
+            const fxIndex = effects.findIndex((f) => f && f.id === parsed.fxId);
+            const fx = fxIndex >= 0 ? effects[fxIndex] : null;
+            const trk = fx && fx.tracks ? fx.tracks[parsed.key] : null;
+            const keys = trk && Array.isArray(trk.keys) ? trk.keys : [];
+            const index = keys.findIndex((k) => Math.abs(Number(k && k.t) - from) <= T_EPS);
+            if (index < 0) continue;
+            if (keys.some((k, i) => i !== index && Math.abs(Number(k && k.t) - to) <= T_EPS)) {
+                return { layer: base, moved: 0, blocked: true, fields: ids };
+            }
+            plan.push({ kind: 'effect', id, fxIndex, key: parsed.key, index });
+        } else {
+            const ch = channelOf(base.transform, id);
+            const keys = ch ? ch.keys : [];
+            const index = keys.findIndex((k) => Math.abs(Number(k && k.t) - from) <= T_EPS);
+            if (index < 0) continue;
+            if (keys.some((k, i) => i !== index && Math.abs(Number(k && k.t) - to) <= T_EPS)) {
+                return { layer: base, moved: 0, blocked: true, fields: ids };
+            }
+            plan.push({ kind: 'transform', id, index });
+        }
+    }
+    if (!plan.length) return { layer: base, moved: 0, blocked: false, fields: [] };
+
+    let transform = base.transform;
+    let effects = base.effects;
+    let effectTouched = false;
+    for (const step of plan) {
+        if (step.kind === 'transform') {
+            transform = moveChannelKey(transform, step.id, step.index, to);
+            continue;
+        }
+        const list = Array.isArray(effects) ? effects.slice() : [];
+        const fx = list[step.fxIndex];
+        const trk = fx.tracks[step.key];
+        const keys = trk.keys.map((k, i) => (i === step.index ? { ...k, t: to } : k));
+        keys.sort((a, b) => a.t - b.t);
+        list[step.fxIndex] = { ...fx, tracks: { ...fx.tracks, [step.key]: { ...trk, keys } } };
+        effects = list;
+        effectTouched = true;
+    }
+    let next = base;
+    if (transform !== base.transform) next = { ...next, transform };
+    if (effectTouched) next = { ...next, effects };
+    return { layer: next, moved: plan.length, blocked: false, fields: plan.map((s) => s.id) };
+}
+
 export function clamp(n, lo, hi) {
     return n < lo ? lo : n > hi ? hi : n;
 }

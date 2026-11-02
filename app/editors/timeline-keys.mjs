@@ -7,7 +7,8 @@ import { docDuration, objectById, patchObject } from '../core/doc-model.mjs';
 import { t } from '../i18n/index.mjs';
 import { clickIntent } from '../core/selection.mjs';
 import { addKey, moveKey, removeKey, setKeyEase, stateAt } from '../core/transform.mjs';
-import { findConflict, hideTip, showTip } from './drag-tip.mjs';
+import { findConflict, hideTip, showTip, snapText } from './drag-tip.mjs';
+import { retimeChannelKeys } from './curve-geo.mjs';
 import {
     EASE_IDS,
     SNAP_GRID,
@@ -171,6 +172,11 @@ export function createKeys(deps) {
      * 接管，什么都不删，只提示去曲线区编辑；任何别的点击都会把它清掉。
      */
     let channelClick = null;
+    /**
+     * 正在拖动的「通道键」：{ node, layerId, t0, x0, pps, keep, fields, snapshot, title0, moved, dt }。
+     * 与 kfDrag 同一套纪律：拖动只挪 DOM，松手才写一次文档；没拖动就是点击。
+     */
+    let chDrag = null;
     let marquee = null; // 框选进行中的状态；松手即清空
     let clip = null; // 复制过的关键帧组：{ from, t, keys: [{ state, ease }] }
 
@@ -678,11 +684,12 @@ export function createKeys(deps) {
      * 这正是它和 Ctrl+Z 的语义差别（后者是「已经改了，撤回去」）。
      */
     function onDragKey(e) {
-        if (!kfDrag) return;
+        if (!kfDrag && !chDrag) return;
         if (!e || e.key !== 'Escape') return;
         if (typeof e.preventDefault === 'function') e.preventDefault();
         if (typeof e.stopPropagation === 'function') e.stopPropagation();
-        cancelKfDrag();
+        if (kfDrag) cancelKfDrag();
+        else cancelChDrag();
     }
 
     function cancelKfDrag() {
@@ -731,18 +738,33 @@ export function createKeys(deps) {
         if (!Number.isFinite(t) || !layerId) return;
         // 通道独立轨道的键：选中它也删不掉、改不了缓动（不在 track.keys 里），
         // 选中了却什么都不能做比不选更让人困惑，所以不参与选择、不参与拖动。
-        // 但「点了完全没反应」同样让人困惑：派一个事件，让曲线把焦点切到这颗键
-        // 对应的通道并跳到该刻（见 editors/curve.mjs 的 onChannelKeyClick）。
+        // 但它可以**拖动改时刻**（只动时刻，不动值/缓动）：按下先记手势，
+        // 松手时没移动 = 点击 → 派事件让曲线把焦点切到对应通道（0.8.0 起的既有语义）；
+        // 移动了 → 一次 setDoc 把整组通道键搬到落点。
         if (node.classList && node.classList.contains('is-ch')) {
             if (typeof e.preventDefault === 'function') e.preventDefault();
             if (typeof e.stopPropagation === 'function') e.stopPropagation();
             const ch = channelClickOf(node);
             channelClick = { layerId, t, ch: ch.ch };
-            const detail = { layerId, t, ch: ch.ch, count: ch.count };
-            // 没有监听者时什么都不发生（与 ms:copy-keys 同一约定）
-            if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
-                document.dispatchEvent(new CustomEvent('ms:channel-key-click', { detail }));
-            }
+            const fields = String(node.dataset.ch || '').split(' ').filter(Boolean);
+            chDrag = {
+                node,
+                layerId,
+                t0: t,
+                x0: e.clientX,
+                pps: pxPerSecond(doc, deps.zoomOf()),
+                keep: deps.timeNow(),
+                fields,
+                snapshot: node.style ? node.style.left : '',
+                title0: node.title || '',
+                moved: false,
+                dt: 0,
+            };
+            if (node.classList) node.classList.add('is-drag');
+            document.addEventListener('pointermove', onChMove);
+            document.addEventListener('pointerup', onChUp);
+            document.addEventListener('pointercancel', onChUp);
+            document.addEventListener('keydown', onDragKey, true);
             return;
         }
         channelClick = null;
@@ -925,6 +947,114 @@ export function createKeys(deps) {
             }
         }
         deps.keepTime(d.keep);
+        deps.paint();
+    }
+
+    /* ── 通道键拖动（只改时刻，不改值/缓动） ──
+       与 kfDrag 同一套纪律：pointermove 只挪 DOM 并显示读数，pointerup 才一次 setDoc
+       （一次拖动 = 一条撤销记录）。没移动的松手 = 点击 → 派 ms:channel-key-click，
+       保持 0.8.0 起「点通道键把曲线焦点切过去」的语义。
+       落点若与同一通道既有键重合，retimeChannelKeys 整组拒绝并回报 blocked —— 不静默合并。 */
+
+    function detachChDrag() {
+        document.removeEventListener('pointermove', onChMove);
+        document.removeEventListener('pointerup', onChUp);
+        document.removeEventListener('pointercancel', onChUp);
+        document.removeEventListener('keydown', onDragKey, true);
+    }
+
+    function cancelChDrag() {
+        const d = chDrag;
+        chDrag = null;
+        detachChDrag();
+        hideTip();
+        if (!d) return;
+        if (d.node) {
+            if (d.node.style) d.node.style.left = d.snapshot;
+            d.node.title = d.title0;
+            if (d.node.classList) d.node.classList.remove('is-drag');
+        }
+        deps.keepTime(d.keep);
+        deps.notify(t('timeline.drag.cancelled'));
+        deps.paint();
+    }
+
+    function onChMove(e) {
+        if (!chDrag) return;
+        const doc = deps.docNow();
+        if (!doc) return;
+        const total = docDuration(doc);
+        const pps = chDrag.pps > 0 ? chDrag.pps : pxPerSecond(doc, deps.zoomOf());
+        let nt = clampNum(chDrag.t0 + (e.clientX - chDrag.x0) / pps, 0, total);
+        // 吸附规则与共用键拖动完全一致：磁铁开着吸整帧；关着但按 Shift 吸 0.1 s 网格
+        const magnet = e.shiftKey ? (snapOnNow() ? 'off' : 'grid') : (snapOnNow() ? 'frame' : 'off');
+        if (magnet === 'frame') nt = clampNum(snapFrame(doc, nt), 0, total);
+        else if (magnet === 'grid') nt = clampNum(snapGrid(nt, snapGridNow()), 0, total);
+        if (Math.abs(e.clientX - chDrag.x0) > 0.5) chDrag.moved = true;
+        const dt = nt - chDrag.t0;
+        if (Math.abs(dt - chDrag.dt) < 1e-9) return;
+        chDrag.dt = dt;
+        if (chDrag.node && chDrag.node.style) {
+            chDrag.node.style.left = kfLeft(doc, nt, deps.zoomOf()).toFixed(2) + 'px';
+        }
+        if (chDrag.node) chDrag.node.title = t('timeline.drag.chTitle', { t: fmt2(nt) });
+        showTip({
+            x: e.clientX + 14,
+            y: e.clientY + 18,
+            text: t('timeline.drag.chTitle', { t: fmt2(nt) }),
+            suffix: snapText(magnet),
+        });
+    }
+
+    function onChUp() {
+        detachChDrag();
+        hideTip();
+        const d = chDrag;
+        chDrag = null;
+        if (!d) return;
+        if (d.node) {
+            if (d.node.classList) d.node.classList.remove('is-drag');
+            d.node.title = d.title0;
+        }
+        const dt = Number(d.dt) || 0;
+        const doc = deps.docNow();
+        if (!doc || !d.moved || Math.abs(dt) <= T_EPS) {
+            // 没拖动 = 点击：让曲线把焦点切到这颗键对应的通道（0.8.0 起的既有语义）
+            if (!d.moved && d.node) {
+                const ch = channelClickOf(d.node);
+                if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+                    document.dispatchEvent(new CustomEvent('ms:channel-key-click', {
+                        detail: { layerId: d.layerId, t: d.t0, ch: ch.ch, count: ch.count },
+                    }));
+                }
+            }
+            deps.keepTime(d.keep);
+            deps.paint();
+            return;
+        }
+        if (!deps.has('setDoc')) {
+            deps.notWired('setDoc');
+            deps.paint();
+            return;
+        }
+        const toT = clampNum(d.t0 + dt, 0, docDuration(doc));
+        const obj = objectById(doc, d.layerId);
+        // 先在当前文档上试算一遍：被挡住就什么都不写，别为一次被拒绝的拖动留一条空撤销记录
+        const pre = obj ? retimeChannelKeys(obj, d.fields, d.t0, toT) : null;
+        if (!pre || pre.blocked || !pre.moved) {
+            if (pre && pre.blocked) deps.notify(t('timeline.drag.chBlocked', { t: fmt2(toT) }));
+            deps.keepTime(d.keep);
+            deps.paint();
+            return;
+        }
+        deps.call('setDoc', [
+            (d0) => patchObject(d0, d.layerId, (o) => {
+                const r = retimeChannelKeys(o, d.fields, d.t0, toT);
+                return r.layer || o;
+            }),
+        ]);
+        deps.keepTime(d.keep);
+        deps.notify(t('timeline.drag.chMoved', { t: fmt2(toT), n: pre.moved }));
         deps.paint();
     }
 
@@ -1139,12 +1269,14 @@ export function createKeys(deps) {
         destroy() {
             if (hasDom) document.removeEventListener('keydown', onSelKey);
             detachKfDrag();
+            detachChDrag();
             detachMarquee();
             if (marquee && marquee.el && marquee.el.parentNode && typeof marquee.el.parentNode.removeChild === 'function') {
                 marquee.el.parentNode.removeChild(marquee.el);
             }
             marquee = null;
             kfDrag = null;
+            chDrag = null;
             selKeys = [];
             selAnchor = null;
             clip = null;
