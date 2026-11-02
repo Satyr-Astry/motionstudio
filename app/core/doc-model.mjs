@@ -174,6 +174,39 @@ export function normCel(c) {
 /* ───────────────────────────── 文档 ───────────────────────────── */
 
 /**
+ * 缺省对象名：**只有这一处真源**。
+ *
+ * 为什么是英文：缺省界面语言是 en（README 英文优先），而这个字符串会**写进用户数据**
+ * （进层级面板、导出、`.msp`），所以它不跟界面语言走，也不用中文 —— 否则英文界面
+ * 新建出来的对象叫「对象 2」，和新建文档里的「Object 1」自相矛盾。
+ *
+ * 以前这个值散在五处（`createDoc` / `cel.addLayer` / `project-store.elementShell` /
+ * `shell/object-factory` / `shell/app.mjs`），彼此不一致；统一到这里。
+ */
+export const DEFAULT_OBJECT_NAME = 'Object 1';
+
+/** 第 n 个对象的缺省名（1 起）。 */
+export function defaultObjectName(n) {
+    const k = Number.isFinite(Number(n)) ? Math.max(1, Math.round(Number(n))) : 1;
+    return 'Object ' + k;
+}
+
+/**
+ * 下一个可用的对象名：从「现有数量 + 1」起找第一个没被占用的编号。
+ * 同时避开两种历史命名（英文 `Object N` 与早期的中文「对象 N」），否则老项目里会重名。
+ */
+export function nextObjectName(doc) {
+    const list = objectsOf(doc);
+    const used = new Set(list.map((o) => (o && o.name ? String(o.name) : '')));
+    let n = list.length + 1;
+    for (;;) {
+        const en = defaultObjectName(n);
+        if (!used.has(en) && !used.has('对象 ' + n)) return en;
+        n += 1;
+    }
+}
+
+/**
  * 造文档。
  * duration 是总时长（秒），是所有时间的上限；没有帧数组来间接表达它。
  */
@@ -182,7 +215,7 @@ export function createDoc(o) {
     const objects = [];
     const list = Array.isArray(src.objects) ? src.objects : Array.isArray(src.layers) ? src.layers : [];
     for (const l of list) objects.push(makeObject(l));
-    if (!objects.length) objects.push(makeObject({ name: '对象 1' }));
+    if (!objects.length) objects.push(makeObject({ name: DEFAULT_OBJECT_NAME }));
 
     // 上限 4096：与 doc-model 自身的 `Math.min(4096, …)`（:297-298）、画板 BOARD_MAX、
     // 属性面板 input.max 三处既有限制一致 —— 让「从任何入口造出来的文档」都不可能超过它。

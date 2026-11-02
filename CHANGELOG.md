@@ -1,3 +1,47 @@
+## v0.5.0-alpha.42 — 2026-11-02 · 删掉「可运行孤儿」，顺手修好对象命名
+
+这一版做两件相关的事：**删掉一条从来没人调用的代码链**，并把它暴露出来的「对象缺省名」问题修掉。
+
+### 删掉「画板 → 对象」提交链（约 200 行）
+
+`app/core/board.mjs`（110 行）+ `app/shell/object-factory.mjs`（88 行）是 2026-10 就记在账本里的「可运行孤儿」：能跑通、有测试，但**生产代码零消费者**。
+
+- `object-factory` 的 `createObjectFromBoard` / `createEmptyObject` / `attachImage` 从来没人调；
+- 它唯一的活口是 `nextObjectName`（建骨骼命令用它起名），这个已经搬进 `core/doc-model.mjs`；
+- `app/editors/board.mjs` 那个 1670 行的「画板」是**纹理像素编辑器**，跟这套名字相同的孤儿模块没有一行关系。
+
+删完后：`app/core/board.mjs`、`app/shell/object-factory.mjs`、`tests/board.test.mjs` 一起消失，本地化待迁 **142 → 129 条**，`app/` 模块 107 → 105。
+
+### 顺手修好的：对象缺省名有五个来源，彼此不一致
+
+以前「新建对象叫什么」散在五处：
+
+| 位置 | 名字 |
+|---|---|
+| `app.mjs` 新建文档 | `Object 1` |
+| `doc-model.createDoc` 补对象 | `对象 1` |
+| `cel.addLayer` 新建对象 | `对象 N` |
+| `project-store.elementShell` 读入兜底 | `对象 N` |
+| `object-factory.nextObjectName` | `对象 N` |
+
+于是英文界面下会出现「文档里第一个对象叫 Object 1，再新建一个却叫 对象 2」。
+
+现在只有**一处真源**：`core/doc-model.mjs` 的 `DEFAULT_OBJECT_NAME` / `defaultObjectName(n)` / `nextObjectName(doc)`。
+
+- 统一为英文 `Object N` —— 它**是用户数据**（进层级面板、导出、`.msp`），不跟界面语言走，而缺省语言是 en，所以英文才自洽；
+- `nextObjectName` 同时**避开老项目里的中文「对象 N」**，不会出现重名；
+- 其它四处全部改为引用真源。
+
+### 验证
+
+`npm test` **1603 / 1601 pass / 2 skipped / 0 fail**（120 个测试文件）；`npm run check` 五道门全绿（静态 105 模块 0/0/0 · 语法 111/111 · 分层 0 违规 · 文档基线一致 · 本地化 129 条缺口 0）；`npm run smoke` 15/15、0 条 console 错误。
+
+新增 `tests/object-naming.test.mjs` 7 条：缺省名与编号、跳过已占用编号、避开老项目的中文命名、`createDoc` 与 `addLayer` 走同一真源、**源码守卫「`'Object 1'` 只许出现在 doc-model」**、以及「两个孤儿模块确实没了」。
+
+### 需要知道的
+
+- 删掉的能力在 git 历史里（`7e0637d` 之前的提交），将来真要「画板提交成对象」时可以从历史里捞回来重做 —— 那需要补按钮、case 分支、ctx 装配，以及**现在完全不存在的 board 草稿状态容器**，本来也不是一行接线的事。
+- 老项目里已有的「对象 N」名字**不会被改写**（那是用户数据），只是新建时不再产生中文名。
 ## v0.5.0-alpha.41 — 2026-11-02 · 画布上的提示不再说中文
 
 `canvas-input.mjs` 是画布指针交互的主文件（命中、拖动生命周期、锚点拖动、网格软拖）。它的提示与撤销标签一直是**硬编码中文**：

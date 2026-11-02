@@ -1,6 +1,6 @@
 {
   "name": "motionstudio",
-  "version": "0.5.0-alpha.41",
+  "version": "0.5.0-alpha.42",
   "private": true,
   "description": "MotionStudio — a time-driven 2D character and effects animation tool (alpha preview)",
   "main": "main.js",

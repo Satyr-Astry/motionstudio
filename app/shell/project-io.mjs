@@ -16,6 +16,7 @@ import {
     createDocument,
     totalSeconds,
 } from '../core/cel.mjs';
+import { DEFAULT_OBJECT_NAME } from '../core/doc-model.mjs';
 import { sampleTimes } from '../core/timebase.mjs';
 import { compositeFrame } from '../paint/composite.mjs';
 import { editorDef } from './registry.mjs';
@@ -1002,9 +1003,8 @@ async function newProject(opts) {
     const frames = clampInt(o.frames == null ? DEFAULT_FRAMES : o.frames, 1, 1200);
     // v6：没有帧数组，「帧数」只是「时长 = 帧数 / fps」的便捷说法
     // layerName 是**用户数据**（写进文档、进层级面板、落 .msp），不取词条 —— 见
-    // app/shell/app.mjs 的 DEFAULT_OBJECT_NAME 注释：跟界面语言走会让同一份文档
-    // 混两种语言的对象名。
-    const doc = createDocument({ width, height, fps, duration: frames / fps, layerName: o.layerName || 'Object 1' });
+    // core/doc-model.mjs 的 DEFAULT_OBJECT_NAME：跟界面语言走会让同一份文档混两种语言的对象名。
+    const doc = createDocument({ width, height, fps, duration: frames / fps, layerName: o.layerName || DEFAULT_OBJECT_NAME });
     const ok = applyDoc(enrichDoc(doc), { id: '', name: '', file: '', dirty: false });
     if (ok) savedAtMs = 0;
     if (ok) flash(t('shell.newProject.done', { w: width, h: height, frames, sec: (frames / fps).toFixed(2) }));

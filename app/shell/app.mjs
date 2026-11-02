@@ -72,7 +72,7 @@ import { installLayerKeys } from '../editors/layer-keys.mjs';
 import { loadLayout } from './persist.mjs';
 import * as canvasEditor from '../editors/canvas.mjs';
 import * as DS from './doc-state.mjs';
-import { nextObjectName } from './object-factory.mjs';
+import { DEFAULT_OBJECT_NAME, nextObjectName } from '../core/doc-model.mjs';
 
 import {
     buildViews,
@@ -499,10 +499,9 @@ function clampTime() {
  * 注意 `name` 是**用户数据**（用户会改它、它进层级面板、进 .msp），
  * 所以这里不取词条、不跟界面语言走 —— 否则同一份文档里会混两种语言的
  * 对象名，切换界面语言还会让「新建的对象叫什么」随设置变化。用户随时可以
- * 双击改名，缺省叫什么并不重要，重要的是它**稳定**。
+ * 双击改名，缺省叫什么并不重要，重要的是它**稳定**。真源在
+ * `core/doc-model.mjs` 的 `DEFAULT_OBJECT_NAME`（外壳不自己再写一份）。
  */
-const DEFAULT_OBJECT_NAME = 'Object 1';
-
 function newTimeDocument() {
     return createTimeDocument({
         width: DEFAULT_W,

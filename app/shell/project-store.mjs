@@ -40,7 +40,7 @@
 import { createKey } from '../core/transform.mjs';
 import { defaultEffect, ensureEffectIds } from '../paint/effects.mjs';
 import { drawingsOf, keyHasDrawing } from '../core/doc-model.mjs';
-import { docDuration, makeObject, migrateFromFrames, objectsOf, normalizeBone, BONE_ANCHOR } from '../core/doc-model.mjs';
+import { docDuration, makeObject, migrateFromFrames, objectsOf, normalizeBone, BONE_ANCHOR, defaultObjectName } from '../core/doc-model.mjs';
 import { drawOrderOf, normalizeDrawOrder } from '../core/draw-order.mjs';
 import { normalizeSkin } from '../core/skin.mjs';
 import { normalizeIk } from '../core/ik.mjs';
@@ -734,7 +734,7 @@ function elementShell(src, i) {
     const kind = kindOf(s.kind);
     const element = {
         id: s.id ? String(s.id) : 'element' + (++idSeq) + '-' + i,
-        name: s.name || '对象 ' + (i + 1),
+        name: s.name || defaultObjectName(i + 1),
         visible: s.visible !== false,
         locked: !!s.locked,
         opacity: Number.isFinite(s.opacity) ? s.opacity : 1,

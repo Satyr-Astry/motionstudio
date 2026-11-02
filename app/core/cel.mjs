@@ -54,6 +54,7 @@ import {
     patchObject,
     removeObject,
     reorderObject,
+    nextObjectName,
 } from './doc-model.mjs';
 
 export const LOOP_CYCLE = 'cycle';
@@ -84,7 +85,7 @@ export function patchLayer(doc, layerId, patch) {
 export function addLayer(doc, name) {
     if (!doc) return doc;
     const list = objectsOf(doc);
-    const obj = makeObject({ name: name || '对象 ' + (list.length + 1) });
+    const obj = makeObject({ name: name || nextObjectName(doc) });
     return Object.assign({}, doc, { objects: [obj].concat(list) });
 }
 

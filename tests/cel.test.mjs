@@ -121,7 +121,7 @@ test('addLayer 把新对象插到最前（第 0 项是最上层）', () => {
     assert.equal(objectsOf(next)[0].cels[0].at, 0);
     assert.notEqual(objectsOf(next)[0].id, objectsOf(next)[1].id);
     assert.equal(objectsOf(doc).length, 1, '不改入参');
-    assert.equal(addLayer(doc, '').objects[0].name, '对象 2', '缺省名按现有数量编号');
+    assert.equal(addLayer(doc, '').objects[0].name, 'Object 2', '缺省名按现有数量编号（英文，与 DEFAULT_OBJECT_NAME 同一真源）');
 });
 
 test('removeLayer 可以删到一个不剩，且把子对象提到根', () => {
