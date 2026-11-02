@@ -432,3 +432,157 @@ test('源码守卫：预加载与主进程都接上了无对话框的回写通�
     assert.match(main, /path\.isAbsolute\(file\)/, '主进程要拒绝相对路径（写到哪里不可预期）');
     assert.match(main, /fs\.writeFileSync\(file, json, 'utf8'\)/, '主进程要真的写盘');
 });
+
+/* ─────── ⑦ P1 项目库动作：复制 / 解除绑定 / 整库备份与恢复 ─────── */
+
+test('exportLibrary：整库打成一个备份包，走 saveBinaryChecked 落盘（真行为）', async () => {
+    const { io, cel, store } = await loadProjectIo();
+    store.__resetMemory();
+    const doc = cel.createDocument({ width: 20, height: 10, fps: 10, layerName: 'L' });
+    await store.putProject(store.makeRecord({ name: '甲', doc, file: '' }));
+    await store.putProject(store.makeRecord({ name: '乙', doc, file: 'C:/work/yi.msp' }));
+
+    const calls = [];
+    const api = {
+        saveBinary: (name, bytes, ext, label) => {
+            calls.push({ name, bytes, ext, label });
+            return Promise.resolve({ ok: true, file: 'C:/backup/library.json', size: bytes.byteLength });
+        },
+    };
+    const out = await withBridge(api, () => io.projectApi.exportLibrary());
+    assert.equal(out.ok, true);
+    assert.equal(out.count, 2, '返回值要带导出条数，面板不用自己去数');
+    assert.equal(out.file, 'C:/backup/library.json');
+
+    assert.equal(calls.length, 1, '整库只该弹一次保存对话框');
+    assert.equal(calls[0].name, 'motionstudio-library', '备份包用自己的一组文件名/扩展名');
+    assert.equal(calls[0].ext, 'json');
+    assert.ok(String(calls[0].label).length > 0, '保存对话框的类型名要有');
+
+    const bundle = JSON.parse(new TextDecoder().decode(calls[0].bytes));
+    assert.equal(bundle.format, 'motionstudio-library');
+    assert.equal(bundle.version, 1);
+    assert.equal(bundle.app, 'motionstudio');
+    assert.equal(bundle.projects.length, 2);
+    assert.equal(bundle.projects[0].format, 'motionstudio-project', 'projects 里是完整项目节点，不是轻量记录');
+    assert.ok(bundle.projects[0].doc && Array.isArray(bundle.projects[0].doc.elements));
+    assert.equal(bundle.projects[0].name, '甲');
+    // 导出是只读动作：库里的记录一条不少、一个字段没改
+    assert.equal((await store.listProjects()).length, 2);
+    assert.equal((await store.getProject((await store.listProjects())[0].id)).name.length > 0, true);
+});
+
+test('exportLibrary：空库 / 取消 / 桥失败三种结局可分辨（真行为）', async () => {
+    const { io, cel, store } = await loadProjectIo();
+    store.__resetMemory();
+    let called = 0;
+    const api = { saveBinary: () => { called += 1; return Promise.resolve({ ok: true, file: 'x' }); } };
+
+    const empty = await withBridge(api, () => io.projectApi.exportLibrary());
+    assert.equal(empty.ok, false);
+    assert.equal(empty.canceled, undefined, '空库不是「用户取消」');
+    assert.match(empty.error, /空|没有/);
+    assert.equal(called, 0, '空库连保存对话框都不该弹');
+
+    const doc = cel.createDocument({ width: 20, height: 10, fps: 10, layerName: 'L' });
+    await store.putProject(store.makeRecord({ name: '丙', doc }));
+
+    const cancel = await withBridge({ saveBinary: () => Promise.resolve({ ok: false, canceled: true }) }, () =>
+        io.projectApi.exportLibrary());
+    assert.equal(cancel.ok, false);
+    assert.equal(cancel.canceled, true);
+
+    const failed = await withBridge({ saveBinary: () => Promise.resolve({ ok: false, error: '磁盘只读' }) }, () =>
+        io.projectApi.exportLibrary());
+    assert.equal(failed.ok, false);
+    assert.equal(failed.canceled, undefined);
+    assert.match(failed.error, /磁盘只读/, '失败要带出原因');
+});
+
+test('importFile：识别整库备份包并逐条入库，不切换当前文档（真行为）', async () => {
+    const { io, ds, cel, store } = await loadProjectIo();
+    store.__resetMemory();
+    const doc = cel.createDocument({ width: 20, height: 10, fps: 10, layerName: 'L' });
+    const a = store.makeRecord({ name: 'P1', doc });
+    const b = store.makeRecord({ name: 'P2', doc });
+    const bundle = store.libraryBundleOf([a, b]);
+    // 混进一条坏档：整体导入必须「好的一条不少、坏的一条不炸」
+    bundle.projects.push({ format: store.FORMAT, version: 4, name: '坏档', doc: {} });
+
+    freshDoc(cel, ds);
+    ds.project.dirty = false; // 切换守门直接放行（这条测试不测守门）
+    const before = ds.state.doc;
+    const api = { loadProject: () => Promise.resolve({ ok: true, file: 'C:/backup/library.json', json: bundle }) };
+
+    const ok = await withBridge(api, () => io.projectApi.importFile());
+    assert.equal(ok, true);
+    assert.equal(ds.state.doc, before, '恢复备份只入库，不切换当前文档（可能正画到一半）');
+
+    const rows = await store.listProjects();
+    assert.equal(rows.length, 2, '两条好档都进来了，坏档没有拖垮整份备份');
+    assert.deepEqual(rows.map((r) => r.name).sort(), ['P1', 'P2']);
+    assert.equal(rows.every((r) => r.file === ''), true, '从备份恢复的项目不绑定文件');
+    // 提示文案被「错误不被普通消息顶掉」的规矩挡着（前面用例留下的错误提示还在寿命里），
+    // 所以这里只断行为；「已导入 N 个（失败 M 个）」这句由下面的源码守卫 + i18n 测试钉住。
+});
+
+test('unbindFile：没有绑定文件时直接说「无需解除」，不弹确认框（真行为）', async () => {
+    const { io, ds, cel } = await loadProjectIo();
+    freshDoc(cel, ds);
+    // 假桥里没有 addEventListener：真弹出 askChoice 会在这里炸掉，反向证明没弹
+    const out = await withBridge({}, () => io.projectApi.unbindFile());
+    assert.equal(out.ok, false);
+    assert.equal(out.canceled, undefined, '没绑定文件不是「用户取消」');
+    assert.match(out.error, /没有绑定|无需解除/);
+});
+
+test('源码守卫：整库备份走 saveBinaryChecked，导入端先认备份包再认单项目', () => {
+    const io = read('../app/shell/project-io.mjs');
+    assert.match(io, /store\.libraryBundleOf\(records\)/, '备份包必须由 store 的纯函数组装');
+    assert.match(io, /ipc\.saveBinaryChecked\(\s*'motionstudio-library'/, '整库备份走可分辨的保存通道');
+    assert.match(io, /new TextEncoder\(\)\.encode\(json\)/, '备份内容按 UTF-8 字节交给主进程');
+    assert.match(io, /if \(saved\.canceled\) \{/, '取消是取消');
+
+    const body = io.slice(io.indexOf('async function importProjectFile'), io.indexOf('async function loadProject'));
+    assert.match(body, /store\.isLibraryPayload\(payload\)/, '导入端必须先认备份包');
+    assert.match(
+        body,
+        /if \(store\.isLibraryPayload\(payload\)\) return importLibraryBundle\(payload\);[\s\S]*if \(!store\.isProjectPayload\(payload\)\)/,
+        '备份包分支必须在「单个项目」校验之前，否则用户看到「不是项目文件」，一条也回不来'
+    );
+    assert.match(body, /return importLibraryBundle\(payload\)/, '备份包走逐条入库，不打开当前文档');
+    assert.match(
+        io,
+        /flash\(t\('shell\.importLibrary\.done', \{ n: ok, failed \}\)\)/,
+        '成功的和失败的条数都要报出来，不能只报「已导入」'
+    );
+});
+
+test('源码守卫：projectApi 暴露三个新动作，openedAt 在打开/导入/恢复/新建处写回', () => {
+    const io = read('../app/shell/project-io.mjs');
+    assert.match(io, /duplicate: \(id\) => duplicateProject\(id\)/);
+    assert.match(io, /unbindFile: \(\) => unbindFile\(\)/);
+    assert.match(io, /exportLibrary: \(\) => exportLibrary\(\)/);
+
+    // 解除绑定：必须二次确认；取消不是失败；库记录的绑定也要清
+    const unbind = io.slice(io.indexOf('async function unbindFile'), io.indexOf('async function exportLibrary'));
+    assert.match(unbind, /askChoice\(/);
+    assert.match(unbind, /if \(choice !== 'unbind'\) return \{ ok: false, canceled: true \}/);
+    assert.match(unbind, /rec\.file = ''/, '库记录的绑定也要清掉，否则下次打开又回来');
+    assert.match(unbind, /flash\(t\('shell\.unbind\.done'\)\)/);
+    assert.match(unbind, /if \(!file\) return \{ ok: false, error: t\('shell\.unbind\.none'\) \}/);
+
+    // 复制：名字按语言拼（词条），store 不做文案
+    const dup = io.slice(io.indexOf('async function duplicateProject'), io.indexOf('async function unbindFile'));
+    assert.match(dup, /t\('shell\.project\.copyOf'/, '副本名字要走词条（英文「copy」/中文「副本」）');
+    assert.match(dup, /store\.duplicateProject\(id, \{ name \}\)/);
+
+    // openedAt：只写 openedAt、不碰 savedAt；打开 / 导入 / 恢复三条路都要落库
+    const touch = io.slice(io.indexOf('async function touchOpenedAt'), io.indexOf('async function projectFilePayload'));
+    assert.match(touch, /rec\.openedAt = now;/);
+    assert.doesNotMatch(touch, /savedAt/, '写回「最近打开」不能改 savedAt（那会让卡片谎报刚保存过）');
+    const calls = io.match(/await touchOpenedAt\(/g) || [];
+    assert.ok(calls.length >= 3, '打开 / 导入 / 恢复三条路都要写回，实际 ' + calls.length);
+    assert.match(io, /openedAt: openedAtMs/, 'current() 要把 openedAt 给面板（卡片 meta 用）');
+    assert.match(io, /openedAt: openedAtMs > 0 \? openedAtMs : undefined/, '保存时沿用打开时刻，不刷新它');
+});

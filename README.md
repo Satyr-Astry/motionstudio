@@ -67,7 +67,8 @@ The payoff is direct: paint one drawing at 0.2s and the next at 3s without inser
 
 **Import / export**
 - Import: PSD / PSB (zero-dependency parser; keeps layers, visibility, opacity, blend mode, parent groups), PNG / JPG / WebP
-- Save: project library (IndexedDB, silent autosave) **and** `.msp` project files (JSON, bitmaps inlined) — the two coexist. Once a project is bound to a file, `Ctrl+S` writes the library **and** writes that same serialization back to the file; **Save as…** writes a new `.msp` and rebinds. A failed write-back is reported ("library saved, project file not updated"), never silently reported as success
+- Save: project library (IndexedDB, silent autosave) **and** `.msp` project files (JSON, bitmaps inlined) — the two coexist. Once a project is bound to a file, `Ctrl+S` writes the library **and** writes that same serialization back to the file; **Save as…** writes a new `.msp` and rebinds; **Unbind file…** (only visible while a file is bound) stops the write-back without deleting anything; a failed write-back is reported ("library saved, project file not updated"), never silently reported as success
+- Project library management: cards show texture count, size, object count, last-opened time and the bound file; **Duplicate** forks a project inside the library (the copy gets a new id and is not bound to the original file); **Export the whole library…** packs every project into one `.json` backup, and **Import project file** restores it (single `.msp` files work as before)
 - Export: PNG sequence, spritesheet + coordinate JSON (own format, **Phaser 3** and **Aseprite / TexturePacker / Godot / Love2D / Unity** frame tables), **animated GIF** and **APNG** (zero-dependency encoders; APNG keeps full colour and 8-bit alpha), WebM (VP9)
 
 ## Running it
@@ -197,7 +198,7 @@ npm run smoke          # boots app/ in a shell-less window and mounts every edit
 
 `npm run smoke` serves `app/` from a throwaway HTTP server and loads it in an Electron window **with no preload and no nodeIntegration** — i.e. exactly what a browser gets. It then switches a panel through every editor in the registry and flips the language both ways, collecting any console error along the way. It is also the browser-mode acceptance test: `window.motionAPI` must be absent and the web bridge must be in place.
 
-Current baseline: **1631 tests / 1629 pass / 2 skipped / 0 fail** across 121 test files; static check scans 105 modules with 0 leftovers, 0 broken imports and 0 unused imports; syntax check 111/111 (105 app/ modules + 6 root tool scripts); layering check reports 0 cross-layer imports; i18n check reports 129 strings still outside the dictionary and 0 structural gaps; smoke mounts **15/15** editors with 0 console errors. Run `npm test`, `npm run check` and `npm run smoke` before handing work over.
+Current baseline: **1651 tests / 1649 pass / 2 skipped / 0 fail** across 121 test files; static check scans 105 modules with 0 leftovers, 0 broken imports and 0 unused imports; syntax check 111/111 (105 app/ modules + 6 root tool scripts); layering check reports 0 cross-layer imports; i18n check reports 129 strings still outside the dictionary and 0 structural gaps; smoke mounts **15/15** editors with 0 console errors. Run `npm test`, `npm run check` and `npm run smoke` before handing work over.
 
 ## Design principles
 

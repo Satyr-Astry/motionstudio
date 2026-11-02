@@ -1,4 +1,45 @@
-## v0.5.0-alpha.44 — 2026-11-02 · 纹理点得动了，保存也不再骗人
+## v0.5.0-alpha.45 — 2026-11-03 · 项目管理 P1：复制、整库备份、解除绑定
+
+alpha.44 把「库 + 文件两者并存」的**地基**打好了（Ctrl+S 会回写已绑定的 `.msp`），但用户手里能用的动作仍只有「打开 / 新建 / 重命名 / 另存为 / 删除」。这一版补上 P1 该有的四件事，并顺手把「这个项目上次是什么时候打开的、绑的是哪个文件」摆到卡片上。
+
+### 库里能复制一份了（`duplicate`）
+
+- 卡片动作新增 **Duplicate**（`CARD_ACTIONS`：rename / duplicate / export / delete）：`projectApi.duplicate(id)` → `store.duplicateProject`，副本拿到**新 id、新名字**（`{name} copy` / `{name} 副本`）、`savedAt`/`openedAt` 刷新，`thumb` 与项目内容原样复用。
+- **副本不继承 `.msp` 绑定**：否则在副本里按 `Ctrl+S` 会把副本内容写回**原项目的文件**（与 alpha.44 修的「跨卡片另存为改绑定」是同一类坑）。
+- 以前想分叉只能「存为文件 → 再导回来」，每一步都要面对磁盘对话框。
+
+### 卡片 meta：「最近打开」与「绑定文件」
+
+- 记录新增 `openedAt`（与 `savedAt` 分开）：`loadProject` / `importProjectFile` / `restoreLastProject` 经 `touchOpenedAt` 写回库，**保存不会刷新它** —— 否则「最近打开」排序其实变成「最近保存」。
+- 卡片第二行现在显示：纹理时间点数 · 尺寸 · 对象数 · 体积 · **Opened**（最近打开） · **File**（只放文件名尾巴，完整路径进卡片 `title`）；老记录没有 `openedAt` 时整项省略，不显示 `—` 或 0。
+- `.prj-sub` 允许两行截断，meta 变长不会撑破 258px 卡片。
+
+### 整库备份与恢复（不再是「清站点数据 = 全丢」）
+
+- 菜单新增 **Export the whole library…** → `projectApi.exportLibrary()`：逐条读完整记录 → `store.libraryBundleOf` 打包成 `{format:'motionstudio-library', version:1, exportedAt, app, projects:[完整项目节点]}` → 走既有 `saveBinaryChecked` 落盘（浏览器桥自动改为下载）。
+- 恢复用**同一个入口**：`importProjectFile` 解析后先认 `isLibraryPayload`，逐条 `jsonToDoc` 校验入库，报「成功 N / 失败 M」，**不切换当前文档、不动撤销栈**（恢复备份不是打开项目，用户可能正画到一半）。单个 `.msp` 导入行为一字未改。
+- 空库、序列化失败、取消、无桥都有各自可分辨的提示；备份包与单个项目文件同为 `.json`，靠 `format` 区分。
+
+### 解除文件绑定（`unbindFile`）
+
+- 菜单新增条件项 **Unbind file…**：**只有当前项目绑定了 `.msp` 时才出现**（`menuItemsFor(file)` 纯函数；`reload()` 缓存 `api.current().file`，变了才重建菜单，且不抢搜索框焦点）。
+- 二次确认写明「文件本身不会被删除」；解除后 `project.file` 与库记录的 `file` 一起清空，`Ctrl+S` 回到「只写项目库」。以前打开过一次文件就会把之后每次保存都写回它，没有任何撤回入口。
+
+### 顺手收口的可访问性
+
+- 删除后焦点按下标接回「原位置剩下的那张卡」（列表重画后不掉回 `<body>`）；结果提示走 `.prj-hint` 的 `role=status` / `aria-live=polite` 播报。
+- 8 秒撤销条仍是外壳 `holdUndoBar`，面板侧不重写（源码守卫钉住）。
+
+### 验证
+
+`npm test` **1651 / 1649 pass / 2 skipped / 0 fail**（121 个测试文件；+20 条新断言）；`npm run check` 五道门全绿（静态 105 模块 0/0/0 · 语法 111/111 · 分层 0 违规 · 文档基线一致 · 本地化 129 条待迁未增加、词典 1409/1409 镜面）；`npm run smoke` 15/15 编辑器、`PROBLEMS []`。另做了一次性 Electron DOM 探针（临时脚本在 `%TEMP%`，已删）：有绑定 → 菜单 7 项含 Unbind、复制分发 `duplicate:a` 且提示副本真名、整库导出提示带 N 与路径、解除后 `current().file` 清空且菜单回到 6 项、删除后焦点接回卡片，console 错误 0。
+
+### 需要知道的
+
+- 「图标名唯一」的守卫从**全局唯一**收窄为**同一表面内唯一**：菜单「导出整个库」与卡片「另存为」都用 `save`（都是「写到磁盘」，从不同时出现在视野里；现有图标集里没有第三个文件语义图标）。测试注释写明了理由。
+- 备份包只备份**库记录**，不备份运行时偏好（语言、布局、导出预设）；恢复后的卡片没有缩略图（缩略图需要 DOM 现画，备份里不存）。
+- 仍属 P2、未做：分组 / 标签 / 收藏 / 手动排序、版本历史、同一 `.msp` 被两个项目绑定时冲突选择。
+
 
 这一版只做用户反馈的两件事，但两件都是「功能其实在、入口却丢了」的回归：
 

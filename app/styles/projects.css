@@ -126,7 +126,23 @@
     color: var(--ink);
 }
 
-.ms-modal .prj-sub,
+/* 卡片第二行：纹理 / 尺寸 / 对象 / 体积 / 最近打开 / 绑定文件 —— 一行放不下，允许两行。
+   仍然截断：卡片高度必须稳定，不能因为一个长文件名就把下面的动作按钮挤出视野。 */
+.ms-modal .prj-sub {
+    color: var(--ink-dim);
+    font-size: 11px;
+    /* 两行截断。Chromium（Electron 与网页版的共同目标）用 -webkit-box 这一套；
+       `line-clamp` 是规范名，给将来的标准实现兜底（不认识时只是不截断，不撑破：
+       卡片网格的 minmax(0,1fr) + overflow:hidden 仍然兜着）。 */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    /* 路径尾巴可能是一长串没有空格的字符，允许任意处断行，否则会横向溢出 */
+    overflow-wrap: anywhere;
+}
+
 .ms-modal .prj-time {
     color: var(--ink-dim);
     font-size: 11px;
@@ -349,9 +365,9 @@
     font-size: 12px;
 }
 
-/* ─────────────────── §4 卡片动作：重命名 / 存为文件 / 删除 ─────────────────── */
+/* ─────────────────── §4 卡片动作：重命名 / 复制 / 另存为 / 删除 ─────────────────── */
 
-/* 卡片整块可点（载入），所以动作区只留次级动作；删除走危险色，与其余两个明确分档。 */
+/* 卡片整块可点（载入），所以动作区只留次级动作；删除走危险色，与其余三条明确分档。 */
 .ms-modal .prj-actions .prj-btn {
     display: inline-flex;
     align-items: center;

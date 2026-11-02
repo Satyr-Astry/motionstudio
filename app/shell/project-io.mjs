@@ -87,6 +87,14 @@ let saveBusy = false;
 let savedAtMs = 0;
 
 /**
+ * 当前项目最近一次「打开」的时刻（毫秒）。与 savedAtMs 分开维护：
+ * 「最近打开」是项目库排序/卡片 meta 的口径，一次 Ctrl+S 不该把它刷新成现在
+ * （那会让用户按「最近打开」找项目时，看到的顺序其实是「最近保存」）。
+ * 打开 / 导入 / 恢复 / 新建四处设置（见 touchOpenedAt），保存时原样带进记录。
+ */
+let openedAtMs = 0;
+
+/**
  * 当前有几个 askChoice 浮层开着。
  * 项目库浮层的 Esc 监听挂在 window 捕获期，注册得比 askChoice 早；
  * 不挡一下的话，用户在三选面板上按 Esc 会把整个项目库也一起关掉。
@@ -795,8 +803,60 @@ function currentProject() {
         dirty: project.dirty,
         label: projectLabel(),
         savedAt: savedAtMs,
+        openedAt: openedAtMs,
         storeKind: store.storageKind(),
     };
+}
+
+/**
+ * 把「最近打开时间」写回库记录（打开 / 导入 / 恢复三条路各调一次）。
+ *
+ * 只改 `openedAt`：`savedAt` 是「存档内容是什么时候的」，打开一次文件内容没变，
+ * 把它刷新成现在会让顶栏与卡片都谎报「刚刚保存过」。记录不存在（未命名文档、
+ * 已被删的项目）时安静返回 0，调用方自行退回内存里的值。
+ *
+ * @param {string} id 库记录 id
+ * @returns {Promise<number>} 写入的时间戳；没写成返回 0
+ */
+async function touchOpenedAt(id) {
+    if (!id) return 0;
+    try {
+        const rec = await store.getProject(id);
+        if (!rec) return 0;
+        const now = Date.now();
+        rec.openedAt = now;
+        const saved = await store.putProject(rec);
+        return saved ? now : 0;
+    } catch (err) {
+        // 只影响列表排序与卡片 meta，不影响内容；日志留英文，不新增待迁文案
+        console.error('[shell] failed to record openedAt:', err);
+        return 0;
+    }
+}
+
+/**
+ * 把整库记录逐条读完整（`listProjects` 给的是轻量视图，备份要的是完整 project 节点）。
+ * 单条读失败只跳过那一条：一份备份少一个项目，也比整份导不出来强。
+ *
+ * @returns {Promise<object[]>} 完整记录数组
+ */
+async function fullLibraryRecords() {
+    let rows = [];
+    try {
+        rows = await store.listProjects();
+    } catch (err) {
+        rows = [];
+    }
+    const records = [];
+    for (const row of rows) {
+        try {
+            const rec = await store.getProject(row && row.id);
+            if (rec && rec.project) records.push(rec);
+        } catch (err) {
+            /* 这一条读不出来：跳过，别拖垮整份备份 */
+        }
+    }
+    return records;
 }
 
 /**
@@ -906,6 +966,8 @@ async function saveProject(name) {
             doc: doc,
             thumb: frameThumb(doc),
             file: project.file || '',
+            // 保存不改「最近打开」：沿用打开时记下的值（没有就交给 makeRecord 退回 savedAt）
+            openedAt: openedAtMs > 0 ? openedAtMs : undefined,
         });
         const saved = await store.putProject(rec);
         savedAtMs = (saved && saved.savedAt) || Date.now();
@@ -996,6 +1058,46 @@ async function writeProjectFile(id, opts) {
     return okResult({ file: out.file });
 }
 
+/**
+ * 导入整库备份包：逐条 `jsonToDoc` 校验后入库，**不切换当前文档**。
+ *
+ * 这是「恢复备份」，不是「打开一个项目」：用户可能正画到一半，导备份只是为了把
+ * 换机器 / 清缓存之后的项目找回来。所以这里既不 applyDoc，也不清撤销栈。
+ * 统计成功与失败数并如实报出来：部分损坏时用户必须知道恢复了几个、坏了几个，
+ * 一句笼统的「已导入」会把失败的几条盖过去。
+ *
+ * @param {object} payload `isLibraryPayload` 认过的备份包
+ * @returns {Promise<boolean>} 至少导入一条为 true
+ */
+async function importLibraryBundle(payload) {
+    const items = Array.isArray(payload && payload.projects) ? payload.projects : [];
+    let ok = 0;
+    let failed = 0;
+    for (const node of items) {
+        try {
+            const doc = await store.jsonToDoc(node);
+            if (!doc) {
+                failed += 1;
+                continue;
+            }
+            const name = String((node && node.name) || (node && node.doc && node.doc.name) || t('shell.importFile.fallbackName'));
+            const rec = store.makeRecord({ name, doc, thumb: frameThumb(doc), file: '' });
+            const saved = await store.putProject(rec);
+            if (saved) ok += 1;
+            else failed += 1;
+        } catch (err) {
+            failed += 1;
+        }
+    }
+    if (!ok) {
+        flash(t('shell.importLibrary.none', { failed }), 'error');
+        return false;
+    }
+    flash(t('shell.importLibrary.done', { n: ok, failed }));
+    notifyProjects();
+    return true;
+}
+
 /** 从 .json 导入：读文件 → 校验 → 入库 → 打开。 */
 async function importProjectFile() {
     // 先问后选文件：让用户选完文件再告诉他「当前文档有改动」是浪费他的时间
@@ -1025,6 +1127,10 @@ async function importProjectFile() {
             return false;
         }
     }
+    // 整库备份包（exportLibrary 写出的那种）先认：它跟单项目文件同为 .json，
+    // 落到 isProjectPayload 只会得到 false —— 用户看到「不是项目文件」，
+    // 而手里那 20 个项目一条都没回来。
+    if (store.isLibraryPayload(payload)) return importLibraryBundle(payload);
     if (!store.isProjectPayload(payload)) {
         flash(t('shell.importFile.notProject'), 'error');
         return false;
@@ -1039,7 +1145,9 @@ async function importProjectFile() {
     const rec = store.makeRecord({ name, doc, thumb: frameThumb(doc), file: out.file || '' });
     const saved = await store.putProject(rec);
     savedAtMs = (saved && saved.savedAt) || Date.now();
-    applyDoc(doc, { id: (saved && saved.id) || rec.id, name: rec.name, file: rec.file });
+    const importedId = (saved && saved.id) || rec.id;
+    applyDoc(doc, { id: importedId, name: rec.name, file: rec.file });
+    openedAtMs = (await touchOpenedAt(importedId)) || Date.now();
     flash(t('shell.importFile.done', { name: rec.name }));
     notifyProjects();
     return true;
@@ -1064,8 +1172,12 @@ async function loadProject(entry) {
             return false;
         }
         const ok = applyDoc(doc, { id: source.id, name: source.name, file: source.file });
-        if (ok) savedAtMs = Number(source.savedAt) || 0;
-        if (ok) flash(t('shell.load.done', { name: source.name || t('shell.project.fallbackName') }));
+        if (ok) {
+            savedAtMs = Number(source.savedAt) || 0;
+            // 「最近打开」写回库：列表按它排序时，打开过的项目就该排在前面
+            openedAtMs = (await touchOpenedAt(source.id)) || Number(source.openedAt) || 0;
+            flash(t('shell.load.done', { name: source.name || t('shell.project.fallbackName') }));
+        }
         return ok;
     } catch (err) {
         console.error('[shell] 载入项目失败：', err);
@@ -1088,6 +1200,8 @@ async function newProject(opts) {
     const doc = createDocument({ width, height, fps, duration: frames / fps, layerName: o.layerName || DEFAULT_OBJECT_NAME });
     const ok = applyDoc(enrichDoc(doc), { id: '', name: '', file: '', dirty: false });
     if (ok) savedAtMs = 0;
+    // 新文档还没有库记录：openedAt 先记在内存里，第一次入库时由 makeRecord 带进记录
+    if (ok) openedAtMs = Date.now();
     if (ok) flash(t('shell.newProject.done', { w: width, h: height, frames, sec: (frames / fps).toFixed(2) }));
     return ok;
 }
@@ -1387,6 +1501,7 @@ async function removeProjectWithGuard(id) {
         project.id = '';
         project.file = '';
         project.name = '';
+        openedAtMs = 0;
         store.setCurrentProjectId('');
         updateChrome();
         flash(t('shell.remove.outOfLibrary'));
@@ -1396,6 +1511,118 @@ async function removeProjectWithGuard(id) {
     notifyProjects();
     holdUndoBar(rec);
     return true;
+}
+
+/* ────────── 项目库 P1 动作：库内复制 / 解除文件绑定 / 整库备份 ────────── */
+
+/**
+ * 库内复制（「另存为副本」）：只在库里多一条记录，**不动当前文档**。
+ *
+ * 为什么值得有：想从一份存档分叉出去（改个配色另存一版），以前只能
+ * 「存为文件 → 再导回来」，每一步都在碰磁盘对话框。副本不继承文件绑定
+ * （见 `store.duplicateProject`），所以它不会偷偷覆盖原项目的 .msp。
+ *
+ * @param {string} id 要复制的库记录 id
+ * @returns {Promise<{ok:true,id:string,name:string}|{ok:false,error:string}>}
+ */
+async function duplicateProject(id) {
+    let src = null;
+    try {
+        src = await store.getProject(id);
+    } catch (err) {
+        src = null;
+    }
+    if (!src) return fail(t('shell.duplicate.missing'));
+    // 「副本」这类字眼按语言拼：store 只管数据，不管界面文案
+    const name = t('shell.project.copyOf', { name: src.name || t('shell.project.untitled') });
+    let rec = null;
+    try {
+        rec = await store.duplicateProject(id, { name });
+    } catch (err) {
+        rec = null;
+    }
+    if (!rec) return fail(t('shell.duplicate.failed'));
+    flash(t('shell.duplicate.done', { name: rec.name }));
+    notifyProjects();
+    return okResult({ id: rec.id, name: rec.name });
+}
+
+/**
+ * 解除当前项目与 .msp 文件的绑定（**不删文件**）。
+ *
+ * 为什么必须有显式入口：alpha.44 起绑定了文件就「Ctrl+S 连文件一起回写」，
+ * 但没有任何地方能撤掉这个绑定 —— 打开过一次的文件会把之后每一次保存都写回它。
+ * 用户想改成「只在库里当草稿」时，以前只能「另存为」到别的路径绕开。
+ * 二次确认里写清「文件本身不删」，避免把「解除绑定」误读成「删文件」。
+ *
+ * @returns {Promise<{ok:true}|{ok:false,canceled?:true,error?:string}>}
+ */
+async function unbindFile() {
+    const file = String(project.file || '');
+    if (!file) return { ok: false, error: t('shell.unbind.none') };
+    const choice = await askChoice(
+        t('shell.unbind.title'),
+        [
+            { label: t('shell.unbind.confirm'), value: 'unbind', danger: true },
+            { label: t('shell.ask.cancel'), value: 'cancel' },
+        ],
+        t('shell.unbind.detail', { file: file })
+    );
+    if (choice !== 'unbind') return { ok: false, canceled: true };
+    project.file = '';
+    // 库里那条记录也清掉绑定：否则下次「打开」这个项目，绑定又跟着记录回来了
+    if (project.id) {
+        try {
+            const rec = await store.getProject(project.id);
+            if (rec) {
+                rec.file = '';
+                await store.putProject(rec);
+            }
+        } catch (err) {
+            // 库记录没清掉不影响本次动作：顶栏绑定已解除，下一次保存会写回库里
+            console.error('[shell] failed to clear the bound file on the record:', err);
+        }
+    }
+    updateChrome();
+    notifyProjects();
+    flash(t('shell.unbind.done'));
+    return okResult();
+}
+
+/**
+ * 导出整个项目库为一份 JSON 备份（走与视频/精灵图同一条 `saveBinaryChecked` 通道）。
+ *
+ * 为什么需要：库在本机浏览器 profile 的 IndexedDB 里，**清站点数据 = 全丢**；
+ * 以前唯一的出路是逐个项目「存为文件」，几十个项目就要点几十次。
+ * 备份包能被「导入文件」原样吃回来（`importProjectFile` 先认 `isLibraryPayload`）。
+ *
+ * @returns {Promise<{ok:true,file:string,count:number}|{ok:false,canceled?:true,error?:string}>}
+ */
+async function exportLibrary() {
+    const records = await fullLibraryRecords();
+    if (!records.length) return fail(t('shell.libraryExport.empty'));
+    const bundle = store.libraryBundleOf(records);
+    let json = '';
+    try {
+        json = JSON.stringify(bundle);
+    } catch (err) {
+        return fail(t('shell.libraryExport.serializeFailed'));
+    }
+    const saved = await ipc.saveBinaryChecked(
+        'motionstudio-library',
+        new TextEncoder().encode(json),
+        'json',
+        t('shell.libraryExport.dialogLabel')
+    );
+    if (!saved.ok) {
+        if (saved.canceled) {
+            flash(t('shell.libraryExport.canceled'));
+            return canceledResult(t('shell.libraryExport.canceledShort'));
+        }
+        return fail(t('shell.libraryExport.failed', { msg: saved.error }));
+    }
+    flash(t('shell.libraryExport.done', { n: records.length, path: saved.file }));
+    return okResult({ file: saved.file, count: records.length });
 }
 
 /* ─────────────────── 未命名草稿 & 关窗口保护 ─────────────────── */
@@ -1556,6 +1783,7 @@ export async function restoreDraft() {
         return false;
     }
     const ok = applyDoc(doc, { id: '', name: '', file: '', dirty: true });
+    if (ok) openedAtMs = 0; // 草稿没有库记录，别让上一个项目的「最近打开」跟过来
     if (ok) flash(t('shell.draft.restored'));
     return ok;
 }
@@ -2055,6 +2283,12 @@ const projectApi = {
     },
     // 删除有确认、8 秒内可撤销：全在 removeProjectWithGuard 里，面板只负责调
     remove: (id) => removeProjectWithGuard(id),
+    // 库内复制（副本不继承文件绑定）：面板「复制」直接调
+    duplicate: (id) => duplicateProject(id),
+    // 解除当前项目的文件绑定（带二次确认，文件本身不删）
+    unbindFile: () => unbindFile(),
+    // 整库备份：库 → 一份 JSON；导入端 importFile 同时认这个备份包
+    exportLibrary: () => exportLibrary(),
     // 项目文件（.msp/.json）→ 项目库。projectApi.importFile 保持这个语义：
     // projects.mjs 的「导入文件」按钮按项目导入写的提示文案（第 118/385 行）。
     importFile: () => importProjectFile(),
@@ -2098,6 +2332,7 @@ async function restoreLastProject() {
         const ok = applyDoc(doc, { id: rec.id, name: rec.name, file: rec.file });
         if (ok) {
             savedAtMs = Number(rec.savedAt) || 0;
+            openedAtMs = (await touchOpenedAt(rec.id)) || Number(rec.openedAt) || 0;
             flash(t('shell.restore.done', { name: rec.name || '' }));
         }
         return ok;
@@ -2122,6 +2357,9 @@ export {
     importProjectFile,
     loadProject,
     newProject,
+    duplicateProject,
+    unbindFile,
+    exportLibrary,
     projectsModal,
     openProjectsPanel,
     onFileAct,
@@ -2161,6 +2399,8 @@ export async function autoSaveProject() {
             doc,
             thumb: frameThumb(doc),
             file: project.file || '',
+            // 自动保存也不该刷新「最近打开」
+            openedAt: openedAtMs > 0 ? openedAtMs : undefined,
         });
         const saved = await store.putProject(rec);
         project.id = (saved && saved.id) || rec.id;

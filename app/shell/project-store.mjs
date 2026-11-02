@@ -59,6 +59,16 @@ export const VERSION_V2 = 2;
 /** 最后一个「带 frames」的版本；<= 它的文件都要迁移。 */
 export const VERSION_FRAMES = 3;
 
+/**
+ * 整库备份包的格式标记与版本（`exportLibrary` 写出、`importProjectFile` 认回来）。
+ *
+ * 必须与单项目文件的 `FORMAT` **不同**：导入端先认这个标记，才不会把一份装着
+ * 多个项目的备份当成「一个项目」丢给 `jsonToDoc` —— 那只会得到 null，
+ * 用户看到的是「项目内容损坏」，而手里 20 个项目一个都没回来。
+ */
+export const LIBRARY_FORMAT = 'motionstudio-library';
+export const LIBRARY_VERSION = 1;
+
 /** 对象的缺省几何：paint = 普通绘制层，anchor 默认居中。 */
 export const DEFAULT_KIND = 'paint';
 const DEFAULT_ANCHOR = { x: 0.5, y: 0.5 };
@@ -1053,7 +1063,11 @@ function newId() {
  * 组装一条库记录：轻量元信息（列表直接读）+ 完整项目（点开才用）。
  * 注意 `rec.layers` / `rec.frames` 是**对象数 / 纹理时间点数**的展示口径，projects.mjs
  * 直接读它，键名不能改；时间模型里没有帧对象了，`frames` 取「所有对象出现过的时间点」。
- * @param {{id?:string,name?:string,doc:object,thumb?:string,file?:string}} spec
+ *
+ * `openedAt` 是「最近一次打开这条记录」的时刻，与 `savedAt`（最近一次保存）是两件事：
+ * 保存不该把项目顶到「最近打开」列表最前面，打开也不该让存档看起来更新了。
+ * 不给 `openedAt` 时退回 `savedAt`（老调用方 / 第一次入库都是这个语义）。
+ * @param {{id?:string,name?:string,doc:object,thumb?:string,file?:string,openedAt?:number}} spec
  */
 export function makeRecord(spec) {
     const s = spec || {};
@@ -1061,6 +1075,8 @@ export function makeRecord(spec) {
     const docJson = docToJSON(doc);
     const name = String(s.name == null ? '' : s.name).trim() || '未命名项目';
     const savedAt = Date.now();
+    const openedRaw = Number(s.openedAt);
+    const openedAt = Number.isFinite(openedRaw) && openedRaw > 0 ? openedRaw : savedAt;
     const project = { format: FORMAT, version: VERSION, name: name, savedAt: savedAt, doc: docJson };
     const elementCount = docJson && Array.isArray(docJson.elements) ? docJson.elements.length : 0;
     const times = new Set();
@@ -1071,6 +1087,7 @@ export function makeRecord(spec) {
         id: s.id || newId(),
         name: name,
         savedAt: savedAt,
+        openedAt: openedAt,
         width: docJson ? docJson.width : FALLBACK.width,
         height: docJson ? docJson.height : FALLBACK.height,
         frames: times.size,
@@ -1095,6 +1112,9 @@ export function stripRecord(rec) {
         id: rec.id,
         name: rec.name,
         savedAt: rec.savedAt,
+        // 原样透传：老记录（alpha.44 及以前）没有 openedAt 就是 0，
+        // 面板据此不显示「最近打开」—— 拿 savedAt 顶替等于编一个没发生过的打开动作
+        openedAt: rec.openedAt || 0,
         width: rec.width,
         height: rec.height,
         frames: rec.frames,
@@ -1116,6 +1136,49 @@ export function isProjectPayload(obj) {
     if (!node || typeof node !== 'object') return false;
     if (obj.doc) return true; // 信封：doc 是节点，下面由 jsonToDoc 校验
     return obj.format === FORMAT && elementList(node).length > 0;
+}
+
+/**
+ * 是不是一份**整库备份包**（`exportLibrary` 写出、`importProjectFile` 认回来的结构）。
+ *
+ * 只认结构不认内容：`projects` 里每一条是否真能读，由 `jsonToDoc` 逐条校验。
+ * 这样坏了其中一条也只丢那一条，不会让整份备份变成「不是项目文件」。
+ */
+export function isLibraryPayload(obj) {
+    if (!obj || typeof obj !== 'object') return false;
+    return obj.format === LIBRARY_FORMAT && Array.isArray(obj.projects);
+}
+
+/**
+ * 把一整库记录打包成备份包（纯函数，不碰存储）。
+ *
+ * 结构：`{format:'motionstudio-library', version:1, exportedAt, app:'motionstudio', projects:[…]}`
+ * - `projects` 里放的是**完整的项目文件节点**（`rec.project`，含 `doc`），导入端因此可以
+ *   逐条走 `jsonToDoc`，与单个 `.msp` 完全同一条校验路径；
+ * - 没有 `project` 的坏记录直接跳过 —— 一条损坏的历史记录不该毁掉整份备份；
+ * - 深拷贝（`plain`）：备份包与库里记录共引用时，调用方改包会顺手改库。
+ *
+ * @param {Array<object>} records 完整库记录（`getProject` 的返回，不是 stripRecord 的轻量视图）
+ * @param {{exportedAt?:number}} [opts] 测试注入用；不给就取当前时间
+ * @returns {{format:string,version:number,exportedAt:number,app:string,projects:object[]}}
+ */
+export function libraryBundleOf(records, opts) {
+    const o = opts || {};
+    const rows = Array.isArray(records) ? records : [];
+    const projects = [];
+    for (const rec of rows) {
+        if (!rec || typeof rec !== 'object') continue;
+        const node = plain(rec.project);
+        if (node && typeof node === 'object') projects.push(node);
+    }
+    const stamp = Number(o.exportedAt);
+    return {
+        format: LIBRARY_FORMAT,
+        version: LIBRARY_VERSION,
+        exportedAt: Number.isFinite(stamp) && stamp > 0 ? stamp : Date.now(),
+        app: 'motionstudio',
+        projects: projects,
+    };
 }
 
 /* ─────────────────────────── IndexedDB 通路 ─────────────────────────── */
@@ -1230,6 +1293,47 @@ export async function renameProject(id, name) {
     const next = Object.assign({}, rec, { name: String(name == null ? '' : name).trim() || rec.name });
     if (next.project) next.project = Object.assign({}, next.project, { name: next.name });
     return putProject(next);
+}
+
+/**
+ * 库内复制（「另存为副本」）：把一条记录抄成一条新记录，内容一字不差。
+ *
+ * **副本一律清掉 `file`**：绑定路径若跟着抄过来，用户下次在副本里按 Ctrl+S 就会把
+ * 副本内容写回**原项目的文件** —— 两份不同的内容抢同一个交付物，这是真丢数据的路径
+ * （与「跨卡片另存为改绑定」是同一类坑，alpha.44 已堵过一次）。
+ * `thumb` / `project` 原样复用；`savedAt` / `openedAt` 刷新成现在。
+ *
+ * @param {string} id 源记录 id
+ * @param {{name?:string}} [opts] 副本名字（「副本」这类字眼由调用方按语言拼好）
+ * @returns {Promise<object|null>} 新记录的轻量视图；源记录不存在时 null
+ */
+export async function duplicateProject(id, opts) {
+    if (!id) return null;
+    const o = opts || {};
+    const src = await getProject(id);
+    if (!src || !src.project) return null;
+    const project = plain(src.project);
+    if (!project || typeof project !== 'object') return null;
+    const now = Date.now();
+    const name = String(o.name == null ? '' : o.name).trim() || String(src.name || '');
+    const rec = {
+        id: newId(),
+        name: name,
+        savedAt: now,
+        openedAt: now,
+        width: src.width,
+        height: src.height,
+        frames: src.frames,
+        layers: src.layers,
+        thumb: typeof src.thumb === 'string' ? src.thumb : '',
+        // 副本不继承文件绑定：否则 Ctrl+S 会把副本写进原项目的文件
+        file: '',
+        // 名字与 savedAt 跟着新记录走：否则「存为文件」写出来的项目文件还是旧名字/旧时间
+        project: Object.assign({}, project, { name: name, savedAt: now }),
+        bytes: Number(src.bytes) || 0,
+    };
+    const saved = await putProject(rec);
+    return saved || null;
 }
 
 export async function deleteProject(id) {

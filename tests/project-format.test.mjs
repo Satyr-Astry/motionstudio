@@ -414,3 +414,89 @@ test('导入图片：t=0 建一个纹理，序列化后只有一条 asset', asyn
     assert.equal(node.elements[0].cels[0].at, 0);
     assert.equal(node.elements[0].cels[0].image.ref, obj.id);
 });
+
+/* ──────────────── 项目库记录：openedAt / 库内复制 / 整库备份包 ──────────────── */
+
+test('makeRecord 带 openedAt（默认 = savedAt），stripRecord 透传', () => {
+    const { doc } = richDoc();
+    const rec = store.makeRecord({ name: '甲', doc, openedAt: 111 });
+    assert.equal(rec.openedAt, 111, '调用方给的 openedAt 要原样留下（保存不是打开）');
+    assert.ok(rec.savedAt > 0);
+    assert.equal(store.stripRecord(rec).openedAt, 111);
+
+    const dflt = store.makeRecord({ name: '乙', doc });
+    assert.equal(dflt.openedAt, dflt.savedAt, '没给 openedAt 时退回 savedAt');
+    // 老记录（alpha.44 及以前）没有这个字段：透传成 0（面板据此不显示），
+    // 不能拿 savedAt 顶替 —— 那等于替用户编一个没发生过的「打开」动作
+    assert.equal(store.stripRecord({ savedAt: 9 }).openedAt, 0);
+});
+
+test('库内复制：新 id / 新名字 / file 清空（防 Ctrl+S 覆盖原文件），内容原样', async () => {
+    store.__resetMemory();
+    const { doc } = richDoc();
+    const src = store.makeRecord({ id: 'src-1', name: '甲', doc, file: 'C:/work/jia.msp', openedAt: 5 });
+    await store.putProject(src);
+
+    const copy = await store.duplicateProject('src-1', { name: '甲 副本' });
+    assert.ok(copy);
+    assert.notEqual(copy.id, 'src-1', '副本必须是新记录，不能覆盖原记录');
+    assert.match(copy.id, /^proj-/);
+    assert.equal(copy.name, '甲 副本');
+    assert.equal(copy.file, '', '副本不能继承文件绑定（否则 Ctrl+S 写回原项目的 .msp）');
+    assert.equal(copy.width, src.width);
+    assert.equal(copy.frames, src.frames);
+    assert.equal(copy.thumb, src.thumb);
+    assert.equal(copy.openedAt, copy.savedAt, '复制出来的记录「打开时间」就是现在');
+    assert.ok(copy.openedAt > 5);
+
+    const full = await store.getProject(copy.id);
+    assert.ok(full && full.project, '副本要带完整项目，打开才不丢内容');
+    assert.equal(full.project.name, '甲 副本', '存为文件时写出来的名字也跟着改');
+    assert.deepEqual(full.project.doc, src.project.doc, '文档内容一字不差');
+    // 原记录不受影响
+    const again = await store.getProject('src-1');
+    assert.equal(again.name, '甲');
+    assert.equal(again.file, 'C:/work/jia.msp');
+    // 源记录不存在：返回 null，不造出半条记录
+    assert.equal(await store.duplicateProject('nope', { name: 'x' }), null);
+    assert.equal((await store.listProjects()).length, 2);
+});
+
+test('整库备份包：format/version/exportedAt/app + 完整项目节点（坏记录跳过）', () => {
+    const { doc } = richDoc();
+    const a = store.makeRecord({ id: 'b-1', name: 'A', doc, file: 'C:/a.msp' });
+    const b = store.makeRecord({ id: 'b-2', name: 'B', doc });
+    const bundle = store.libraryBundleOf([a, b, null, { id: 'x' }], { exportedAt: 1234 });
+
+    assert.equal(bundle.format, store.LIBRARY_FORMAT);
+    assert.equal(bundle.format, 'motionstudio-library');
+    assert.equal(bundle.version, store.LIBRARY_VERSION);
+    assert.equal(bundle.version, 1);
+    assert.equal(bundle.app, 'motionstudio');
+    assert.equal(bundle.exportedAt, 1234);
+    assert.equal(bundle.projects.length, 2, '没有 project 的坏记录跳过，不毁掉整份备份');
+    // 放进去的是「完整项目文件节点」：导入端能直接喂给 jsonToDoc
+    assert.deepEqual(bundle.projects[0], a.project);
+    assert.deepEqual(bundle.projects[1].doc, b.project.doc);
+    assert.equal(bundle.projects[0].format, store.FORMAT);
+    // 深拷贝：改备份包不该动到库里那份记录
+    bundle.projects[0].name = '改坏了';
+    assert.equal(a.project.name, 'A');
+    // 空库也能出一份结构正确的包（是否允许导出空库由 io 层判）
+    assert.deepEqual(store.libraryBundleOf([]).projects, []);
+});
+
+test('isLibraryPayload：只认 format + projects 数组，单项目文件与坏结构都不算', () => {
+    const bundle = store.libraryBundleOf([], { exportedAt: 1 });
+    assert.equal(store.isLibraryPayload(bundle), true);
+    assert.equal(store.isLibraryPayload({ format: 'motionstudio-library' }), false, '没有 projects 数组');
+    assert.equal(store.isLibraryPayload({ format: 'motionstudio-library', projects: {} }), false);
+    assert.equal(store.isLibraryPayload({ format: 'motionstudio-project', projects: [] }), false, '换错 format');
+    assert.equal(store.isLibraryPayload(null), false);
+    assert.equal(store.isLibraryPayload('x'), false);
+    // 单个项目文件（.msp）不能冒充备份包，反过来也一样
+    const file = store.docToFile(richDoc().doc, { name: '单项目' });
+    assert.equal(store.isLibraryPayload(file), false);
+    assert.equal(store.isProjectPayload(file), true);
+    assert.equal(store.isProjectPayload(bundle), false);
+});

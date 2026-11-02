@@ -2,11 +2,12 @@
  * MotionStudio —— 项目库面板（editors/projects.mjs）
  *
  * 本地项目库的 UI，纯 DOM，不嵌 iframe：左侧列表以卡片形式展示已保存的项目
- * （缩略图、名称、纹理数×尺寸、保存时间），**点卡片任意处即载入**，
- * 卡片上只留次级动作 `重命名 / 存为文件 / 删除`（删除走危险色）。
+ * （缩略图、名称、纹理数×尺寸、体积、最近打开、绑定文件），**点卡片任意处即载入**，
+ * 卡片上只留次级动作 `重命名 / 复制 / 另存为 / 删除`（删除走危险色）。
  *
  * 顶部（`.prj-top`）只有一个主行动「新建项目」+ 搜索框 + `…` 菜单：
- * 低频项（导入项目文件 / 导出精灵图 / 刷新 / 导入图片到当前文档）全部收进菜单。
+ * 低频项（导入项目文件 / 导出整个项目库 / 导出精灵图 / 刷新 / 导入图片到当前文档）
+ * 全部收进菜单；「解除文件绑定…」是**条件项**，只在当前项目绑定了 .msp 时出现。
  * 为什么收：它们是四件不同层级的事——「导入图片」改的是当前文档、「导出精灵图」
  * 是导出、「刷新」对本地库基本无意义，过去五个按钮平铺在一行，视觉权重与
  * 「新建」等同，用户不知道哪个是主操作。
@@ -17,8 +18,9 @@
  * addImageElement 里，面板只负责取文件与换文档。
  *
  * 数据与动作全部来自外壳注入的 `ctx.project`（见 shell/app.mjs 的 projectApi）：
- *   list() → Promise<记录[]>  current() → {id,name}|null  open(id)  create(opts)
- *   save(name?)  rename(id,name)  remove(id)  importFile()  exportFile()  subscribe(fn) → off()
+ *   list() → Promise<记录[]>  current() → {id,name,file}|null  open(id)  create(opts)
+ *   save(name?)  rename(id,name)  remove(id)  duplicate(id)  importFile()  exportFile()
+ *   exportLibrary()  unbindFile()  subscribe(fn) → off()
  * 面板本身不认识 IndexedDB、不认识文件对话框，换存储不影响这里。
  *
  * 「该不该保存」这类判据一律不在这里：`api.open()` 内部会走 `beforeSwitch`（project-io.mjs），
@@ -38,6 +40,7 @@ import { t } from '../i18n/index.mjs';
 // `act` / `icon` / `danger` / `sepBefore` 是行为与样式用的，不随语言变。
 
 /** 卡片上的次级动作。顺序即渲染顺序；`danger` 的那条走 `--danger`。
+ *  `duplicate` 是「库内另存一份」（副本有自己的 id，不碰任何文件）；
  *  `export` 的语义是「把这份项目另存为 .msp 文件」（写完会把 project.file 绑到新路径），
  *  文案与 title 在 `parts/projects.mjs` 里写清「另存为」，不再叫含糊的「存为文件」。 */
 export const CARD_ACTIONS = [
@@ -49,6 +52,16 @@ export const CARD_ACTIONS = [
         },
         get title() {
             return t('projects.card.rename.hint');
+        },
+    },
+    {
+        act: 'duplicate',
+        icon: 'copy',
+        get label() {
+            return t('projects.card.duplicate');
+        },
+        get title() {
+            return t('projects.card.duplicate.hint');
         },
     },
     {
@@ -74,7 +87,8 @@ export const CARD_ACTIONS = [
     },
 ];
 
-/** `…` 菜单项。`sepBefore` 之后是「不属于项目库」的那一项，用分隔线标出层级差。 */
+/** `…` 菜单项。`sepBefore` 之后是「不属于项目库」的那一项，用分隔线标出层级差。
+ *  条件项（只在有绑定文件时出现的「解除文件绑定…」）不在本表里，见 `menuItemsFor()`。 */
 export const MENU_ITEMS = [
     {
         act: 'import',
@@ -96,6 +110,18 @@ export const MENU_ITEMS = [
         },
         get title() {
             return t('projects.menu.saveAs.hint');
+        },
+    },
+    {
+        // 整库备份：把每个项目打包成一个 JSON（不是 .msp 单项目文件），
+        // 恢复走「导入项目文件」—— 外壳会自动识别备份包并批量入库。
+        act: 'exportLibrary',
+        icon: 'save',
+        get label() {
+            return t('projects.menu.exportLibrary');
+        },
+        get title() {
+            return t('projects.menu.exportLibrary.hint');
         },
     },
     {
@@ -130,6 +156,40 @@ export const MENU_ITEMS = [
         },
     },
 ];
+
+/**
+ * 「解除文件绑定…」：**条件项**，只在当前项目绑定了 .msp 文件时出现。
+ *
+ * 为什么不放进 `MENU_ITEMS`：它盖的是「文件身份」，没有文件时出现只会让人点空。
+ * 判定用 `menuItemsFor(file)`，`file` 由 `reload()` 从 `api.current().file` 缓存 ——
+ * 纯函数，Node 里可直接测。
+ */
+const UNBIND_ITEM = {
+    act: 'unbindFile',
+    icon: 'unlink',
+    get label() {
+        return t('projects.menu.unbindFile');
+    },
+    get title() {
+        return t('projects.menu.unbindFile.hint');
+    },
+};
+
+/**
+ * 菜单项清单：基础项来自 `MENU_ITEMS`，当前项目绑定了文件时在「导出整个库」之后
+ * 插入「解除文件绑定…」。
+ *
+ * @param {string} [file] 当前项目绑定的文件路径（`api.current().file`）；空 = 无绑定
+ * @returns {Array<object>} 有绑定时是新数组，无绑定时就是 `MENU_ITEMS` 本身
+ */
+export function menuItemsFor(file) {
+    const path = String(file == null ? '' : file).trim();
+    if (!path) return MENU_ITEMS;
+    const out = MENU_ITEMS.slice();
+    const at = out.findIndex((it) => it.act === 'exportLibrary');
+    out.splice(at < 0 ? out.length : at + 1, 0, UNBIND_ITEM);
+    return out;
+}
 
 /**
  * 搜索有库但无匹配时的文案：不能退回空态 CTA（那会让用户以为库是空的）。
@@ -217,6 +277,10 @@ export function normRecord(rec, i) {
         layers: Number(r.layers) || 0,
         thumb: typeof r.thumb === 'string' ? r.thumb : '',
         bytes: Number(r.bytes) || 0,
+        // 「最近打开」：外壳在打开/保存时写；老记录没有这个字段 → 0 = 不显示
+        openedAt: Number(r.openedAt) || 0,
+        // 绑定的 .msp 路径（没有绑定 = 空串）。完整路径只进卡片 title，meta 只放尾巴
+        file: typeof r.file === 'string' ? r.file : '',
     };
 }
 
@@ -243,10 +307,25 @@ function fmtBytes(n) {
 }
 
 /**
- * 卡片第二行：纹理时间点数 · 尺寸 · 对象数 · 体积。
+ * 路径尾巴：卡片 meta 只放文件名（`C:\work\walk.msp` → `walk.msp`），完整路径进卡片
+ * `title`（鼠标悬停才需要看到，否则一行 meta 会被路径撑满）。
+ *
+ * 同时认 `/` 与 `\`：浏览器/网页桥下可能是 POSIX 路径，桌面版是 Windows 路径。
+ * 纯函数，Node 里可直接测。
+ */
+export function fileTail(path) {
+    const s = String(path == null ? '' : path).trim();
+    if (!s) return '';
+    const parts = s.split(/[\\/]+/).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : s;
+}
+
+/**
+ * 卡片第二行：纹理时间点数 · 尺寸 · 对象数 · 体积 · 最近打开 · 绑定文件。
  *
  * 读的是 `normRecord` 归一后的 `r.frames`（记录真实字段），不是记录里不存在的 `r.cels`。
- * 纯函数（只查词条表），Node 里可直接测。
+ * 「最近打开」（`openedAt`）与「文件」（`file`）都是可选字段：老记录没有就不显示，
+ * 而不是显示一行「—」。纯函数（只查词条表），Node 里可直接测。
  */
 export function metaLine(r) {
     const row = r || {};
@@ -257,6 +336,9 @@ export function metaLine(r) {
     if (row.layers) parts.push(t('projects.meta.layers', { n: row.layers }));
     const size = fmtBytes(row.bytes);
     if (size) parts.push(size);
+    if (row.openedAt) parts.push(t('projects.meta.opened', { when: fmtTime(row.openedAt) }));
+    const tail = fileTail(row.file);
+    if (tail) parts.push(t('projects.meta.file', { file: tail }));
     return parts.join(' · ') || t('projects.meta.empty');
 }
 
@@ -364,19 +446,7 @@ export function mount(host, ctx) {
     menu.hidden = true;
     menu.setAttribute('role', 'menu');
     menu.setAttribute('aria-label', t('projects.more'));
-    for (const it of MENU_ITEMS) {
-        if (it.sepBefore) menu.appendChild(mk('div', 'prj-mi-sep'));
-        const mi = mk('button', 'prj-mi', null);
-        mi.type = 'button';
-        mi.dataset.act = it.act;
-        mi.setAttribute('role', 'menuitem');
-        mi.setAttribute('aria-label', it.label);
-        mi.title = it.title || it.label;
-        const icon2 = icoNode(it.icon);
-        if (icon2) mi.appendChild(icon2);
-        mi.appendChild(mk('span', 'prj-t', it.label));
-        menu.appendChild(mi);
-    }
+    // 菜单项在 paintMenu() 里建：是否带「解除文件绑定…」取决于当前项目有没有绑定文件
 
     head.appendChild(btnNew);
     head.appendChild(search);
@@ -413,6 +483,9 @@ export function mount(host, ctx) {
     let rows = [];
     let query = '';
     let currentId = '';
+    // 当前项目绑定的文件路径（api.current().file）。reload() 里刷新，菜单靠它决定是否
+    // 出现「解除文件绑定…」；缓存而不是每次现取，因为菜单渲染是同步的。
+    let currentFile = '';
     let busy = false;
     let importing = false;
     let hintText = '';
@@ -436,6 +509,39 @@ export function mount(host, ctx) {
     function menuOpen() {
         return !menu.hidden;
     }
+
+    /**
+     * 重建 `…` 菜单。
+     *
+     * 菜单项随「当前项目有没有绑定文件」变（见 `menuItemsFor`），所以不能只在 mount 时
+     * 建一次：`reload()` 发现 file 变了就重建。重建会换掉按钮节点，因此**只有焦点本来就
+     * 在菜单里**才把焦点接回第一项 —— 否则后台刷新（subscribe / 自动保存）会把用户正在
+     * 搜索框里打的字抢走焦点。
+     */
+    function paintMenu() {
+        const active = typeof document !== 'undefined' ? document.activeElement : null;
+        const hadFocus = !!active && menu.contains(active);
+        menu.replaceChildren();
+        for (const it of menuItemsFor(currentFile)) {
+            if (it.sepBefore) menu.appendChild(mk('div', 'prj-mi-sep'));
+            const mi = mk('button', 'prj-mi', null);
+            mi.type = 'button';
+            mi.dataset.act = it.act;
+            mi.setAttribute('role', 'menuitem');
+            mi.setAttribute('aria-label', it.label);
+            mi.title = it.title || it.label;
+            const ico = icoNode(it.icon);
+            if (ico) mi.appendChild(ico);
+            mi.appendChild(mk('span', 'prj-t', it.label));
+            menu.appendChild(mi);
+        }
+        if (hadFocus) {
+            const first = menu.querySelector('.prj-mi');
+            if (first && typeof first.focus === 'function') first.focus();
+        }
+    }
+
+    paintMenu();
 
     /**
      * 面板内的轻提示。
@@ -481,7 +587,10 @@ export function mount(host, ctx) {
         if (r.id === currentId) item.classList.add('is-current');
         if (renaming && renaming.id === r.id) item.classList.add('is-renaming');
         const when = r.savedAt ? fmtTime(r.savedAt) : t('projects.card.unsaved');
-        item.title = t('projects.card.title', { name: r.name, when: when });
+        // 完整路径只放在 title 里：卡片一行 meta 放尾巴（见 metaLine），悬停才给全路径
+        item.title = r.file
+            ? t('projects.card.titleFile', { name: r.name, when: when, file: r.file })
+            : t('projects.card.title', { name: r.name, when: when });
         item.setAttribute('aria-label', t('projects.card.aria', { name: r.name, when: when }));
 
         const thumb = mk('div', 'prj-thumb');
@@ -563,6 +672,13 @@ export function mount(host, ctx) {
             if (!live) return;
             rows = (items || []).map(normRecord);
             currentId = cur && cur.id ? String(cur.id) : '';
+            // 绑定的文件变了 → 菜单的「解除文件绑定…」要跟着出现/消失（菜单是同步渲染的，
+            // 所以在这里缓存一份；current() 已有 file 字段，不必再取一次）
+            const nextFile = String((cur && cur.file) || '');
+            if (nextFile !== currentFile) {
+                currentFile = nextFile;
+                paintMenu();
+            }
             paint();
         } catch (err) {
             say(t('projects.err.read', { msg: (err && err.message) || err }));
@@ -615,6 +731,22 @@ export function mount(host, ctx) {
 
     function findRow(id) {
         return rows.find((r) => r.id === id) || null;
+    }
+
+    /**
+     * 删除后把焦点交给「原位置剩下的那张卡」。
+     *
+     * 为什么不按 id 找：卡片 id 来自 IndexedDB，拼 CSS 选择器要转义；下标的语义也更贴用户
+     * 预期 —— 删掉第 3 张，焦点落到现在的第 3 张（即原来的第 4 张）。列表空了就什么也不做
+     * （空态 CTA 自己可聚焦）。
+     */
+    function focusAfterDelete(index) {
+        if (!live) return;
+        const cards = list.querySelectorAll('.prj-card');
+        if (!cards.length) return;
+        const at = Math.min(Math.max(0, index), cards.length - 1);
+        const node = cards[at];
+        if (node && typeof node.focus === 'function') node.focus();
     }
 
     /** 导入图片：选中的图片依次插成 kind:'image' 对象（居中、每帧可见）。 */
@@ -721,6 +853,23 @@ export function mount(host, ctx) {
             else if (v.ok) say(t('projects.save.noPath'), 'error');
             return;
         }
+        if (act === 'exportLibrary') {
+            // 整库备份：外壳把每个项目打包成一个 JSON 落盘（恢复走「导入项目文件」）
+            const v = await run(() => api.exportLibrary());
+            if (!v.ok) return; // 失败/取消的原因 run 已经说过一遍，别叠话
+            const n = Number(v.out && v.out.count) || 0;
+            const file = String((v.out && v.out.file) || '');
+            // 没拿到路径时不许说「已导出」：那是「没做却说成功」
+            if (file) say(t('projects.exportLibrary.done', { n: n, file: file }));
+            else say(t('projects.exportLibrary.noPath'), 'error');
+            return;
+        }
+        if (act === 'unbindFile') {
+            // 「解除文件绑定…」：二次确认在外壳里做；用户取消回 {ok:false,canceled:true}，
+            // 由 run() 说「已取消」，面板不重复说话。
+            await run(() => api.unbindFile(), t('projects.unbind.done'));
+            return;
+        }
         if (act === 'sheet') {
             // 精灵图：主进程落盘 PNG + 每帧坐标 JSON
             const fn = (ctx && ctx.exportSpritesheet) || (api && api.exportSpritesheet);
@@ -761,6 +910,13 @@ export function mount(host, ctx) {
             paint();
             return;
         }
+        if (act === 'duplicate') {
+            // 库内复制：外壳给副本新 id/名字，返回 {ok,id,name}；文案要带**副本的名字**
+            // （用户输入过原名 + 序号之类），所以 okText 走返回值分支，不在 run() 里写死
+            const v = await run(() => api.duplicate(row.id));
+            if (v.ok) say(t('projects.duplicate.done', { name: (v.out && v.out.name) || row.name }));
+            return;
+        }
         if (act === 'export') {
             // 「存为文件」必须拿到路径才算成：外壳回成功却没给路径时不能弹「已存为文件」
             const v = await run(() => api.exportFile(row.id));
@@ -769,8 +925,17 @@ export function mount(host, ctx) {
             return;
         }
         if (act === 'delete') {
-            await run(() => api.remove(row.id), t('projects.remove.done', { name: row.name }));
+            // 焦点收口：删除会让列表整块重画（paint 里 replaceChildren），先把「聚焦的是不是
+            // 这张卡、它是第几张」记下来；删成功后把焦点交给同位置剩下的那张卡，
+            // 否则焦点会掉回 <body>，键盘/读屏用户得从面板头顶重新走一遍。
+            const wasFocused = !!(item && typeof item.contains === 'function' && item.contains(document.activeElement));
+            const index = item ? Array.prototype.indexOf.call(list.querySelectorAll('.prj-card'), item) : -1;
+            const v = await run(() => api.remove(row.id), t('projects.remove.done', { name: row.name }));
             if (currentId === row.id) currentId = '';
+            // 撤销条（8 秒，真实删除后出现）由外壳 project-io 的 holdUndoBar 负责，面板这里
+            // 只做两件事：列表靠 run() 的 finally 重读（库里另有项目时正常刷新）、
+            // 结果提示走 .prj-hint 的 aria-live=polite 播报。
+            if (v.ok && wasFocused) focusAfterDelete(index);
             return;
         }
         if (item) item.classList.add('is-on');

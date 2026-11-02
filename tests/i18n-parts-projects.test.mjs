@@ -36,8 +36,8 @@ test('projects 分片：两表键集合镜面，且每个键都真的并进了�
     const enKeys = Object.keys(enTable).sort();
     const zhKeys = Object.keys(zhTable).sort();
     assert.deepEqual(enKeys, zhKeys, 'en 与 zh-Hans 的键集合必须一一对应');
-    // 本片 = psd 解析器（60）+ 导出对话框（27）+ 项目库面板（67）
-    assert.ok(enKeys.length >= 154, '这一片至少 154 条，实际 ' + enKeys.length);
+    // 本片 = psd 解析器（61）+ 导出对话框（76）+ 项目库面板（83）= 220
+    assert.ok(enKeys.length >= 220, '这一片至少 220 条，实际 ' + enKeys.length);
 
     const mergedEn = keysOf('en');
     const mergedZh = keysOf('zh-Hans');
@@ -207,19 +207,25 @@ test('zh-Hans 表：文案与词条化之前的原文逐字一致', () => {
         'projects.card.badge': '当前',
         'projects.card.delete': '删除',
         'projects.card.delete.hint': '从项目库删除（8 秒内可撤销）',
+        'projects.card.duplicate': '复制',
+        'projects.card.duplicate.hint': '在项目库里复制一份（副本会拿到自己的名字与 id）',
         'projects.card.export': '另存为…',
         'projects.card.export.hint': '把这份项目另存为 .msp 文件，并把项目绑定到新文件（旧版 .json 也行）',
         'projects.card.rename': '重命名',
         'projects.card.rename.hint': '修改项目名称（双击卡片也可以）',
         'projects.card.time': '保存于 {when}',
         'projects.card.title': '{name}（保存于 {when}）· 点击卡片载入',
+        'projects.card.titleFile': '{name}（保存于 {when}）· {file} · 点击卡片载入',
         'projects.card.unsaved': '尚未保存',
         'projects.count.all': '共 {n} 个',
         'projects.count.matched': '匹配 {matched} / {n}',
         'projects.create.done': '已新建项目',
+        'projects.duplicate.done': '已复制为 {name}',
         'projects.empty': '还没有已保存的项目',
         'projects.err.action': '操作失败：{msg}',
         'projects.err.read': '读取项目库失败：{msg}',
+        'projects.exportLibrary.done': '已导出 {n} 个项目 → {file}',
+        'projects.exportLibrary.noPath': '导出接口说成功了，但没给文件路径 —— 备份可能没落地，请重试',
         'projects.head.aria': '项目库操作',
         'projects.import.done': '已导入 {ok} 张图片',
         'projects.import.doneSome': '已导入 {ok} 张图片，{fail} 张失败',
@@ -230,6 +236,8 @@ test('zh-Hans 表：文案与词条化之前的原文逐字一致', () => {
         'projects.importFile.done': '已导入项目',
         'projects.importFile.noPicker': '这个环境不支持选择文件',
         'projects.library.warning': '项目库存在浏览器 IndexedDB 里：清除站点数据或更换浏览器用户会丢失全部项目。重要项目请「另存为」.msp 文件。',
+        'projects.menu.exportLibrary': '导出整个项目库…',
+        'projects.menu.exportLibrary.hint': '把全部项目打包成一个 .json 备份文件（用「导入项目文件」恢复）',
         'projects.menu.image': '导入图片到当前文档',
         'projects.menu.image.hint': '把一张图片作为对象插入当前文档（PNG / JPG / WebP）',
         'projects.menu.import': '导入项目文件',
@@ -240,9 +248,13 @@ test('zh-Hans 表：文案与词条化之前的原文逐字一致', () => {
         'projects.menu.saveAs.hint': '把当前文档另存为新的 .msp 文件（会更新绑定的文件路径）',
         'projects.menu.sheet': '导出精灵图',
         'projects.menu.sheet.hint': '把整段动画排成一张精灵图（PNG + 坐标 JSON）',
+        'projects.menu.unbindFile': '解除文件绑定…',
+        'projects.menu.unbindFile.hint': '不再把保存写回已绑定的 .msp 文件（项目仍留在库里）',
         'projects.meta.cels': '{n} 纹理',
         'projects.meta.empty': '空项目',
+        'projects.meta.file': '文件 {file}',
         'projects.meta.layers': '{n} 对象',
+        'projects.meta.opened': '打开于 {when}',
         'projects.more': '更多操作',
         'projects.msg.refreshed': '已刷新',
         'projects.new': '新建项目',
@@ -268,6 +280,7 @@ test('zh-Hans 表：文案与词条化之前的原文逐字一致', () => {
         'projects.sheet.missing': '这个版本没有接导出精灵图（外壳没注入 exportSpritesheet）',
         'projects.thumb.empty': '无纹理',
         'projects.time.today': '今天 {hm}',
+        'projects.unbind.done': '已解除文件绑定（项目仍留在库里）',
         'projects.untitled': '未命名项目',
         'projects.verdict.canceled': '已取消',
         'projects.verdict.incomplete': '操作未完成',
@@ -307,22 +320,22 @@ test('落盘值不许改：导出选项的默认值与格式 id 没被词条化�
 });
 
 test('落盘值不许改：卡片动作与菜单项的 act id 不随语言变', () => {
-    assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'export', 'delete']);
-    assert.deepEqual(MENU_ITEMS.map((a) => a.act), ['import', 'saveAs', 'sheet', 'refresh', 'image']);
+    assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'duplicate', 'export', 'delete']);
+    assert.deepEqual(MENU_ITEMS.map((a) => a.act), ['import', 'saveAs', 'exportLibrary', 'sheet', 'refresh', 'image']);
     withLocale('zh-Hans', () => {
-        assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'export', 'delete']);
+        assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'duplicate', 'export', 'delete']);
         assert.equal(MENU_ITEMS.filter((a) => a.act === 'image')[0].sepBefore, true);
     });
 });
 
 test('面板文案是现取的：切语言后 label / 提示跟着变', () => {
     withLocale('zh-Hans', () => {
-        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['重命名', '另存为…', '删除']);
+        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['重命名', '复制', '另存为…', '删除']);
         assert.equal(noResultText(), '没有匹配的项目');
         assert.equal(countLabel(4, 1, 'x'), '匹配 1 / 4');
     });
     withLocale('en', () => {
-        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['Rename', 'Save as…', 'Delete']);
+        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['Rename', 'Duplicate', 'Save as…', 'Delete']);
         assert.equal(noResultText(), 'No matching projects');
         assert.equal(countLabel(4, 1, 'x'), 'Matched 1 / 4');
         assert.ok(!HAN.test(countLabel(4, 1, 'x')), '英文计数里还有中文');

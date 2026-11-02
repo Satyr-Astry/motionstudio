@@ -209,3 +209,46 @@ test('词条带占位符时缺变量不炸：原样留着，好让写错的地�
 test('t() 兜底：键不存在时返回调用点的原文，不是键名也不是空串', () => {
     assert.equal(t('shell.nope.nope', '原文兜底'), '原文兜底');
 });
+
+test('P1 项目库动作的词条：副本名字、解除绑定、整库备份/恢复两表都在', () => {
+    const keys = [
+        'shell.project.copyOf',
+        'shell.duplicate.done',
+        'shell.duplicate.missing',
+        'shell.duplicate.failed',
+        'shell.unbind.none',
+        'shell.unbind.title',
+        'shell.unbind.detail',
+        'shell.unbind.confirm',
+        'shell.unbind.done',
+        'shell.libraryExport.empty',
+        'shell.libraryExport.dialogLabel',
+        'shell.libraryExport.serializeFailed',
+        'shell.libraryExport.canceled',
+        'shell.libraryExport.canceledShort',
+        'shell.libraryExport.failed',
+        'shell.libraryExport.done',
+        'shell.importLibrary.done',
+        'shell.importLibrary.none',
+    ];
+    for (const key of keys) {
+        assert.ok(Object.hasOwn(enTable, key), key + ' 缺 en 词条');
+        assert.ok(Object.hasOwn(zhTable, key), key + ' 缺 zh 词条');
+    }
+
+    // 副本名字是「用户拼出来的项目名」+ 语言后缀：英文 copy / 中文 副本
+    assert.equal(t('shell.project.copyOf', { name: 'Hero' }), 'Hero copy');
+    setLocale('zh-Hans');
+    try {
+        assert.equal(t('shell.project.copyOf', { name: '主角' }), '主角 副本');
+        // 导入备份必须同时报成功与失败条数（部分损坏时用户要知道恢复了几个）
+        const done = t('shell.importLibrary.done', { n: 3, failed: 2 });
+        assert.match(done, /3/);
+        assert.match(done, /2/);
+        assert.match(done, /失败/);
+        // 「解除绑定」不能让人误读成「删文件」
+        assert.match(t('shell.unbind.detail', { file: 'C:/a.msp' }), /不会被删除/);
+    } finally {
+        setLocale(DEFAULT_LOCALE);
+    }
+});
