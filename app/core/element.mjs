@@ -4,7 +4,7 @@
 import { imageAt, objectById, normalizeBone, BONE_DEFAULTS, BONE_ANCHOR } from './doc-model.mjs';
 import { stateAt, matrixOf } from './transform.mjs';
 import { normalizeLattice, createLattice, latticeOffset, latticeInverse, latticeInverseRaw } from './lattice.mjs';
-import { alphaMaskOf } from './hit-mask.mjs';
+import { alphaMaskOf, maskAlphaAt } from './hit-mask.mjs';
 
 /** 八个缩放手柄，顺时针从左上开始 */
 export const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -468,7 +468,9 @@ export function hitTest(doc, time, x, y, opts) {
         // 否则 lx 超过掩膜宽度会读到下一行的像素。
         const mx = clampIdx(lx, 0, mask.w - 1);
         const my = clampIdx(ly, 0, mask.h - 1);
-        const alpha = mask.mask[my * mask.w + mx];
+        // 掩膜只存非透明像素的包围盒（hit-mask.mjs 的 C2）：必须走 maskAlphaAt，
+        // 不能按 my * mask.w + mx 下标直取 —— 那样会读到错位的像素。
+        const alpha = maskAlphaAt(mask, mx, my);
         if (alpha > threshold) return { id: el.id, local: { x: lx, y: ly }, alpha };
     }
     return null;

@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDoc, patchObject, setImageAt, objectById } from '../app/core/doc-model.mjs';
 import { hitTest } from '../app/core/element.mjs';
-import { alphaMaskOf, maskStats } from '../app/core/hit-mask.mjs';
+import { alphaMaskOf, maskAlphaAt, maskStats } from '../app/core/hit-mask.mjs';
 
 /** 可读 canvas 的轻量替身：getImageData 支持任意区域 */
 function fakeImage(w, h, alphaAt) {
@@ -38,12 +38,21 @@ function makeDoc(image) {
     return { doc, el: objectById(doc, id) };
 }
 
-test('alphaMaskOf：从可读 canvas 取到每像素 alpha 原值', () => {
+test('alphaMaskOf：从可读 canvas 取到每像素 alpha 原值（只存包围盒）', () => {
     const mask = alphaMaskOf(fakeImage(3, 2, (x, y) => x * 10 + y));
     assert.ok(mask, '应当读得出掩膜');
-    assert.equal(mask.w, 3);
+    assert.equal(mask.w, 3, 'w/h 仍是原图尺寸，调用方按它夹坐标');
     assert.equal(mask.h, 2);
+    // 只有 (0,0) 的 alpha 恰好为 0，其余都非零 → 包围盒正好是整图
+    assert.equal(mask.x0, 0);
+    assert.equal(mask.y0, 0);
+    assert.equal(mask.bw, 3);
+    assert.equal(mask.bh, 2);
     assert.deepEqual([...mask.mask], [0, 10, 20, 1, 11, 21]);
+    // 读像素必须走 maskAlphaAt：与整图逐点一致
+    assert.equal(maskAlphaAt(mask, 0, 0), 0, 'alpha 0 的像素仍是 0');
+    assert.equal(maskAlphaAt(mask, 1, 0), 10);
+    assert.equal(maskAlphaAt(mask, 2, 1), 21);
 });
 
 test('alphaMaskOf：裸像素源 { width, height, data } 直接取 alpha 字节', () => {
@@ -51,6 +60,49 @@ test('alphaMaskOf：裸像素源 { width, height, data } 直接取 alpha 字节'
     [0, 8, 9, 255].forEach((a, i) => { data[i * 4 + 3] = a; });
     const mask = alphaMaskOf({ width: 2, height: 2, data });
     assert.deepEqual([...mask.mask], [0, 8, 9, 255]);
+});
+
+test('C2 包围盒：只有中间一小块不透明时，掩膜只存那一块（内存按内容算，不按画布算）', () => {
+    // 40×30 的画布，只有 (10..13, 5..7) 这 4×3 块不透明
+    const W = 40;
+    const H = 30;
+    const data = new Uint8ClampedArray(W * H * 4);
+    for (let y = 5; y <= 7; y += 1) {
+        for (let x = 10; x <= 13; x += 1) data[(y * W + x) * 4 + 3] = 200;
+    }
+    const mask = alphaMaskOf({ width: W, height: H, data });
+    assert.equal(mask.w, W);
+    assert.equal(mask.h, H);
+    assert.equal(mask.x0, 10);
+    assert.equal(mask.y0, 5);
+    assert.equal(mask.bw, 4);
+    assert.equal(mask.bh, 3);
+    assert.equal(mask.mask.length, 12, '只存 4×3 而不是 40×30');
+    assert.ok(mask.mask.length < (W * H) / 50, '典型素材应比整图小一个数量级以上');
+    assert.equal(maskAlphaAt(mask, 10, 5), 200);
+    assert.equal(maskAlphaAt(mask, 13, 7), 200);
+    assert.equal(maskAlphaAt(mask, 9, 5), 0, '包围盒左外');
+    assert.equal(maskAlphaAt(mask, 14, 7), 0, '包围盒右外');
+    assert.equal(maskAlphaAt(mask, 10, 4), 0, '包围盒上外');
+    assert.equal(maskAlphaAt(mask, 10, 8), 0, '包围盒下外');
+});
+
+test('C2 包围盒：全透明图存成空掩膜（bw=bh=0），但**不是** null（别触发矩形命中降级）', () => {
+    const data = new Uint8ClampedArray(8 * 8 * 4);
+    const mask = alphaMaskOf({ width: 8, height: 8, data });
+    assert.ok(mask, '读得出来但处处透明，仍是有效掩膜');
+    assert.equal(mask.bw, 0);
+    assert.equal(mask.bh, 0);
+    assert.equal(mask.mask.length, 0);
+    assert.equal(maskAlphaAt(mask, 3, 3), 0);
+    assert.equal(maskAlphaAt(null, 3, 3), 0, '坏记录不抛');
+    assert.equal(maskAlphaAt({ bw: 0, bh: 0, mask: [] }, 0, 0), 0);
+});
+
+test('hitTest：全透明纹理点不中（不能因为掩膜存在就按矩形命中）', () => {
+    const data = new Uint8ClampedArray(10 * 8 * 4);
+    const { doc } = makeDoc({ width: 10, height: 8, data });
+    assert.equal(hitTest(doc, 0, 5.5, 4.5), null);
 });
 
 test('alphaMaskOf：同一图像对象只构建一次，之后走缓存', () => {
