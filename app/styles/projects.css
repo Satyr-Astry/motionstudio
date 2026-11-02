@@ -404,3 +404,113 @@
     font-size: 11px;
     line-height: 1.45;
 }
+
+/* ─────────────── §5 P2：排序下拉 / 标签筛选 / 收藏星标 / 标签 chips ─────────────── */
+
+/* 排序与标签筛选并进 `.prj-top`（同一个 toolbar，窄面板时随 flex-wrap 换行）。
+   两个控件都是「筛选/排序」的同一层级，所以共用一套外壳：短词 label + 原生 select。 */
+.ms-modal .prj-sort,
+.ms-modal .prj-tag-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    color: var(--ink-faint);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+/* 作者样式里的 display 会盖过 UA 的 [hidden]：整条隐藏必须显式写回来（同 .prj-menu）。 */
+.ms-modal .prj-tag-filter[hidden] { display: none; }
+
+.ms-modal .prj-sort-select,
+.ms-modal .prj-tag-select {
+    height: var(--h-btn);
+    max-width: 132px;
+    padding: 0 4px;
+    font-size: 11px;
+    background: var(--bg-2);
+    color: var(--ink);
+}
+
+.ms-modal .prj-tag-select { max-width: 104px; }
+
+/* 星标：放在名字行尾部（JS 里 margin-left:auto 把它顶到卡片右上角）。
+   未置顶是描边灰星，置顶后填实 + 强调色；`is-on` 是按钮态，`is-pinned` 是卡片态。 */
+.ms-modal .prj-pin {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    margin-left: auto;
+    padding: 0;
+    border: 0;
+    border-radius: var(--r-1);
+    background: transparent;
+    color: var(--ink-faint);
+    cursor: pointer;
+}
+
+.ms-modal .prj-pin .prj-ico { --icon-size: var(--icon-sm); }
+.ms-modal .prj-pin:hover { background: var(--sel-bg); color: var(--ink); }
+.ms-modal .prj-pin.is-on { color: var(--accent); }
+.ms-modal .prj-pin.is-on svg { fill: currentColor; }
+
+/* 置顶卡片：边框提一档（星标本身已经给出主信号）。`:not(.is-current)` 是为了不抢
+   「当前项目」的强调边框 —— 两种状态可以同时存在，强调色归当前项目。 */
+.ms-modal .prj-card.is-pinned:not(.is-current) { border-color: var(--ink-faint); }
+
+/* 名字行要能压缩：星标占了右侧固定宽度后，长名字仍然只许省略号、不许把卡片顶破。 */
+.ms-modal .prj-name { flex: 1 1 auto; min-width: 0; }
+
+/* 标签 chips：名字下方一行；最多 3 个 + `+N`，末尾常驻 `+`（没有标签的项目也要有入口）。 */
+.ms-modal .prj-tags {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
+    margin-top: 1px;
+}
+
+.ms-modal .prj-tag,
+.ms-modal .prj-tag-add {
+    display: inline-flex;
+    align-items: center;
+    height: 16px;
+    min-width: 0;
+    max-width: 92px;
+    padding: 0 6px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--r-pill);
+    background: var(--bg-2);
+    color: var(--ink-dim);
+    font: inherit;
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+
+.ms-modal .prj-tag:hover { color: var(--ink); border-color: var(--ink-faint); }
+
+.ms-modal .prj-tag-add {
+    padding: 0 5px;
+    color: var(--ink-faint);
+    border-style: dashed;
+}
+
+.ms-modal .prj-tag-add:hover { color: var(--ink); border-color: var(--accent); }
+
+.ms-modal .prj-tag-more {
+    flex: 0 0 auto;
+    padding: 0 2px;
+    color: var(--ink-faint);
+    font-size: 11px;
+    white-space: nowrap;
+}

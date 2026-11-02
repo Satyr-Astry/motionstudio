@@ -1041,10 +1041,41 @@ async function writeProjectFile(id, opts) {
     // 给别的卡片写文件时动 project.file 会出大事 —— 当前项目会被静默绑到别人的文件上，
     // 下一次 Ctrl+S 的回写就把当前内容覆盖进去（真丢数据的路径，本批必须堵住）。
     const sameProject = id ? String(id) === String(project.id || '') : true;
-    if (sameProject) project.file = out.file;
     // 库记录里的「绑定文件」跟着改：id 是卡片那条；没给 id 时是当前文档另存为。
     // 只改 file 字段，库里的内容仍是草稿内容 —— 下一次 Ctrl+S 才写内容。
     const targetId = id || (sameProject ? project.id || '' : '');
+    /**
+     * 同文件绑定冲突（alpha.46）：写之前这个路径可能已经绑在**另一条**库记录上。
+     * 文件此刻已经写出去了，所以这里问的不是「要不要写」，而是「这个文件归谁」：
+     * - 转移：把别人的 `file` 清空，本记录正常绑定（当前项目自己绑的也一并清内存）；
+     * - 取消：**不回滚写盘**（文件已经写出来了，删掉它才是真的丢用户数据），
+     *   保持原绑定不变，但要明确告诉用户「文件已写出、绑定没转」。
+     */
+    const owners = await fileOwners(out.file, targetId);
+    if (owners.length) {
+        const names = owners.map((row) => row.name || t('shell.project.untitled')).join(', ');
+        const choice = await askChoice(
+            t('shell.bindConflict.title'),
+            [
+                { label: t('shell.bindConflict.move'), value: 'move' },
+                { label: t('shell.ask.cancel'), value: 'cancel' },
+            ],
+            t('shell.bindConflict.detail', { file: out.file, name: names })
+        );
+        if (choice !== 'move') {
+            // 写盘已经发生、且不回滚：保住文件，只保住原绑定。错误档是为了不被
+            // 下一条普通提示（画一笔、取个色）顶掉 —— 用户需要看见这次归属没变。
+            flash(t('shell.bindConflict.keepOld', { file: out.file, name: names }), 'error');
+            updateChrome();
+            notifyProjects();
+            return okResult({ file: out.file });
+        }
+        const moved = await takeOverFileBinding(targetId, out.file);
+        if (moved.length) flash(t('shell.bindConflict.moved', { file: out.file, name: moved.join(', ') }));
+        // 冲突记录一条都没清成（读库失败等）：至少别让「已保存」这件事消失
+        else if (!o.quiet) flash(t('shell.saveFile.done', { path: out.file }));
+    }
+    if (sameProject) project.file = out.file;
     if (targetId) {
         const rec = await store.getProject(targetId);
         if (rec) {
@@ -1052,7 +1083,7 @@ async function writeProjectFile(id, opts) {
             await store.putProject(rec);
         }
     }
-    if (!o.quiet) flash(t('shell.saveFile.done', { path: out.file }));
+    if (!o.quiet && !owners.length) flash(t('shell.saveFile.done', { path: out.file }));
     updateChrome();
     notifyProjects();
     return okResult({ file: out.file });
@@ -1148,7 +1179,14 @@ async function importProjectFile() {
     const importedId = (saved && saved.id) || rec.id;
     applyDoc(doc, { id: importedId, name: rec.name, file: rec.file });
     openedAtMs = (await touchOpenedAt(importedId)) || Date.now();
-    flash(t('shell.importFile.done', { name: rec.name }));
+    // 同一个 .msp 可能已经被另一条记录绑着：导入后这条记录就是「最后一次打开它」的，
+    // 绑定静默转过来（不弹框 —— 用户点的是「导入」，不是在选「绑定归谁」）。
+    const taken = await takeOverFileBinding(importedId, rec.file || '');
+    if (taken.length) {
+        flash(t('shell.bind.takenOnImport', { name: rec.name, file: rec.file || '', other: taken.join(', ') }));
+    } else {
+        flash(t('shell.importFile.done', { name: rec.name }));
+    }
     notifyProjects();
     return true;
 }
@@ -1176,7 +1214,14 @@ async function loadProject(entry) {
             savedAtMs = Number(source.savedAt) || 0;
             // 「最近打开」写回库：列表按它排序时，打开过的项目就该排在前面
             openedAtMs = (await touchOpenedAt(source.id)) || Number(source.openedAt) || 0;
-            flash(t('shell.load.done', { name: source.name || t('shell.project.fallbackName') }));
+            // 同一个 .msp 被两条记录绑着时，最后打开它的这条拿走绑定（静默、不弹框）：
+            // 用户刚亲眼打开的是这份内容，让另一条继续持有绑定，下次在那边 Ctrl+S 就会覆盖它
+            const taken = await takeOverFileBinding(source.id, source.file);
+            if (taken.length) {
+                flash(t('shell.bind.takenOnLoad', { name: source.name, file: source.file, other: taken.join(', ') }));
+            } else {
+                flash(t('shell.load.done', { name: source.name || t('shell.project.fallbackName') }));
+            }
         }
         return ok;
     } catch (err) {
@@ -1206,11 +1251,36 @@ async function newProject(opts) {
     return ok;
 }
 
-/** 内联项目名输入框（不用 window.prompt：Electron 里它默认不可用）。 */
-function askProjectName(def) {
-    if (typeof document === 'undefined' || !document.body) return Promise.resolve('');
+/**
+ * 内联单行输入框（不用 window.prompt：Electron 里它默认不可用）。
+ *
+ * `askProjectName` 与 `editTags` 共用这一套 `.ms-ask` 外观，只有标签不同。
+ * 返回值刻意区分「确认」与「取消」：
+ * - Esc / 取消按钮 / 没有 DOM → `null`（调用方据此回 `canceled:true`）；
+ * - 确认 → `trim` 后的字符串（**可能是空串**，表示把内容清空，不是取消）。
+ * 旧版 askProjectName 两种都回 `''`，所以「清空标签」会被当成取消 —— 那正是这次
+ * 抽成通用函数的原因。
+ *
+ * `askDepth` 与 askChoice 共用：项目库浮层的 Esc 监听挂在 window 捕获期，
+ * 不挡一下的话，在输入框里按 Esc 会把整个项目库一起关掉。
+ *
+ * @param {string} def 预填值
+ * @param {string} label 输入框前面的说明（已取好词条）
+ * @returns {Promise<string|null>}
+ */
+function askInlineText(def, label) {
+    if (
+        typeof document === 'undefined' ||
+        !document.body ||
+        typeof window === 'undefined' ||
+        !window ||
+        typeof window.addEventListener !== 'function'
+    ) {
+        return Promise.resolve(null);
+    }
     return new Promise((resolve) => {
         const host = shell.host || document.body;
+        askDepth += 1;
         const box = el('div', 'ms-ask');
         box.style.position = 'absolute';
         box.style.left = '50%';
@@ -1227,7 +1297,7 @@ function askProjectName(def) {
         box.style.color = '#e6e8ee';
         box.style.font = '12px/1.4 system-ui, sans-serif';
 
-        box.appendChild(el('span', 'ms-ask-label', t('shell.ask.name')));
+        box.appendChild(el('span', 'ms-ask-label', String(label || '')));
         const input = el('input', 'ms-ask-input');
         input.type = 'text';
         input.value = String(def || '');
@@ -1244,6 +1314,7 @@ function askProjectName(def) {
         function finish(value) {
             if (done) return;
             done = true;
+            askDepth = Math.max(0, askDepth - 1);
             window.removeEventListener('keydown', onKey, true);
             if (box.parentNode) box.parentNode.removeChild(box);
             resolve(value);
@@ -1252,7 +1323,7 @@ function askProjectName(def) {
             if (ev.key === 'Escape') {
                 ev.preventDefault();
                 ev.stopPropagation();
-                finish('');
+                finish(null);
             } else if (ev.key === 'Enter') {
                 ev.preventDefault();
                 ev.stopPropagation();
@@ -1260,7 +1331,7 @@ function askProjectName(def) {
             }
         }
         ok.addEventListener('click', () => finish(String(input.value || '').trim()));
-        cancel.addEventListener('click', () => finish(''));
+        cancel.addEventListener('click', () => finish(null));
         window.addEventListener('keydown', onKey, true);
         host.appendChild(box);
         try {
@@ -1270,6 +1341,11 @@ function askProjectName(def) {
             /* 拿不到焦点也不影响点击 */
         }
     });
+}
+
+/** 内联项目名输入框（取消与空输入都回 `''`，调用方按「没给名字」处理）。 */
+function askProjectName(def) {
+    return askInlineText(def, t('shell.ask.name')).then((v) => String(v == null ? '' : v));
 }
 
 /**
@@ -1623,6 +1699,147 @@ async function exportLibrary() {
     }
     flash(t('shell.libraryExport.done', { n: records.length, path: saved.file }));
     return okResult({ file: saved.file, count: records.length });
+}
+
+/* ────────── 项目库 P2 动作：置顶 / 标签 / 同文件绑定冲突（alpha.46） ────────── */
+
+/**
+ * 标签输入文本 → 标签数组（具名导出、纯函数，Node 里可直测）。
+ *
+ * 分隔符：逗号 `,`、中文逗号 U+FF0C、顿号 U+3001、分号 `;` / 中文分号 U+FF1B。
+ * 用码点写而不是直接贴全角标点：本仓的 i18n 检查器把中文标点当「待迁文案」，
+ * 正则字面量里的全角字符虽不该算，但能少一类需要解释的例外就少一类。
+ * 清洗规则（去空 / 去重 / 8×24）**不在这里重写**，交给 `store.normalizeTags`：
+ * 面板侧、库侧、输入侧只能有一份口径，否则「输入进去的标签」和「存下来的标签」会不一样。
+ *
+ * @param {unknown} text
+ * @returns {string[]}
+ */
+export function parseTags(text) {
+    const raw = String(text == null ? '' : text);
+    if (!raw) return [];
+    return store.normalizeTags(raw.split(/[\uFF0C,\u3001\uFF1B;]+/));
+}
+
+/**
+ * 找「已经绑定到这个文件」的其它库记录（不含本次目标）。
+ *
+ * 用 `listProjects` 而不是 `getProject` 逐条读：列表视图里有 `file`，一条查询就够；
+ * 库很小（几十条），不值得为它开一个索引。读库失败按「没有冲突」处理 ——
+ * 冲突提示是锦上添花，不能因为它把一次已经成功的写盘判成失败。
+ *
+ * @param {string} file 绝对路径
+ * @param {string} [exceptId] 本次要绑定的记录 id（当前文档还没入库时可空）
+ * @returns {Promise<object[]>} 其它占用者的轻量记录
+ */
+async function fileOwners(file, exceptId) {
+    const path = String(file || '');
+    if (!path) return [];
+    let rows = [];
+    try {
+        rows = await store.listProjects();
+    } catch (err) {
+        rows = [];
+    }
+    return (Array.isArray(rows) ? rows : []).filter(
+        (row) => row && String(row.id) !== String(exceptId || '') && row.file === path
+    );
+}
+
+/**
+ * 把一条记录的 `file` 清空（只清绑定，不碰磁盘文件）。
+ *
+ * 若清空的正是「当前打开的项目」，内存里的 `project.file` 也要一起清：
+ * 否则顶栏还指着那个文件，下一次 Ctrl+S 又会把当前内容写回一个已经被别的项目接管的路径。
+ *
+ * @param {string} id
+ * @returns {Promise<boolean>} 真的清掉了一条返回 true
+ */
+async function clearFileBinding(id) {
+    try {
+        const rec = await store.getProject(id);
+        if (!rec || !rec.file) return false;
+        rec.file = '';
+        await store.putProject(rec);
+        if (project.id === id) project.file = '';
+        return true;
+    } catch (err) {
+        // 只影响「谁拥有这个文件」的显示，不影响内容；日志留英文，不新增待迁文案
+        console.error('[shell] failed to clear a file binding:', err);
+        return false;
+    }
+}
+
+/**
+ * 把文件的绑定从别的记录转给 `id`（打开 / 导入路径用；静默、不弹框）。
+ *
+ * 同一个 `.msp` 被两条记录绑着时，「最后打开这条文件的那次」拥有它 —— 用户刚亲眼
+ * 打开的就是这一份内容，让另一条记录继续持有绑定，下次在那边按 Ctrl+S 就会覆盖它。
+ * @returns {Promise<string[]>} 被清掉绑定的项目名（没有冲突时空数组）
+ */
+async function takeOverFileBinding(id, file) {
+    const owners = await fileOwners(file, id);
+    const names = [];
+    for (const row of owners) {
+        // eslint-disable-next-line no-await-in-loop
+        const cleared = await clearFileBinding(row.id);
+        if (cleared) names.push(row.name || t('shell.project.untitled'));
+    }
+    return names;
+}
+
+/**
+ * 收藏 / 取消收藏（置顶）。卡片右上角星标调用。
+ *
+ * 只改 `pinned` 一个字段（走 `store.updateProjectMeta` 白名单），内容与保存时间都不动：
+ * 置顶是「我看得见」，不是「我改过」。
+ * @param {string} id
+ * @param {boolean} pinned
+ * @returns {Promise<{ok:true,pinned:boolean}|{ok:false,error:string}>}
+ */
+async function setPinned(id, pinned) {
+    const want = pinned === true;
+    let saved = null;
+    try {
+        saved = await store.updateProjectMeta(id, { pinned: want });
+    } catch (err) {
+        saved = null;
+    }
+    if (!saved) return fail(t('shell.pin.failed'));
+    flash(t(saved.pinned ? 'shell.pin.on' : 'shell.pin.off', { name: saved.name || t('shell.project.untitled') }));
+    notifyProjects();
+    return okResult({ pinned: saved.pinned === true });
+}
+
+/**
+ * 编辑标签：弹内联输入框（逗号分隔、预填当前标签），确认后清洗并写库。
+ *
+ * 取消与「清空标签」必须能区分：取消返回 `canceled:true`，确认但输入为空则把标签清成 []。
+ * @param {string} id
+ * @returns {Promise<{ok:true,tags:string[]}|{ok:false,canceled?:true,error?:string}>}
+ */
+async function editTags(id) {
+    let rec = null;
+    try {
+        rec = id ? await store.getProject(id) : null;
+    } catch (err) {
+        rec = null;
+    }
+    if (!rec) return fail(t('shell.tags.missing'));
+    const current = store.normalizeTags(rec.tags);
+    const text = await askInlineText(current.join(', '), t('shell.tags.ask'));
+    if (text == null) return { ok: false, canceled: true };
+    const tags = parseTags(text);
+    let saved = null;
+    try {
+        saved = await store.updateProjectMeta(id, { tags: tags });
+    } catch (err) {
+        saved = null;
+    }
+    if (!saved) return fail(t('shell.tags.failed'));
+    flash(t('shell.tags.done', { name: rec.name || t('shell.project.untitled'), n: tags.length }));
+    notifyProjects();
+    return okResult({ tags: saved.tags });
 }
 
 /* ─────────────────── 未命名草稿 & 关窗口保护 ─────────────────── */
@@ -2289,6 +2506,11 @@ const projectApi = {
     unbindFile: () => unbindFile(),
     // 整库备份：库 → 一份 JSON；导入端 importFile 同时认这个备份包
     exportLibrary: () => exportLibrary(),
+    // P2：收藏置顶 / 标签 / 排序 / 库统计（面板同步调 sortRows / totals，不 await）
+    setPinned: (id, pinned) => setPinned(id, pinned),
+    editTags: (id) => editTags(id),
+    sortRows: (rows, mode) => store.sortProjects(rows, mode),
+    totals: (rows) => store.libraryTotals(rows),
     // 项目文件（.msp/.json）→ 项目库。projectApi.importFile 保持这个语义：
     // projects.mjs 的「导入文件」按钮按项目导入写的提示文案（第 118/385 行）。
     importFile: () => importProjectFile(),

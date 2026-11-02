@@ -252,3 +252,51 @@ test('P1 项目库动作的词条：副本名字、解除绑定、整库备份/�
         setLocale(DEFAULT_LOCALE);
     }
 });
+
+test('P2 项目库动作的词条：置顶 / 标签 / 同文件绑定冲突两表都在', () => {
+    const keys = [
+        'shell.pin.failed',
+        'shell.pin.on',
+        'shell.pin.off',
+        'shell.tags.missing',
+        'shell.tags.failed',
+        'shell.tags.ask',
+        'shell.tags.done',
+        'shell.bindConflict.title',
+        'shell.bindConflict.detail',
+        'shell.bindConflict.move',
+        'shell.bindConflict.keepOld',
+        'shell.bindConflict.moved',
+        'shell.bind.takenOnLoad',
+        'shell.bind.takenOnImport',
+    ];
+    for (const key of keys) {
+        assert.ok(Object.hasOwn(enTable, key), key + ' 缺 en 词条');
+        assert.ok(Object.hasOwn(zhTable, key), key + ' 缺 zh 词条');
+    }
+
+    // 英文侧：置顶/取消置顶可分辨、标签数报出来、冲突两路各说各的
+    assert.match(t('shell.pin.on', { name: 'Hero' }), /Hero/);
+    assert.notEqual(t('shell.pin.on', { name: 'Hero' }), t('shell.pin.off', { name: 'Hero' }));
+    assert.match(t('shell.tags.done', { name: 'Hero', n: 3 }), /3/);
+    assert.match(t('shell.bindConflict.move'), /move/i);
+    assert.match(t('shell.bindConflict.keepOld', { file: 'C:/a.msp', name: 'Hero' }), /not moved/i);
+    assert.match(t('shell.bind.takenOnLoad', { name: 'A', file: 'C:/a.msp', other: 'B' }), /A[\s\S]*B/);
+
+    setLocale('zh-Hans');
+    try {
+        // 取消分支必须明确「文件已写出、绑定未转移」，不能让人以为文件没保存
+        const keep = t('shell.bindConflict.keepOld', { file: 'C:/a.msp', name: '甲' });
+        assert.match(keep, /写出/);
+        assert.match(keep, /未转移/);
+        assert.match(keep, /甲/);
+        // 转移选项说的是「转移给当前项目」，不是「覆盖/删除」
+        assert.match(t('shell.bindConflict.move'), /转移/);
+        assert.match(t('shell.bindConflict.detail', { file: 'C:/a.msp', name: '甲' }), /不会被删除/);
+        assert.match(t('shell.bind.takenOnLoad', { name: '甲', file: 'C:/a.msp', other: '乙' }), /甲[\s\S]*乙/);
+        assert.match(t('shell.bind.takenOnImport', { name: '甲', file: 'C:/a.msp', other: '乙' }), /导入/);
+        assert.match(t('shell.tags.done', { name: '甲', n: 2 }), /2/);
+    } finally {
+        setLocale(DEFAULT_LOCALE);
+    }
+});

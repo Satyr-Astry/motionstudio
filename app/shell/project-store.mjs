@@ -1060,6 +1060,42 @@ function newId() {
 }
 
 /**
+ * 标签的边界（alpha.46 P2）。数字写在这里而不是各处 magic number：
+ * 面板侧同一批也要按 8×24 截断，两边口径必须一样，否则「面板里能存、库里被丢掉」。
+ */
+export const MAX_TAGS = 8;
+export const MAX_TAG_LEN = 24;
+
+/**
+ * 标签清洗（纯函数）：只留字符串 → trim → 去空 → 每个截到 24 个字符 → 去重 → 最多 8 个。
+ *
+ * 为什么超长是**截断**而不是丢弃：用户从别处粘一串 30 字的标签，截到 24 至少保住他的本意，
+ * 整条丢掉则等于「输入了但没保存」。去重放在截断之后 —— 两条长标签截完可能同名。
+ * 用 `Array.from` 数「字符」而不是 `slice` 数字节：emoji 被劈成半个代理对会变成乱码。
+ * 非字符串（旧档 / 手改文件里的 1、null、对象）一律丢弃，库记录里只存干净字符串。
+ *
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+export function normalizeTags(raw) {
+    if (!Array.isArray(raw)) return [];
+    const out = [];
+    const seen = new Set();
+    for (const item of raw) {
+        if (typeof item !== 'string') continue;
+        const trimmed = item.trim();
+        if (!trimmed) continue;
+        const chars = Array.from(trimmed);
+        const tag = (chars.length > MAX_TAG_LEN ? chars.slice(0, MAX_TAG_LEN).join('') : trimmed).trim();
+        if (!tag || seen.has(tag)) continue;
+        seen.add(tag);
+        out.push(tag);
+        if (out.length >= MAX_TAGS) break;
+    }
+    return out;
+}
+
+/**
  * 组装一条库记录：轻量元信息（列表直接读）+ 完整项目（点开才用）。
  * 注意 `rec.layers` / `rec.frames` 是**对象数 / 纹理时间点数**的展示口径，projects.mjs
  * 直接读它，键名不能改；时间模型里没有帧对象了，`frames` 取「所有对象出现过的时间点」。
@@ -1067,7 +1103,12 @@ function newId() {
  * `openedAt` 是「最近一次打开这条记录」的时刻，与 `savedAt`（最近一次保存）是两件事：
  * 保存不该把项目顶到「最近打开」列表最前面，打开也不该让存档看起来更新了。
  * 不给 `openedAt` 时退回 `savedAt`（老调用方 / 第一次入库都是这个语义）。
- * @param {{id?:string,name?:string,doc:object,thumb?:string,file?:string,openedAt?:number}} spec
+ *
+ * `pinned`（收藏置顶）与 `tags`（标签）是 alpha.46 的 P2 元信息：只影响列表怎么排、怎么筛，
+ * 与项目内容无关，所以也不用 `plain()` 深拷贝 —— `normalizeTags` 每次都造新数组。
+ * `pinned` 只认布尔 true：旧档 / 手改文件里的 `1`、`'true'` 不算置顶，
+ * 否则一条脏记录就会永远占住列表最前面，用户没有任何地方能看出来为什么。
+ * @param {{id?:string,name?:string,doc:object,thumb?:string,file?:string,openedAt?:number,pinned?:boolean,tags?:string[]}} spec
  */
 export function makeRecord(spec) {
     const s = spec || {};
@@ -1088,6 +1129,8 @@ export function makeRecord(spec) {
         name: name,
         savedAt: savedAt,
         openedAt: openedAt,
+        pinned: s.pinned === true,
+        tags: normalizeTags(s.tags),
         width: docJson ? docJson.width : FALLBACK.width,
         height: docJson ? docJson.height : FALLBACK.height,
         frames: times.size,
@@ -1115,6 +1158,10 @@ export function stripRecord(rec) {
         // 原样透传：老记录（alpha.44 及以前）没有 openedAt 就是 0，
         // 面板据此不显示「最近打开」—— 拿 savedAt 顶替等于编一个没发生过的打开动作
         openedAt: rec.openedAt || 0,
+        // 老记录（alpha.45 及以前）没有这两个字段：缺省 false / []，面板据此显示「未置顶、无标签」。
+        // 顺手再清洗一遍 tags：库里被手改 / 旧版写坏的标签不该把面板搞崩。
+        pinned: rec.pinned === true,
+        tags: normalizeTags(rec.tags),
         width: rec.width,
         height: rec.height,
         frames: rec.frames,
@@ -1303,6 +1350,11 @@ export async function renameProject(id, name) {
  * （与「跨卡片另存为改绑定」是同一类坑，alpha.44 已堵过一次）。
  * `thumb` / `project` 原样复用；`savedAt` / `openedAt` 刷新成现在。
  *
+ * P2 的两个元信息**分开处理**（alpha.46）：
+ * - `pinned` 不继承（固定 false）：收藏是「我要盯住这一条」，复制出来一条同名的也置顶
+ *   会把原项目挤下去，用户却找不到是谁把列表弄乱了；
+ * - `tags` 跟着抄：标签是分类信息，从「角色」分叉出来的副本通常还是角色，
+ *   让用户再打一遍标签纯属浪费。
  * @param {string} id 源记录 id
  * @param {{name?:string}} [opts] 副本名字（「副本」这类字眼由调用方按语言拼好）
  * @returns {Promise<object|null>} 新记录的轻量视图；源记录不存在时 null
@@ -1321,6 +1373,9 @@ export async function duplicateProject(id, opts) {
         name: name,
         savedAt: now,
         openedAt: now,
+        // 见上：置顶不跟抄，标签跟抄
+        pinned: false,
+        tags: normalizeTags(src.tags),
         width: src.width,
         height: src.height,
         frames: src.frames,
@@ -1334,6 +1389,104 @@ export async function duplicateProject(id, opts) {
     };
     const saved = await putProject(rec);
     return saved || null;
+}
+
+/**
+ * 只改「库元信息」的白名单字段（alpha.46 P2：`pinned` / `tags`）。
+ *
+ * 为什么单独开一个函数而不是复用 `putProject`：卡片上的置顶 / 标签是**旁路动作**，
+ * 调用方手里只有 `id`（列表给的是轻量视图），没有完整记录。让面板自己读整条记录再写回，
+ * 等于把「读-改-写」的竞态和「别把 name/file/project 冲掉」的责任丢给每个 UI 调用点。
+ * 白名单是硬约束：`{name}`、`{file}`、`{project}` 一律忽略 —— 改名有 `renameProject`、
+ * 绑定归属走 `writeProjectFile`，各有各的校验，不能被一条 patch 绕过。
+ *
+ * 没有任何白名单字段时只读不写（返回当前 stripRecord）：空 patch 不该产生一次写库。
+ * @param {string} id
+ * @param {{pinned?:boolean,tags?:string[]}} patch
+ * @returns {Promise<object|null>} 更新后的轻量视图；记录不存在返回 null
+ */
+export async function updateProjectMeta(id, patch) {
+    if (!id) return null;
+    const rec = await getProject(id);
+    if (!rec) return null;
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const has = (key) => Object.prototype.hasOwnProperty.call(p, key);
+    if (!has('pinned') && !has('tags')) return stripRecord(rec);
+    const next = Object.assign({}, rec);
+    if (has('pinned')) next.pinned = p.pinned === true;
+    if (has('tags')) next.tags = normalizeTags(p.tags);
+    const saved = await putProject(next);
+    return saved || stripRecord(next);
+}
+
+/** 项目库排序模式（面板侧下拉框的四个选项；顺序即界面顺序）。 */
+export const SORT_MODES = Object.freeze(['saved', 'opened', 'name', 'size']);
+
+/** 时间戳 / 体积这类数值字段的兜底：坏数据按 0（不让 NaN 把整个排序搅乱）。 */
+function numOf(v) {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** 四种模式的组内比较器（返回值 <0 表示 a 在前）。pinned 分组由 sortProjects 负责。 */
+const SORT_COMPARE = {
+    // 最近保存 / 最近打开：时间倒序（新的在前）
+    saved: (a, b) => numOf(b && b.savedAt) - numOf(a && a.savedAt),
+    opened: (a, b) => numOf(b && b.openedAt) - numOf(a && a.openedAt),
+    // 名称：localeCompare（跟随系统语言，中文按拼音、英文按字母）
+    name: (a, b) => String((a && a.name) == null ? '' : a.name).localeCompare(String((b && b.name) == null ? '' : b.name)),
+    // 体积：字节倒序（大的在前）
+    size: (a, b) => numOf(b && b.bytes) - numOf(a && a.bytes),
+};
+
+/**
+ * 项目库排序（纯函数，alpha.46 P2）：**pinned 永远排最前**，组内按 mode 排。
+ *
+ * - mode 只认 `SORT_MODES` 里的四个值，其它一律退回 `'saved'`（localStorage 里的旧值 /
+ *   手改配置不该让列表变成随机顺序）；
+ * - 同值保持原顺序：不依赖引擎 sort 的稳定性（ES2019 起才写入规范，而这里有 Electron /
+ *   浏览器 / Node 三个运行环境），用下标做最后一道比较；
+ * - **不修改入参**：先 `slice()` 再排，面板可以在自己手里的数组上反复按不同模式排。
+ *
+ * @param {Array<object>} rows 轻量记录（`listProjects` 的产出）
+ * @param {'saved'|'opened'|'name'|'size'} mode
+ * @returns {Array<object>} 排好的新数组（元素仍是原记录引用）
+ */
+export function sortProjects(rows, mode) {
+    const list = Array.isArray(rows) ? rows.slice() : [];
+    const m = SORT_MODES.includes(mode) ? mode : 'saved';
+    const compare = SORT_COMPARE[m];
+    return list
+        .map((row, index) => ({ row: row, index: index }))
+        .sort((a, b) => {
+            // 置顶是一级键：与 mode 无关，收藏的项目永远先出现
+            const pa = a.row && a.row.pinned === true ? 0 : 1;
+            const pb = b.row && b.row.pinned === true ? 0 : 1;
+            if (pa !== pb) return pa - pb;
+            const d = compare(a.row, b.row);
+            return d !== 0 ? d : a.index - b.index;
+        })
+        .map((item) => item.row);
+}
+
+/**
+ * 库统计（纯函数）：项目数与占用字节总和。面板的「N 个项目 · 共 X」直接读这个。
+ *
+ * 坏数据（null / 非对象）不计入 count；对象但 bytes 不是正数的按 0 累加 ——
+ * 统计条是给用户看「库有多大」的，一条脏记录不该让整行数字变成 NaN。
+ * @param {Array<object>} rows 轻量记录
+ * @returns {{count:number,bytes:number}}
+ */
+export function libraryTotals(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    let count = 0;
+    let bytes = 0;
+    for (const row of list) {
+        if (!row || typeof row !== 'object' || Array.isArray(row)) continue;
+        count += 1;
+        bytes += numOf(row.bytes);
+    }
+    return { count: count, bytes: bytes };
 }
 
 export async function deleteProject(id) {

@@ -56,6 +56,8 @@ export const icons = Object.freeze({
     trash: '<path d="M4.4 6.6h15.2"/><path d="M9.6 6.6V4.8a1 1 0 0 1 1-1h2.8a1 1 0 0 1 1 1v1.8"/><path d="M6.8 6.6 7.7 19.4a1.4 1.4 0 0 0 1.4 1.3h5.8a1.4 1.4 0 0 0 1.4-1.3l.9-12.8"/><path d="M10.4 10.4v6.2M13.6 10.4v6.2"/>',
     timer: '<circle cx="12" cy="13.4" r="7.2"/><path d="M12 13.4V9.6"/><path d="M9.6 3h4.8"/><path d="M12 3v3.2"/>',
     x: '<path d="M6.4 6.4 17.6 17.6M17.6 6.4 6.4 17.6"/>',
+    // 收藏/置顶：描边画，选中态由 CSS 把 fill 改成 currentColor（见 styles/projects.css）
+    star: '<path d="M12 3.4 14.7 8.9l6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.8l6.1-.9z"/>',
 
     // ── 变换 / 关键帧 ──
     diamond: '<path d="M12 3.2 20.8 12 12 20.8 3.2 12z"/>',

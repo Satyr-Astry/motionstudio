@@ -379,6 +379,9 @@ test('saveFlash：三种结局的文案与档位必须可分辨（纯函数）',
 
 test('另存为给别的项目写文件时，不把当前项目绑到那个文件上（防 Ctrl+S 覆盖错文件）', async () => {
     const { io, ds, cel, store } = await loadProjectIo();
+    // 这条用例断言的是「无冲突时的正常路径」：前面用例往内存库里写过带 file 的记录，
+    // 不清干净会撞上 alpha.46 的「同文件绑定冲突」分支（那属于下面 ⑧ 组用例）。
+    store.__resetMemory();
     freshDoc(cel, ds);
     ds.project.name = '当前项目';
     ds.project.file = 'C:/work/current.msp';
@@ -585,4 +588,326 @@ test('源码守卫：projectApi 暴露三个新动作，openedAt 在打开/导�
     assert.ok(calls.length >= 3, '打开 / 导入 / 恢复三条路都要写回，实际 ' + calls.length);
     assert.match(io, /openedAt: openedAtMs/, 'current() 要把 openedAt 给面板（卡片 meta 用）');
     assert.match(io, /openedAt: openedAtMs > 0 \? openedAtMs : undefined/, '保存时沿用打开时刻，不刷新它');
+});
+
+/* ─────── ⑧ P2 项目库：置顶 / 标签 / 排序统计 / 同文件绑定冲突 ─────── */
+
+test('parseTags：逗号 / 中文逗号 / 顿号 / 分号都是分隔符，清洗规则与 store 同一份', async () => {
+    const { io } = await loadProjectIo();
+    assert.deepEqual(io.parseTags('a,b，c、d;e；f'), ['a', 'b', 'c', 'd', 'e', 'f']);
+    // 空白、空段、重复都在清洗里消化；中文标点混排也认
+    assert.deepEqual(io.parseTags('  a ,, b ，,、 c ；; a '), ['a', 'b', 'c']);
+    assert.deepEqual(io.parseTags('  ,，、;;  '), [], '全是分隔符 = 清空标签');
+    assert.deepEqual(io.parseTags(''), []);
+    assert.deepEqual(io.parseTags(null), []);
+    assert.deepEqual(io.parseTags(undefined), []);
+    // 上限与 store 一致：9 条只留 8、每条截到 24
+    assert.equal(io.parseTags('t1,t2,t3,t4,t5,t6,t7,t8,t9').length, 8);
+    assert.deepEqual(io.parseTags('x'.repeat(30)), ['x'.repeat(24)], '超长标签截到 24');
+});
+
+test('projectApi.sortRows / totals：面板同步调用，直接落到 store 纯函数', async () => {
+    const { io } = await loadProjectIo();
+    const rows = [
+        { id: 'a', name: 'B', savedAt: 100, openedAt: 50, bytes: 10, pinned: false },
+        { id: 'b', name: 'A', savedAt: 300, openedAt: 20, bytes: 5, pinned: true },
+    ];
+    const sorted = io.projectApi.sortRows(rows, 'saved');
+    assert.deepEqual(sorted.map((r) => r.id), ['b', 'a'], '置顶永远最前');
+    assert.deepEqual(io.projectApi.totals(rows), { count: 2, bytes: 15 });
+    // 同步返回（面板在 paint() 里直接拿结果，不 await）
+    assert.equal(typeof io.projectApi.sortRows(rows, 'name').then, 'undefined');
+});
+
+test('setPinned：改的是库记录里的 pinned；记录不存在回 ok:false 而不是抛（真行为）', async () => {
+    const { io, cel, store } = await loadProjectIo();
+    store.__resetMemory();
+    const doc = cel.createDocument({ width: 20, height: 10, fps: 10, layerName: 'L' });
+    await store.putProject(store.makeRecord({ id: 'pin-1', name: '甲', doc }));
+
+    await withBridge({}, async () => {
+        const on = await io.projectApi.setPinned('pin-1', true);
+        assert.equal(on.ok, true);
+        assert.equal(on.pinned, true);
+        assert.equal((await store.getProject('pin-1')).pinned, true, '置顶要写进库记录');
+        // 列表视图也要带出来：面板靠 list() 渲染星标
+        const row = (await store.listProjects()).find((r) => r.id === 'pin-1');
+        assert.equal(row.pinned, true);
+
+        const off = await io.projectApi.setPinned('pin-1', false);
+        assert.equal(off.ok, true);
+        assert.equal(off.pinned, false);
+        assert.equal((await store.getProject('pin-1')).pinned, false);
+
+        const missing = await io.projectApi.setPinned('nope', true);
+        assert.equal(missing.ok, false);
+        assert.ok(String(missing.error).length > 0, '失败必须带一句能读的原因');
+    });
+});
+
+test('editTags：记录不存在是失败、对话框取消是 canceled（真行为）', async () => {
+    const { io, cel, store } = await loadProjectIo();
+    store.__resetMemory();
+    const doc = cel.createDocument({ width: 20, height: 10, fps: 10, layerName: 'L' });
+    await store.putProject(store.makeRecord({ id: 'tags-1', name: '甲', doc, tags: ['旧'] }));
+
+    // node 里没有可用的 window（stubDom 只给了 document）：内联对话框起不来 → 视作取消。
+    // 关键断言是「取消」与「清空标签」可分辨 —— 取消不能把已有标签清掉。
+    const canceled = await withBridge(null, () => io.projectApi.editTags('tags-1'));
+    assert.equal(canceled.ok, false);
+    assert.equal(canceled.canceled, true);
+    assert.deepEqual((await store.getProject('tags-1')).tags, ['旧'], '取消不改记录');
+
+    const missing = await withBridge(null, () => io.projectApi.editTags('nope'));
+    assert.equal(missing.ok, false);
+    assert.equal(missing.canceled, undefined, '记录不存在不是「用户取消」');
+    assert.ok(String(missing.error).length > 0);
+});
+
+/* ─── 真实 DOM 替身：让 askChoice 真的「弹出来」并被点掉（node 里没有 DOM） ─── */
+
+/** 够用的元素替身：style / children / click 监听 / querySelector('button')。 */
+function fakeEl(tag) {
+    const node = {
+        tagName: String(tag || '').toUpperCase(),
+        style: {},
+        children: [],
+        className: '',
+        textContent: '',
+        parentNode: null,
+        appendChild(child) {
+            child.parentNode = node;
+            node.children.push(child);
+            return child;
+        },
+        removeChild(child) {
+            const i = node.children.indexOf(child);
+            if (i >= 0) node.children.splice(i, 1);
+            child.parentNode = null;
+            return child;
+        },
+        addEventListener(type, fn) {
+            if (!node.__on) node.__on = {};
+            node.__on[type] = fn;
+        },
+        removeEventListener() {},
+        querySelector(sel) {
+            if (sel !== 'button') return null;
+            const walk = (n) => {
+                for (const c of n.children) {
+                    if (c.tagName === 'BUTTON') return c;
+                    const hit = walk(c);
+                    if (hit) return hit;
+                }
+                return null;
+            };
+            return walk(node);
+        },
+        focus() {},
+        select() {},
+    };
+    return node;
+}
+
+/** 临时换一套可点掉的 DOM + window（带 motionAPI 假桥），跑完原样恢复。 */
+async function withAskDom(api, fn) {
+    const prevDoc = globalThis.document;
+    const prevWin = globalThis.window;
+    const body = fakeEl('body');
+    globalThis.document = {
+        documentElement: { lang: '' },
+        body,
+        createElement: fakeEl,
+        addEventListener() {},
+        removeEventListener() {},
+        querySelector: () => null,
+    };
+    globalThis.window = { motionAPI: api, addEventListener() {}, removeEventListener() {} };
+    try {
+        return await fn(body);
+    } finally {
+        globalThis.document = prevDoc;
+        if (prevWin === undefined) delete globalThis.window;
+        else globalThis.window = prevWin;
+    }
+}
+
+/** 点掉 askChoice 浮层里 value 对应的按钮（askChoice 给按钮的 class 是 `ms-ask-<value>`）。 */
+function clickAsk(body, value) {
+    const box = body.children[0];
+    const btn = box && box.children.find((c) => c.className === 'ms-ask-' + value);
+    assert.ok(btn, '没找到浮层按钮：' + value);
+    btn.__on.click();
+}
+
+/**
+ * 造「同一文件被两条记录绑着」的现场：
+ * - `dup-b` 是本次另存为的目标（当前打开的项目，原本不绑文件）；
+ * - `dup-c` 是已经绑着 `shared` 的另一条记录。
+ */
+async function sharedFileScene(cel, ds, store, shared) {
+    store.__resetMemory();
+    const doc = cel.createDocument({ width: 20, height: 10, fps: 10, layerName: 'L' });
+    await store.putProject(store.makeRecord({ id: 'dup-b', name: 'B', doc, file: '' }));
+    await store.putProject(store.makeRecord({ id: 'dup-c', name: 'C', doc, file: shared }));
+    freshDoc(cel, ds);
+    ds.project.id = 'dup-b';
+    ds.project.name = 'B';
+}
+
+test('writeProjectFile 同文件冲突：取消 = 文件已写出但绑定不转移（真实点按钮）', async () => {
+    const { io, ds, cel, store } = await loadProjectIo();
+    const shared = 'C:/work/shared.msp';
+    await sharedFileScene(cel, ds, store, shared);
+    const api = { saveProject: () => ({ ok: true, file: shared }) };
+
+    await withAskDom(api, async (body) => {
+        const pending = io.projectApi.exportFile('dup-b');
+        // 等 askChoice 把浮层挂上（写盘 + 读库几步 await）
+        await new Promise((r) => setTimeout(r, 20));
+        clickAsk(body, 'cancel');
+        const out = await pending;
+        assert.equal(out.ok, true, '取消转移不是保存失败：文件确实写出来了');
+        assert.equal(out.file, shared);
+        assert.equal(ds.project.file, '', '取消后当前项目仍不绑定这个文件');
+        assert.equal((await store.getProject('dup-b')).file, '', '目标记录也不绑定');
+        assert.equal((await store.getProject('dup-c')).file, shared, '原绑定保持原样（文件没有被删/回滚）');
+    });
+});
+
+test('writeProjectFile 同文件冲突：选「转移给当前项目」清掉别人的绑定（真实点按钮）', async () => {
+    const { io, ds, cel, store } = await loadProjectIo();
+    const shared = 'C:/work/shared.msp';
+    await sharedFileScene(cel, ds, store, shared);
+    const api = { saveProject: () => ({ ok: true, file: shared }) };
+
+    await withAskDom(api, async (body) => {
+        const pending = io.projectApi.exportFile('dup-b');
+        await new Promise((r) => setTimeout(r, 20));
+        clickAsk(body, 'move');
+        const out = await pending;
+        assert.equal(out.ok, true);
+        assert.equal(out.file, shared);
+        assert.equal(ds.project.file, shared, '当前项目接管绑定（否则下次 Ctrl+S 写回旧文件）');
+        assert.equal((await store.getProject('dup-b')).file, shared, '目标记录绑定到新文件');
+        assert.equal((await store.getProject('dup-c')).file, '', '原记录不再绑定，避免两个项目抢同一个交付物');
+    });
+});
+
+test('editTags：确认后按分隔符清洗写库，空输入 = 清空标签（真实点按钮）', async () => {
+    const { io, cel, store } = await loadProjectIo();
+    store.__resetMemory();
+    const doc = cel.createDocument({ width: 20, height: 10, fps: 10, layerName: 'L' });
+    await store.putProject(store.makeRecord({ id: 'tags-2', name: '甲', doc, tags: ['旧'] }));
+
+    await withAskDom({}, async (body) => {
+        const pending = io.projectApi.editTags('tags-2');
+        await new Promise((r) => setTimeout(r, 10));
+        const input = body.children[0].children.find((c) => c.className === 'ms-ask-input');
+        assert.equal(input.value, '旧', '弹框要预填当前标签');
+        input.value = ' 角色 , BOSS，角色 ; 头目 ';
+        clickAsk(body, 'ok');
+        const out = await pending;
+        assert.equal(out.ok, true);
+        assert.deepEqual(out.tags, ['角色', 'BOSS', '头目'], '四种分隔符 + 去重 + trim');
+        assert.deepEqual((await store.getProject('tags-2')).tags, ['角色', 'BOSS', '头目']);
+
+        // 空输入点确认 = 清空标签（不是取消）—— 与「取消」必须可分辨
+        const pending2 = io.projectApi.editTags('tags-2');
+        await new Promise((r) => setTimeout(r, 10));
+        const input2 = body.children[0].children.find((c) => c.className === 'ms-ask-input');
+        input2.value = '';
+        clickAsk(body, 'ok');
+        const out2 = await pending2;
+        assert.equal(out2.ok, true);
+        assert.deepEqual(out2.tags, []);
+        assert.deepEqual((await store.getProject('tags-2')).tags, [], '清空标签要真的清掉');
+    });
+});
+
+test('源码守卫：editTags 走 store.updateProjectMeta + 内联输入框 + 词条', () => {
+    const io = read('../app/shell/project-io.mjs');
+    const body = io.slice(io.indexOf('async function editTags'), io.indexOf('/* ─────────────────── 未命名草稿'));
+    assert.match(body, /store\.updateProjectMeta\(id, \{ tags: tags \}\)/, '标签写库只能走白名单入口');
+    assert.match(body, /parseTags\(text\)/, '输入文本统一走 parseTags');
+    assert.match(body, /askInlineText\(current\.join\(', '\), t\('shell\.tags\.ask'\)\)/, '预填当前标签，复用外壳内联对话框');
+    assert.match(body, /return \{ ok: false, canceled: true \}/, '取消要能被调用方识别');
+    assert.match(body, /flash\(t\('shell\.tags\.done'/, '成功要有反馈');
+    assert.match(body, /notifyProjects\(\)/, '写完要通知面板刷新');
+    assert.match(body, /okResult\(\{ tags/, '成功把清洗后的标签还给面板');
+    // 「清空标签」与「取消」必须可区分：askInlineText 取消回 null，确认回字符串（可为空）
+    assert.match(io, /function askInlineText\(def, label\)/);
+    assert.match(io, /askProjectName\(def\) \{[\s\S]{0,120}askInlineText\(def, t\('shell\.ask\.name'\)\)/, '项目名输入框也复用同一套');
+    assert.match(io, /finish\(null\)/, 'Esc / 取消按钮回 null');
+});
+
+test('源码守卫：setPinned 走白名单入口、成功后通知面板', () => {
+    const io = read('../app/shell/project-io.mjs');
+    const body = io.slice(io.indexOf('async function setPinned'), io.indexOf('async function editTags'));
+    assert.match(body, /store\.updateProjectMeta\(id, \{ pinned: want \}\)/);
+    assert.match(body, /notifyProjects\(\)/);
+    assert.match(body, /okResult\(\{ pinned:/);
+    assert.match(body, /return fail\(t\('shell\.pin\.failed'\)\)/, '记录不存在 / 写失败要有 error');
+});
+
+test('源码守卫：writeProjectFile 的同文件绑定冲突有「转移 / 取消」两路，取消不回滚写盘', () => {
+    const io = read('../app/shell/project-io.mjs');
+    const body = io.slice(io.indexOf('async function writeProjectFile'), io.indexOf('async function importLibraryBundle'));
+
+    // 写成功、绑定之前先找占用者（排除本次目标）
+    assert.match(body, /const targetId = id \|\| /, '先算出这次要绑定到哪条记录');
+    assert.match(body, / await fileOwners\(out\.file, targetId\)/, '用 listProjects 找 file 相同的其它记录');
+
+    // 有冲突 → askChoice 两路：转移给当前项目 / 取消
+    assert.match(body, /askChoice\(\s*t\('shell\.bindConflict\.title'\)/);
+    assert.match(body, /\{ label: t\('shell\.bindConflict\.move'\), value: 'move' \}/, '缺「转移给当前项目」');
+    assert.match(body, /t\('shell\.ask\.cancel'\), value: 'cancel'/, '缺取消');
+    assert.match(body, /if \(choice !== 'move'\) \{/, '非转移一律按取消处理（Esc 也算取消）');
+
+    // 取消：文件已经写出 → 不回滚、不重写、不算失败，只警告绑定没转
+    assert.equal((body.match(/ipc\.saveProject\(/g) || []).length, 1, '取消分支不许再写一次盘');
+    assert.doesNotMatch(body, /unlink|rmSync|deleteProject/, '取消不能删掉刚写出的文件');
+    const warning = body.indexOf("t('shell.bindConflict.keepOld'");
+    assert.ok(warning > 0, '取消要明确说「文件已写出、绑定未转移」');
+    assert.match(
+        body,
+        /flash\(t\('shell\.bindConflict\.keepOld'[\s\S]{0,160}'error'\)/,
+        '用错误档，别被下一条普通提示顶掉'
+    );
+    const cancelTail = body.slice(warning);
+    assert.match(cancelTail, /return okResult\(\{ file: out\.file \}\)/, '取消也要正常返回（文件确实写出来了）');
+    assert.ok(body.indexOf('if (sameProject) project.file = out.file') > warning, '取消路径必须早于绑定赋值');
+
+    // 转移：清掉别的记录的 file，再给本记录绑定
+    assert.match(body, /const moved = await takeOverFileBinding\(targetId, out\.file\)/);
+    assert.match(body, /flash\(t\('shell\.bindConflict\.moved'/);
+
+    // 辅助函数：只清绑定、不碰磁盘；清的是「当前项目」记录时内存绑定一起清
+    const helpers = io.slice(io.indexOf('async function fileOwners'), io.indexOf('async function setPinned'));
+    assert.match(helpers, /store\.listProjects\(\)/);
+    assert.match(helpers, /row\.file === path/);
+    assert.match(helpers, /rec\.file = ''/);
+    assert.match(helpers, /if \(project\.id === id\) project\.file = ''/, '冲突方是当前项目时顶栏绑定也要清');
+
+    // 无冲突时行为不变：不弹框，仍然「已保存文件」
+    assert.match(body, /if \(!o\.quiet && !owners\.length\) flash\(t\('shell\.saveFile\.done'/);
+});
+
+test('源码守卫：load / import 打开已被别的记录绑定的文件时静默转移绑定', () => {
+    const io = read('../app/shell/project-io.mjs');
+
+    const load = io.slice(io.indexOf('async function loadProject'), io.indexOf('async function newProject'));
+    assert.match(load, /await takeOverFileBinding\(source\.id, source\.file\)/, '打开路径要静默转移');
+    assert.match(load, /t\('shell\.bind\.takenOnLoad'/);
+    assert.doesNotMatch(load, /askChoice/, '打开路径不弹框');
+
+    const imp = io.slice(io.indexOf('async function importProjectFile'), io.indexOf('async function loadProject'));
+    assert.match(imp, /await takeOverFileBinding\(importedId, rec\.file/, '导入路径要静默转移');
+    assert.match(imp, /t\('shell\.bind\.takenOnImport'/);
+    assert.doesNotMatch(imp, /askChoice/, '导入路径不弹框');
+
+    // 两条路径都复用同一个 takeOverFileBinding（清其它记录 + 返回被清掉的名字）
+    const take = io.slice(io.indexOf('async function takeOverFileBinding'), io.indexOf('async function setPinned'));
+    assert.match(take, /fileOwners\(file, id\)/);
+    assert.match(take, /clearFileBinding\(row\.id\)/);
 });

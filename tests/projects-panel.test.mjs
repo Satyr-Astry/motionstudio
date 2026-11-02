@@ -23,13 +23,23 @@ import { fileURLToPath } from 'node:url';
 import {
     CARD_ACTIONS,
     MENU_ITEMS,
+    SORT_DEFAULT,
+    SORT_MODES,
+    SORT_STORAGE_KEY,
     countLabel,
+    fallbackSortRows,
     fileTail,
+    filterByTag,
     filterRows,
     menuItemsFor,
     metaLine,
     noResultText,
     normRecord,
+    normSortMode,
+    readSortMode,
+    sortLabelKey,
+    tagOptions,
+    writeSortMode,
 } from '../app/editors/projects.mjs';
 import { ICON_NAMES } from '../app/core/icons.mjs';
 import { DEFAULT_LOCALE, setLocale, t } from '../app/i18n/index.mjs';
@@ -339,4 +349,191 @@ test('可见性 / 无障碍收口（源码守卫）：提示走 aria-live，删�
     // 8 秒撤销条归外壳 project-io 的 holdUndoBar —— 面板侧只引用它、不许自己再实现一条
     assert.ok(!/ms-undo-bar/i.test(PANEL_SRC), '撤销条是外壳的，面板不重写');
     assert.ok(!/classList\.add\('ms-undo/i.test(PANEL_SRC));
+});
+
+// ───────────────────────── P2：排序 / 收藏 / 标签 / 库统计 ─────────────────────────
+
+test('normRecord：pinned 归一成 Boolean，tags 只留非空字符串、去重、最多 8 个', () => {
+    const row = normRecord({ id: 'p1', pinned: true, tags: [' walk ', '', 42, null, 'walk', 'hero'] });
+    assert.equal(row.pinned, true);
+    // 非字符串被丢掉、首尾空白被裁掉、重复的只留一个
+    assert.deepEqual(row.tags, ['walk', 'hero']);
+    // 老记录（P2 之前）没有这两个字段：给 false / []，渲染路径照常
+    assert.equal(normRecord({}).pinned, false);
+    assert.deepEqual(normRecord({}).tags, []);
+    assert.equal(normRecord(null).pinned, false);
+    assert.deepEqual(normRecord(null).tags, []);
+    assert.equal(normRecord({ pinned: 0 }).pinned, false);
+    // 与外壳 project-store 同口径：只认布尔 true（旧档里的 1 / 'true' 不算置顶）
+    assert.equal(normRecord({ pinned: 1 }).pinned, false);
+    assert.equal(normRecord({ pinned: 'true' }).pinned, false);
+    // tags 不是数组（旧版/脏数据）→ 空数组，不抛
+    assert.deepEqual(normRecord({ tags: 'hero' }).tags, []);
+    assert.deepEqual(normRecord({ tags: { 0: 'hero' } }).tags, []);
+    // 上限 8：第 9 个起截断
+    const many = Array.from({ length: 12 }, (_, i) => 't' + i);
+    assert.deepEqual(normRecord({ tags: many }).tags, many.slice(0, 8));
+});
+
+test('filterByTag：空标签原样返回同一引用，否则按 tags 包含匹配（脏记录不炸）', () => {
+    const tagged = [
+        { id: 'a', name: 'Alpha', tags: ['walk', 'hero'] },
+        { id: 'b', name: 'Beta', tags: ['hero'] },
+        { id: 'c', name: 'Gamma', tags: [] },
+        { id: 'd', name: 'Delta' },
+    ];
+    // 与 filterRows 同口径：没筛就不产生新数组（调用方可以按引用判断）
+    assert.equal(filterByTag(tagged, ''), tagged);
+    assert.equal(filterByTag(tagged, '   '), tagged);
+    assert.equal(filterByTag(tagged, null), tagged);
+    assert.equal(filterByTag(tagged, undefined), tagged);
+    assert.deepEqual(filterByTag(tagged, 'hero').map((r) => r.id), ['a', 'b']);
+    assert.deepEqual(filterByTag(tagged, ' walk ').map((r) => r.id), ['a']);
+    assert.deepEqual(filterByTag(tagged, 'nope'), []);
+    // 脏记录（tags 缺失/非数组）不匹配但不抛
+    assert.deepEqual(filterByTag(tagged, 'walk').map((r) => r.id), ['a']);
+    assert.deepEqual(filterByTag([null, { id: 'x' }, { id: 'y', tags: 'walk' }], 'walk'), []);
+    assert.deepEqual(filterByTag(null, 'hero'), []);
+    assert.deepEqual(filterByTag(undefined, ''), []);
+    // 与搜索串联（paint() 的顺序：先搜索、再标签、最后排序）
+    assert.deepEqual(filterByTag(filterRows(tagged, 'alpha'), 'hero').map((r) => r.id), ['a']);
+});
+
+test('tagOptions：全库标签去重 + 按 localeCompare 有序，脏记录不炸', () => {
+    const tagged = [
+        { tags: ['walk', 'hero'] },
+        { tags: ['hero', 'Idle'] },
+        { tags: [] },
+        null,
+        { tags: 'walk' },
+        { tags: ['  ', '', ' walk '] },
+    ];
+    const opts = tagOptions(tagged);
+    assert.deepEqual([...opts].sort(), ['Idle', 'hero', 'walk'], '去重且一个不漏');
+    // 顺序断言不写死 ICU 结果，只要求「相邻两项 localeCompare 递增」
+    for (let i = 0; i + 1 < opts.length; i += 1) {
+        assert.ok(opts[i].localeCompare(opts[i + 1]) <= 0, '标签选项没有按 localeCompare 排序：' + opts.join(', '));
+    }
+    assert.deepEqual(tagOptions(null), []);
+    assert.deepEqual(tagOptions(undefined), []);
+    assert.deepEqual(tagOptions([]), []);
+});
+
+test('SORT_MODES / sortLabelKey：四档顺序钉死，键名能 t() 出人话，脏值落回缺省档', () => {
+    assert.deepEqual(SORT_MODES.map((m) => m.mode), ['saved', 'opened', 'name', 'size']);
+    assert.deepEqual(SORT_MODES.map((m) => m.labelKey), [
+        'projects.sort.saved',
+        'projects.sort.opened',
+        'projects.sort.name',
+        'projects.sort.size',
+    ]);
+    assert.equal(SORT_DEFAULT, 'saved');
+    assert.equal(SORT_STORAGE_KEY, 'ms.projects.sort', 'localStorage 键是跨版本契约，不许改名');
+    assert.equal(normSortMode('name'), 'name');
+    assert.equal(normSortMode('nope'), 'saved');
+    assert.equal(normSortMode(null), 'saved');
+    assert.equal(normSortMode(undefined), 'saved');
+    assert.equal(sortLabelKey('size'), 'projects.sort.size');
+    assert.equal(sortLabelKey('bogus'), 'projects.sort.saved');
+    // 四个键在两语言里都真有词（不是把键名显示给用户）
+    withLocale('en', () => {
+        assert.deepEqual(SORT_MODES.map((m) => t(m.labelKey)), ['Last saved', 'Last opened', 'Name', 'Size']);
+        assert.equal(t(sortLabelKey('size')), 'Size');
+    });
+    withLocale('zh-Hans', () => {
+        assert.deepEqual(SORT_MODES.map((m) => t(m.labelKey)), ['最近保存', '最近打开', '名称', '大小']);
+        assert.equal(t(sortLabelKey('bogus')), '最近保存');
+    });
+});
+
+test('fallbackSortRows：pinned 永远最前，其余按档位；不改入参、脏值不炸', () => {
+    const list = [
+        { id: 'a', name: 'Beta', savedAt: 100, openedAt: 500, bytes: 10 },
+        { id: 'b', name: 'Alpha', savedAt: 300, openedAt: 100, bytes: 30, pinned: true },
+        { id: 'c', name: 'Gamma', savedAt: 200, openedAt: 900, bytes: 20 },
+    ];
+    const ids = (arr) => arr.map((r) => r.id);
+    assert.deepEqual(ids(fallbackSortRows(list, 'saved')), ['b', 'c', 'a'], '置顶在前，再按 savedAt 降序');
+    assert.deepEqual(ids(fallbackSortRows(list, 'opened')), ['b', 'c', 'a'], '置顶在前，再按 openedAt 降序');
+    assert.deepEqual(ids(fallbackSortRows(list, 'size')), ['b', 'c', 'a'], '置顶在前，再按 bytes 降序');
+    assert.deepEqual(ids(fallbackSortRows(list, 'name')), ['b', 'a', 'c'], '置顶在前，其余按名字');
+    assert.deepEqual(ids(fallbackSortRows(list, 'bogus')), ['b', 'c', 'a'], '未知档位落回 saved');
+    // 返回新数组、入参顺序不变（paint 之后 rows 还要给 totals/其他分支用）
+    assert.notEqual(fallbackSortRows(list, 'saved'), list);
+    assert.deepEqual(ids(list), ['a', 'b', 'c']);
+    assert.deepEqual(fallbackSortRows(null, 'saved'), []);
+    assert.deepEqual(fallbackSortRows(undefined, 'name'), []);
+    // 脏记录（缺字段）按 0 / 空串处理，不抛
+    assert.deepEqual(ids(fallbackSortRows([{ id: 'x' }, { id: 'y', pinned: true }], 'size')), ['y', 'x']);
+});
+
+test('排序偏好读写：localStorage 抛错/不可用时退回缺省档，不白屏', () => {
+    // 直接替换全局 localStorage 模拟隐私模式（getItem/setItem 都抛）
+    const had = Object.prototype.hasOwnProperty.call(globalThis, 'localStorage');
+    const orig = had ? globalThis.localStorage : undefined;
+    try {
+        globalThis.localStorage = {
+            getItem() {
+                throw new Error('denied');
+            },
+            setItem() {
+                throw new Error('denied');
+            },
+        };
+        assert.equal(readSortMode(), SORT_DEFAULT, '读失败必须落回缺省档');
+        assert.equal(writeSortMode('size'), false, '写失败返回 false，不抛');
+        // 没有 localStorage 的环境（Node / 沙箱）同样要能读
+        globalThis.localStorage = null;
+        assert.equal(readSortMode(), SORT_DEFAULT);
+        assert.equal(writeSortMode('name'), false);
+    } finally {
+        if (had) globalThis.localStorage = orig;
+        else delete globalThis.localStorage;
+    }
+});
+
+test('P2 接线（源码守卫）：排序 / 星标 / 标签 / 库统计真的接到了外壳与 localStorage', () => {
+    // 排序：paint() 走 api.sortRows，外壳不可用时本地兜底；偏好落 ms.projects.sort
+    assert.match(PANEL_SRC, /api\.sortRows\(/, '展示顺序必须调 api.sortRows');
+    assert.match(PANEL_SRC, /fallbackSortRows\(/, 'api 不可用时必须退回本地排序');
+    assert.match(PANEL_SRC, /localStorage\.getItem\(SORT_STORAGE_KEY\)/);
+    assert.match(PANEL_SRC, /localStorage\.setItem\(SORT_STORAGE_KEY/);
+    // 读写各自包在 try/catch 里（隐私模式 / 禁用存储时 getItem 直接抛）
+    assert.match(PANEL_SRC, /function readSortMode\(\)\s*\{\s*try\s*\{/, '读偏好必须 try/catch');
+    assert.match(PANEL_SRC, /function writeSortMode\(mode\)\s*\{\s*try\s*\{/, '写偏好必须 try/catch');
+    // 星标：图标 star + aria-pressed + 目标状态显式传参
+    assert.match(PANEL_SRC, /icoNode\('star'\)/);
+    assert.match(PANEL_SRC, /setAttribute\('aria-pressed'/);
+    assert.match(PANEL_SRC, /classList\.add\('is-pinned'\)/);
+    assert.match(PANEL_SRC, /dataset\.act = 'pin'/);
+    assert.match(PANEL_SRC, /api\.setPinned\(\s*row\.id\s*,\s*want\s*\)/, '星标必须调 api.setPinned(row.id, 目标状态)');
+    // 标签：chips / +N / 末尾 + / 点 chip = 筛选 / 顶部筛选条
+    assert.match(PANEL_SRC, /'prj-tag'/);
+    assert.match(PANEL_SRC, /'prj-tag-add'/);
+    assert.match(PANEL_SRC, /'prj-tag-more'/);
+    assert.match(PANEL_SRC, /api\.editTags\(\s*row\.id\s*\)/);
+    assert.match(PANEL_SRC, /setTagFilter\(/, '点标签 chip 必须走 setTagFilter');
+    assert.match(PANEL_SRC, /'prj-sort-select'/);
+    assert.match(PANEL_SRC, /'prj-tag-select'/);
+    assert.match(PANEL_SRC, /'prj-tag-filter'/);
+    assert.match(PANEL_SRC, /tagOptions\(rows\)/);
+    // 库统计：计数行追加 api.totals(rows).bytes，走现有 fmtBytes
+    assert.match(PANEL_SRC, /api\.totals\(rows\)/);
+    assert.match(PANEL_SRC, /t\('projects\.count\.size', \{ size: fmtBytes\(/);
+    // 筛选顺序：先 filterRows 再 filterByTag（paint 的展示链）
+    assert.match(PANEL_SRC, /const searched = filterRows\(rows, query\);/);
+    assert.match(PANEL_SRC, /const tagged = filterByTag\(searched, tagFilter\);/);
+    assert.match(PANEL_SRC, /sortRowsFor\(tagged, sortMode\)/);
+});
+
+test('P2 样式（源码守卫）：星标填实、chips、置顶态、两个下拉、258px 卡片不撑破', () => {
+    assert.match(PANEL_CSS, /\.prj-pin\.is-on svg\s*\{\s*fill:\s*currentColor/, '置顶后星标要填实');
+    assert.match(PANEL_CSS, /\.prj-tag\b/);
+    assert.match(PANEL_CSS, /\.prj-tag-add\b/);
+    assert.match(PANEL_CSS, /\.prj-tag-filter\[hidden\]\s*\{\s*display:\s*none/, '[hidden] 必须显式 display:none');
+    assert.match(PANEL_CSS, /\.prj-card\.is-pinned/);
+    assert.match(PANEL_CSS, /\.prj-sort-select/);
+    assert.match(PANEL_CSS, /\.prj-tag-select/);
+    // 卡片网格宽度是 P1 定下的（258px）：本批只往卡片内部加东西，不许改列宽
+    assert.match(PANEL_CSS, /grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(258px,\s*1fr\)\)/);
 });

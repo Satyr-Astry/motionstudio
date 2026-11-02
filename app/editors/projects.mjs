@@ -5,12 +5,22 @@
  * （缩略图、名称、纹理数×尺寸、体积、最近打开、绑定文件），**点卡片任意处即载入**，
  * 卡片上只留次级动作 `重命名 / 复制 / 另存为 / 删除`（删除走危险色）。
  *
- * 顶部（`.prj-top`）只有一个主行动「新建项目」+ 搜索框 + `…` 菜单：
+ * 顶部（`.prj-top`）只有一个主行动「新建项目」+ 搜索框 + 排序下拉 + 标签筛选
+ * （有标签时才出现）+ `…` 菜单：
  * 低频项（导入项目文件 / 导出整个项目库 / 导出精灵图 / 刷新 / 导入图片到当前文档）
  * 全部收进菜单；「解除文件绑定…」是**条件项**，只在当前项目绑定了 .msp 时出现。
  * 为什么收：它们是四件不同层级的事——「导入图片」改的是当前文档、「导出精灵图」
  * 是导出、「刷新」对本地库基本无意义，过去五个按钮平铺在一行，视觉权重与
  * 「新建」等同，用户不知道哪个是主操作。
+ *
+ * P2（alpha.46）给库加了排序 / 收藏置顶 / 标签 / 库容量四件事：
+ *   - 排序：`SORT_MODES` 四档，选择存 localStorage（`ms.projects.sort`，读写都容错）；
+ *   - 收藏：卡片右上角星标 → `api.setPinned(id, pinned)`，置顶永远排最前；
+ *   - 标签：卡片名字下方的 chips（最多 3 个 + `+N`，末尾 `+` 调 `api.editTags(id)`），
+ *     点 chip = 按该标签筛选；顶部标签下拉的第一项是「全部标签」；
+ *   - 库容量：计数行追加「· 合计 X」（`api.totals(rows).bytes`，走现有 `fmtBytes`）。
+ * 排序/筛选都是纯函数（`filterByTag` / `tagOptions` / `fallbackSortRows`），外壳接口
+ * 不可用时退回本地排序 —— 面板半接线的状态也不许白屏。
  *
  * 「导入图片」走 `<input type="file" accept="image/*">` + FileReader（浏览器原生文件选择，
  * 不是主进程对话框）：选中的图片被当成一个 kind:'image' 对象插进**当前文档**的最上层，
@@ -21,6 +31,9 @@
  *   list() → Promise<记录[]>  current() → {id,name,file}|null  open(id)  create(opts)
  *   save(name?)  rename(id,name)  remove(id)  duplicate(id)  importFile()  exportFile()
  *   exportLibrary()  unbindFile()  subscribe(fn) → off()
+ *   P2：setPinned(id,pinned) → {ok:true,pinned} | {ok:false,error}
+ *       editTags(id) → {ok:true,tags} | {ok:false,canceled} | {ok:false,error}（两者异步，对话框在外壳里）
+ *       sortRows(rows,mode) → 排好序的新数组  totals(rows) → {count,bytes}
  * 面板本身不认识 IndexedDB、不认识文件对话框，换存储不影响这里。
  *
  * 「该不该保存」这类判据一律不在这里：`api.open()` 内部会走 `beforeSwitch`（project-io.mjs），
@@ -209,6 +222,119 @@ export function filterRows(rows, query) {
     return list.filter((r) => String((r && r.name) || '').toLowerCase().includes(q));
 }
 
+/**
+ * 标签筛选：`tag` 为空（'' / 纯空白 / null）时**原样返回同一个数组引用**（与 `filterRows`
+ * 同一口径：没筛选就不产生新数组，调用方可以按引用判断「没筛」）。
+ * 否则按 `tags` 数组包含匹配；脏记录（tags 缺失/非数组）直接不匹配，不抛。
+ * 纯函数，Node 可直接测。
+ */
+export function filterByTag(rows, tag) {
+    const list = Array.isArray(rows) ? rows : [];
+    const want = String(tag == null ? '' : tag).trim();
+    if (!want) return list;
+    return list.filter((r) => {
+        const tags = r && Array.isArray(r.tags) ? r.tags : [];
+        return tags.includes(want);
+    });
+}
+
+/**
+ * 全库出现过的标签：去重、按 `localeCompare` 排序（中文按拼音、英文按字母）。
+ * 顶部标签下拉与「没有标签时整条隐藏」的判据都用它。纯函数，Node 可直接测。
+ */
+export function tagOptions(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    const seen = new Set();
+    for (const r of list) {
+        const tags = r && Array.isArray(r.tags) ? r.tags : [];
+        for (const tag of tags) {
+            const s = String(tag == null ? '' : tag).trim();
+            if (s) seen.add(s);
+        }
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * 排序档位。`mode` 是**落盘/契约值**（进 localStorage 与 `api.sortRows` 的第二个参数），
+ * `labelKey` 只是词条键；写成常量而不是每次现拼，测试才能钉死「四档、顺序、键名」。
+ * 为什么是这四档：最近保存（默认，找刚改过的）/ 最近打开（接着上次的活干）/
+ * 名称（按名字找）/ 大小（清库时找占地方的）。
+ */
+export const SORT_MODES = Object.freeze([
+    { mode: 'saved', labelKey: 'projects.sort.saved' },
+    { mode: 'opened', labelKey: 'projects.sort.opened' },
+    { mode: 'name', labelKey: 'projects.sort.name' },
+    { mode: 'size', labelKey: 'projects.sort.size' },
+]);
+
+/** 缺省档位：与 P1 的行为一致（最近保存在前）。 */
+export const SORT_DEFAULT = 'saved';
+
+/** localStorage 键。读写都要 try/catch：隐私模式 / 禁用存储时 getItem 会抛。 */
+export const SORT_STORAGE_KEY = 'ms.projects.sort';
+
+/** 把任意输入夹回四档之一；未知值一律落回缺省档（localStorage 里可能是旧值/脏值）。纯函数。 */
+export function normSortMode(mode) {
+    const s = String(mode == null ? '' : mode);
+    return SORT_MODES.some((m) => m.mode === s) ? s : SORT_DEFAULT;
+}
+
+/** 档位 → 词条键；未知档位给缺省档的键（调用方永远能 `t()` 出人话）。纯函数。 */
+export function sortLabelKey(mode) {
+    const s = normSortMode(mode);
+    const hit = SORT_MODES.find((m) => m.mode === s);
+    return hit ? hit.labelKey : 'projects.sort.saved';
+}
+
+/**
+ * 外壳 `api.sortRows` 不可用（并行批次未落地 / 桥不在）时的本地兜底排序。
+ * 口径与外壳契约一致：**pinned 永远最前**，其余按档位；不改入参（`slice()` 后排序）。
+ * 纯函数，Node 可直接测。
+ */
+export function fallbackSortRows(rows, mode) {
+    const list = Array.isArray(rows) ? rows : [];
+    const m = normSortMode(mode);
+    const valueOf = m === 'opened'
+        ? (r) => Number(r && r.openedAt) || 0
+        : m === 'size'
+            ? (r) => Number(r && r.bytes) || 0
+            : (r) => Number(r && r.savedAt) || 0;
+    return list.slice().sort((a, b) => {
+        // 与外壳 project-store 的 sortProjects 同口径：只认布尔 true 的 pinned
+        const pin = (b && b.pinned === true ? 1 : 0) - (a && a.pinned === true ? 1 : 0);
+        if (pin) return pin;
+        if (m === 'name') {
+            return String((a && a.name) || '').localeCompare(String((b && b.name) || ''));
+        }
+        return valueOf(b) - valueOf(a);
+    });
+}
+
+/**
+ * 读排序偏好。**必须容错**：隐私模式 / 禁用 localStorage 时 `getItem` 直接抛，
+ * 面板不能因为读一个偏好就白屏；读不到就用缺省档。
+ */
+export function readSortMode() {
+    try {
+        if (typeof localStorage === 'undefined' || !localStorage) return SORT_DEFAULT;
+        return normSortMode(localStorage.getItem(SORT_STORAGE_KEY));
+    } catch (err) {
+        return SORT_DEFAULT;
+    }
+}
+
+/** 写排序偏好；写不进去不算失败（只是下次打开回到缺省档）。返回是否真的写成功。 */
+export function writeSortMode(mode) {
+    try {
+        if (typeof localStorage === 'undefined' || !localStorage) return false;
+        localStorage.setItem(SORT_STORAGE_KEY, normSortMode(mode));
+        return true;
+    } catch (err) {
+        return false;
+    }
+}
+
 /** 统计口径：有查询时给「匹配 N / M」，没查询时给「共 M 个」。纯函数。 */
 export function countLabel(total, matched, query) {
     const n = Number(total) || 0;
@@ -258,11 +384,33 @@ export function actVerdict(out) {
 
 
 /**
+ * 标签归一：只留**非空字符串**，去首尾空白、去重、最多 8 个。
+ *
+ * 记录来自用户数据（IndexedDB 里可能是手改/旧版写进去的脏值），渲染前必须收口：
+ * 数字/对象/空串不进 chips，重复标签不占位，超过 8 个截断 —— 上限与外壳
+ * `project-store.mjs` 的 `MAX_TAGS` 一致，面板不做第二套口径。
+ */
+function normTags(value) {
+    const src = Array.isArray(value) ? value : [];
+    const out = [];
+    for (const tag of src) {
+        if (typeof tag !== 'string') continue;
+        const s = tag.trim();
+        if (!s || out.includes(s)) continue;
+        out.push(s);
+        if (out.length >= 8) break;
+    }
+    return out;
+}
+
+/**
  * 规范化记录，容忍外壳给的不完整数据。
  *
  * `frames` 是**记录里真实存在的字段**（`project-store.mjs` 的 `makeRecord` / `stripRecord`
  * 都写它，口径是「纹理时间点数」）；早期一行 `if (r.cels)` 判断了一个记录里根本没有的
  * 字段，卡片 meta 那一项于是永远被静默跳过 —— 老记录只有 `cels` 时在这里兜一下。
+ *
+ * `pinned` / `tags` 是 P2 新增字段：老记录没有 → false / []，面板照常渲染。
  */
 export function normRecord(rec, i) {
     const r = rec || {};
@@ -281,6 +429,12 @@ export function normRecord(rec, i) {
         openedAt: Number(r.openedAt) || 0,
         // 绑定的 .msp 路径（没有绑定 = 空串）。完整路径只进卡片 title，meta 只放尾巴
         file: typeof r.file === 'string' ? r.file : '',
+        // 收藏置顶：pinned 永远排最前（外壳 sortRows 负责，本地兜底排序也认它）。
+        // 口径与外壳 project-store 一致：只认布尔 true —— 旧档/手改记录里的 1、'true'
+        // 不算置顶，否则一条脏记录会永远占住列表最前面，用户看不出原因。
+        pinned: r.pinned === true,
+        // 标签：chips 与筛选下拉的来源（见 normTags 的收口口径）
+        tags: normTags(r.tags),
     };
 }
 
@@ -418,7 +572,7 @@ export function mount(host, ctx) {
     const api = ctx && ctx.project;
     const panel = mk('div', 'prj-panel');
 
-    // ── head：一个主行动 + 搜索 + `…` 菜单 ──────────────────────────────
+    // ── head：一个主行动 + 搜索 + 排序 + 标签筛选 + `…` 菜单 ────────────
     const head = mk('div', 'prj-top');
     head.setAttribute('role', 'toolbar');
     head.setAttribute('aria-label', t('projects.head.aria'));
@@ -433,6 +587,29 @@ export function mount(host, ctx) {
     searchInput.setAttribute('aria-label', t('projects.search.aria'));
     if (searchIco) search.appendChild(searchIco);
     search.appendChild(searchInput);
+
+    // 排序：四档来自 SORT_MODES；label 只是控件前的短词，选项文案走词条表。
+    // 选择落 localStorage（读写容错见 readSortMode / writeSortMode）。
+    let sortMode = readSortMode();
+    const sortWrap = mk('label', 'prj-sort');
+    sortWrap.appendChild(mk('span', 'prj-filter-label', t('projects.sort.label')));
+    const sortSelect = mk('select', 'prj-sort-select');
+    sortSelect.setAttribute('aria-label', t('projects.sort.aria'));
+    for (const item of SORT_MODES) {
+        const opt = mk('option', '', t(item.labelKey));
+        opt.value = item.mode;
+        sortSelect.appendChild(opt);
+    }
+    sortSelect.value = sortMode;
+    sortWrap.appendChild(sortSelect);
+
+    // 标签筛选：第一项「全部标签」；库里一个标签都没有时整条隐藏（见 syncTagFilter）。
+    const tagWrap = mk('label', 'prj-tag-filter');
+    tagWrap.hidden = true;
+    tagWrap.appendChild(mk('span', 'prj-filter-label', t('projects.tagFilter.label')));
+    const tagSelect = mk('select', 'prj-tag-select');
+    tagSelect.setAttribute('aria-label', t('projects.tagFilter.aria'));
+    tagWrap.appendChild(tagSelect);
 
     const count = mk('span', 'prj-count', '');
     count.setAttribute('aria-live', 'polite');
@@ -450,6 +627,8 @@ export function mount(host, ctx) {
 
     head.appendChild(btnNew);
     head.appendChild(search);
+    head.appendChild(sortWrap);
+    head.appendChild(tagWrap);
     head.appendChild(count);
     head.appendChild(grow);
     head.appendChild(btnMore);
@@ -482,6 +661,11 @@ export function mount(host, ctx) {
 
     let rows = [];
     let query = '';
+    // 当前标签筛选（'' = 不筛）。不落盘：标签筛选是「这一眼想看什么」，不是长期偏好。
+    let tagFilter = '';
+    // 上次重建标签下拉时的选项签名：选项没变就不重建，避免每次 paint 都把用户正开着的
+    // 原生下拉关掉（搜索框每敲一个字都会 paint）。
+    let tagSig = null;
     let currentId = '';
     // 当前项目绑定的文件路径（api.current().file）。reload() 里刷新，菜单靠它决定是否
     // 出现「解除文件绑定…」；缓存而不是每次现取，因为菜单渲染是同步的。
@@ -580,11 +764,60 @@ export function mount(host, ctx) {
         return { refresh() {}, destroy() {} };
     }
 
+    /**
+     * 收藏星标：卡片右上角（名字行尾部）。`aria-pressed` 表达「当前是否置顶」，
+     * title / aria-label 用「置顶 / 取消置顶」两条词条（读屏不能只听到「按钮」）。
+     */
+    function pinButton(r) {
+        const b = mk('button', 'prj-pin' + (r.pinned ? ' is-on' : ''), null);
+        b.type = 'button';
+        b.dataset.act = 'pin';
+        b.setAttribute('aria-pressed', r.pinned ? 'true' : 'false');
+        const label = r.pinned ? t('projects.pin.off') : t('projects.pin.on');
+        b.setAttribute('aria-label', label);
+        b.title = label;
+        const ico = icoNode('star');
+        if (ico) b.appendChild(ico);
+        return b;
+    }
+
+    /**
+     * 标签 chips：名字下方一行。最多显示 3 个，多出来的收成 `+N`；末尾永远有 `+`
+     * （给还没有标签的项目一个入口，否则新项目没有地方可以加标签）。
+     * 点 chip = 按该标签筛选（由 onClick 里的 `.prj-tag` 分支接走）。
+     */
+    function tagChips(r) {
+        const wrap = mk('div', 'prj-tags');
+        const tags = Array.isArray(r.tags) ? r.tags : [];
+        for (const tag of tags.slice(0, 3)) {
+            const chip = mk('button', 'prj-tag', tag);
+            chip.type = 'button';
+            chip.dataset.tag = tag;
+            const hint = t('projects.tag.filter.hint', { tag: tag });
+            chip.title = hint;
+            chip.setAttribute('aria-label', hint);
+            wrap.appendChild(chip);
+        }
+        if (tags.length > 3) {
+            const more = mk('span', 'prj-tag-more', '+' + (tags.length - 3));
+            more.title = t('projects.tag.more', { n: tags.length - 3 });
+            wrap.appendChild(more);
+        }
+        const add = mk('button', 'prj-tag-add', '+');
+        add.type = 'button';
+        add.dataset.act = 'editTags';
+        add.setAttribute('aria-label', t('projects.tag.add'));
+        add.title = t('projects.tag.add.hint');
+        wrap.appendChild(add);
+        return wrap;
+    }
+
     function card(r) {
         const item = mk('article', 'prj-card');
         item.dataset.id = r.id;
         item.tabIndex = 0;
         if (r.id === currentId) item.classList.add('is-current');
+        if (r.pinned) item.classList.add('is-pinned');
         if (renaming && renaming.id === r.id) item.classList.add('is-renaming');
         const when = r.savedAt ? fmtTime(r.savedAt) : t('projects.card.unsaved');
         // 完整路径只放在 title 里：卡片一行 meta 放尾巴（见 metaLine），悬停才给全路径
@@ -606,7 +839,8 @@ export function mount(host, ctx) {
 
         const meta = mk('div', 'prj-meta');
         const nameRow = mk('div', 'prj-name-row');
-        if (renaming && renaming.id === r.id) {
+        const editing = !!(renaming && renaming.id === r.id);
+        if (editing) {
             const input = mk('input', 'prj-rename');
             input.type = 'text';
             input.value = renaming.value;
@@ -614,19 +848,21 @@ export function mount(host, ctx) {
             input.style.width = '100%';
             input.style.minWidth = '80px';
             nameRow.appendChild(input);
-            meta.appendChild(nameRow);
             // 图标标记，paint() 之后统一 focus（见 focusRename）
         } else {
-            const name = mk('div', 'prj-name', r.name);
-            nameRow.appendChild(name);
+            nameRow.appendChild(mk('div', 'prj-name', r.name));
             if (r.id === currentId) nameRow.appendChild(mk('span', 'prj-badge', t('projects.card.badge')));
-            meta.appendChild(nameRow);
+            // 星标放名字行尾部（CSS 的 margin-left:auto 把它顶到卡片右上角）
+            nameRow.appendChild(pinButton(r));
         }
+        meta.appendChild(nameRow);
+        // 标签 chips 在名字下方；重命名进行中不显示（避免改名的同时误触筛选）
+        if (!editing) meta.appendChild(tagChips(r));
         meta.appendChild(mk('div', 'prj-sub', metaLine(r)));
         meta.appendChild(mk('div', 'prj-time', t('projects.card.time', { when: when })));
 
         const actions = mk('div', 'prj-actions');
-        if (renaming && renaming.id === r.id) {
+        if (editing) {
             actions.appendChild(button('rename-ok', t('projects.rename.ok'), t('projects.rename.ok.hint')));
             actions.appendChild(button('rename-cancel', t('projects.rename.cancel'), t('projects.rename.cancel.hint')));
         } else {
@@ -648,9 +884,117 @@ export function mount(host, ctx) {
         if (typeof input.select === 'function') input.select();
     }
 
+    /**
+     * 展示顺序：搜索 → 标签筛选 → 排序（pinned 由排序保证永远最前）。
+     * `api.sortRows` 是并行批次刚钉死的接口：没落地 / 半成品抛错时退回本地
+     * `fallbackSortRows`，否则一次 paint 就能让面板白屏。
+     */
+    function sortRowsFor(list, mode) {
+        if (typeof api.sortRows === 'function') {
+            try {
+                const out = api.sortRows(list, mode);
+                if (Array.isArray(out)) return out;
+            } catch (err) {
+                /* 外壳半成品：退回本地排序 */
+            }
+        }
+        return fallbackSortRows(list, mode);
+    }
+
+    /** 库容量：`api.totals(rows)` → {count,bytes}；接口不在时本地求和兜底（同口径）。 */
+    function totalsFor(list) {
+        if (typeof api.totals === 'function') {
+            try {
+                const out = api.totals(list);
+                if (out && typeof out === 'object') {
+                    return { count: Number(out.count) || 0, bytes: Number(out.bytes) || 0 };
+                }
+            } catch (err) {
+                /* 外壳半成品：退回本地求和 */
+            }
+        }
+        let bytes = 0;
+        for (const r of list) bytes += Number(r && r.bytes) || 0;
+        return { count: list.length, bytes: bytes };
+    }
+
+    /**
+     * 同步标签筛选下拉：选项来自 `tagOptions(rows)`，第一项「全部标签」。
+     * 没有标签 → 整条隐藏；当前筛选的标签随数据消失 → 退回「全部」。
+     * 选项签名没变就不重建节点（见 tagSig 的注释）。
+     */
+    function syncTagFilter() {
+        const opts = tagOptions(rows);
+        tagWrap.hidden = !opts.length;
+        if (!opts.length) tagFilter = '';
+        else if (tagFilter && !opts.includes(tagFilter)) tagFilter = '';
+        const sig = opts.join('\u0001');
+        if (sig !== tagSig) {
+            tagSig = sig;
+            tagSelect.replaceChildren();
+            const all = mk('option', '', t('projects.tagFilter.all'));
+            all.value = '';
+            tagSelect.appendChild(all);
+            for (const tag of opts) {
+                const opt = mk('option', '', tag);
+                opt.value = tag;
+                tagSelect.appendChild(opt);
+            }
+        }
+        tagSelect.value = tagFilter;
+    }
+
+    /** 点标签 chip = 按它筛选；再点同一个标签不取消（取消走顶部下拉的「全部标签」）。 */
+    function setTagFilter(tag) {
+        tagFilter = String(tag == null ? '' : tag).trim();
+        paint();
+    }
+
+    /**
+     * 记下「重画前焦点在列表里的哪个控件的哪个动作」。
+     *
+     * 为什么需要：星标 / 加标签成功后会 `reload()` → `paint()` 整块重画，焦点会掉回
+     * `<body>`；键盘与读屏用户得从面板头顶重新走一遍（删除动作的 `focusAfterDelete`
+     * 解决的是同一个问题）。只认列表里的元素 —— 焦点在搜索框时不许被抢走。
+     */
+    function captureListFocus() {
+        const active = typeof document !== 'undefined' ? document.activeElement : null;
+        if (!active || !list.contains(active) || typeof active.closest !== 'function') return null;
+        const cardNode = active.closest('.prj-card');
+        if (!cardNode) return null;
+        return {
+            id: cardNode.dataset.id || '',
+            act: (active.dataset && active.dataset.act) || '',
+        };
+    }
+
+    /** 按快照把焦点接回同一张卡的同一个动作；卡没了（被删/被筛掉）就不动。 */
+    function restoreListFocus(snap) {
+        if (!snap || !snap.id) return;
+        const cards = list.querySelectorAll('.prj-card');
+        for (const cardNode of cards) {
+            if (cardNode.dataset.id !== snap.id) continue;
+            const target = snap.act ? cardNode.querySelector('[data-act="' + snap.act + '"]') : cardNode;
+            if (target && typeof target.focus === 'function') target.focus();
+            return;
+        }
+    }
+
     function paint() {
-        const shown = filterRows(rows, query);
-        count.textContent = countLabel(rows.length, shown.length, query);
+        // 先同步筛选条：数据变了（删掉最后一个带该标签的项目）时 tagFilter 会在这里被退回「全部」
+        syncTagFilter();
+        const searched = filterRows(rows, query);
+        const tagged = filterByTag(searched, tagFilter);
+        const shown = sortRowsFor(tagged, sortMode);
+        // 计数：保留「共 N 个 / 匹配 M / N」，有库时再追加「· 合计 X」。
+        // 标签筛选也算「筛选」：否则筛剩 2 张、计数却写「共 4 个」，用户会以为筛坏了。
+        // 体积口径是**整个库**（api.totals(rows)），不是当前筛选结果 —— 这是「库容量」。
+        const filterText = String(query == null ? '' : query).trim() || tagFilter;
+        const base = countLabel(rows.length, shown.length, filterText);
+        const bytes = totalsFor(rows).bytes;
+        const size = bytes ? t('projects.count.size', { size: fmtBytes(bytes) }) : '';
+        count.textContent = base && size ? base + ' · ' + size : (base || size);
+        const focusSnap = captureListFocus();
         list.replaceChildren();
         if (!rows.length) {
             list.appendChild(empty);
@@ -663,6 +1007,7 @@ export function mount(host, ctx) {
         }
         for (const r of shown) list.appendChild(card(r));
         if (renaming) focusRename();
+        else restoreListFocus(focusSnap);
     }
 
     async function reload() {
@@ -892,6 +1237,29 @@ export function mount(host, ctx) {
             return;
         }
         if (!row) return;
+        if (act === 'pin') {
+            // 收藏置顶：把**目标状态**显式传给外壳（不是「切换」），避免连点两下时按旧值算。
+            // 接口没接线（并行批次未落地）时明确说一声，不许静默失败。
+            if (typeof api.setPinned !== 'function') {
+                say(t('projects.p2.notWired'), 'error');
+                return;
+            }
+            const want = !row.pinned;
+            // 成功不说话：外壳 setPinned 已经在顶栏 flash「已置顶 / 已取消置顶」，面板再报一遍
+            // 就是同一件事说两次；失败由 run() 用错误档说清原因。
+            await run(() => api.setPinned(row.id, want));
+            return;
+        }
+        if (act === 'editTags') {
+            // 标签编辑对话框在外壳里（`api.editTags` 异步返回 {ok,tags}/{canceled}），
+            // 面板只管调、刷新与播报结果；取消由 run() 说「已取消」，不叠话。
+            if (typeof api.editTags !== 'function') {
+                say(t('projects.p2.notWired'), 'error');
+                return;
+            }
+            await run(() => api.editTags(row.id), t('projects.tag.updated'));
+            return;
+        }
         if (act === 'open') {
             await run(() => api.open(row.id), t('projects.open.done', { name: row.name }));
             return;
@@ -944,6 +1312,14 @@ export function mount(host, ctx) {
     function onClick(e) {
         // 变量名不叫 `t`：那会遮蔽 i18n 的 `t()`，同函数里后加的文案就取不到词条
         const target = e.target;
+        // 标签 chip：点它 = 按这个标签筛选。必须在 [data-act] 分支之前接走 ——
+        // 否则会落到「点卡片任意处 = 载入」那一步，用户只想筛一下却把项目打开了。
+        const chip = target && typeof target.closest === 'function' ? target.closest('.prj-tag') : null;
+        if (chip) {
+            e.preventDefault();
+            setTagFilter(chip.dataset.tag || '');
+            return;
+        }
         const btn = target && typeof target.closest === 'function' ? target.closest('[data-act]') : null;
         if (btn) {
             e.preventDefault();
@@ -1002,19 +1378,42 @@ export function mount(host, ctx) {
     }
 
     function onInput(e) {
-        const t = e.target;
-        if (t && t.classList && t.classList.contains('prj-search-input')) {
-            query = String(t.value || '');
+        // 变量名不叫 `t`：会遮蔽 i18n 的 t()
+        const el = e.target;
+        if (el && el.classList && el.classList.contains('prj-search-input')) {
+            query = String(el.value || '');
             paint();
             return;
         }
         if (!renaming) return;
-        if (t && t.classList && t.classList.contains('prj-rename')) renaming.value = t.value;
+        if (el && el.classList && el.classList.contains('prj-rename')) renaming.value = el.value;
+    }
+
+    /**
+     * 两个下拉走 `change`（原生 select 的可靠事件；`input` 在各版本里不一致）。
+     * 排序选择落 localStorage —— 写不进去（隐私模式）只是下次回到缺省档，不影响本次排序。
+     */
+    function onChange(e) {
+        const el = e.target;
+        if (!el || !el.classList) return;
+        if (el.classList.contains('prj-sort-select')) {
+            sortMode = normSortMode(el.value);
+            writeSortMode(sortMode);
+            paint();
+            return;
+        }
+        if (el.classList.contains('prj-tag-select')) {
+            tagFilter = String(el.value || '');
+            paint();
+        }
     }
 
     function onDoubleClick(e) {
         const picked = e.target && typeof e.target.closest === 'function' ? e.target.closest('.prj-card') : null;
         if (!picked || renaming) return;
+        // 卡片内部的按钮 / 标签 chip 不吃双击：双击 chip 的第一次点击已经改了筛选，
+        // 再顺手进「重命名」只会让人莫名其妙（双击卡片空白处才是重命名）。
+        if (e.target && typeof e.target.closest === 'function' && e.target.closest('button, input')) return;
         const row = findRow(picked.dataset.id);
         if (!row) return;
         renaming = { id: row.id, value: row.name };
@@ -1024,6 +1423,7 @@ export function mount(host, ctx) {
     panel.addEventListener('click', onClick);
     panel.addEventListener('keydown', onKey);
     panel.addEventListener('input', onInput);
+    panel.addEventListener('change', onChange);
     panel.addEventListener('dblclick', onDoubleClick);
     fileInput.addEventListener('change', onFileChange);
 
@@ -1053,6 +1453,7 @@ export function mount(host, ctx) {
             panel.removeEventListener('click', onClick);
             panel.removeEventListener('keydown', onKey);
             panel.removeEventListener('input', onInput);
+            panel.removeEventListener('change', onChange);
             panel.removeEventListener('dblclick', onDoubleClick);
             fileInput.removeEventListener('change', onFileChange);
             if (typeof off === 'function') {

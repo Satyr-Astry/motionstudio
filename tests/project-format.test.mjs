@@ -500,3 +500,146 @@ test('isLibraryPayload：只认 format + projects 数组，单项目文件与坏
     assert.equal(store.isProjectPayload(file), true);
     assert.equal(store.isProjectPayload(bundle), false);
 });
+
+/* ───────────── P2 项目库：收藏置顶 / 标签 / 排序 / 库统计（alpha.46） ───────────── */
+
+test('makeRecord 的 pinned / tags：默认 false / []，stripRecord 透传，老记录缺省', () => {
+    const { doc } = richDoc();
+    const rec = store.makeRecord({ name: '甲', doc });
+    assert.equal(rec.pinned, false);
+    assert.deepEqual(rec.tags, []);
+    const stripped = store.stripRecord(rec);
+    assert.equal(stripped.pinned, false);
+    assert.deepEqual(stripped.tags, []);
+
+    const pinned = store.makeRecord({ name: '乙', doc, pinned: true, tags: ['角色', '第一幕'] });
+    assert.equal(pinned.pinned, true);
+    assert.deepEqual(pinned.tags, ['角色', '第一幕']);
+    assert.equal(store.stripRecord(pinned).pinned, true);
+    assert.deepEqual(store.stripRecord(pinned).tags, ['角色', '第一幕']);
+
+    // 老记录（alpha.45 及以前）没有这两个字段：缺省的 false / [] 不是「读坏了」
+    const old = store.stripRecord({ id: 'old', name: '旧', savedAt: 1 });
+    assert.equal(old.pinned, false);
+    assert.deepEqual(old.tags, []);
+
+    // 只有布尔 true 才算置顶：手改文件里的 1 / 'true' 不该把卡片顶上去
+    assert.equal(store.makeRecord({ name: '丙', doc, pinned: 1 }).pinned, false);
+    assert.equal(store.makeRecord({ name: '丁', doc, pinned: 'true' }).pinned, false);
+    // stripRecord 对脏 pinned 同样收敛成 false（列表按 pinned 分组时不会出现「1 也算」）
+    assert.equal(store.stripRecord({ pinned: 1 }).pinned, false);
+    assert.equal(store.stripRecord({ pinned: true }).pinned, true);
+});
+
+test('tags 清洗：trim / 去空 / 去重 / 每个截到 24 字符 / 最多 8 个 / 丢弃非字符串', () => {
+    const { doc } = richDoc();
+    const messy = store.makeRecord({ name: '甲', doc, tags: ['  a  ', '', '   ', 'a', 'b', 3, null, {}, 'c'] });
+    assert.deepEqual(messy.tags, ['a', 'b', 'c'], 'trim、去空、去重、非字符串一律丢掉');
+
+    const nine = ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 't9'];
+    assert.deepEqual(store.makeRecord({ name: '乙', doc, tags: nine }).tags, nine.slice(0, 8), '最多 8 个');
+
+    const cut = store.makeRecord({ name: '丙', doc, tags: ['x'.repeat(30)] }).tags;
+    assert.deepEqual(cut, ['x'.repeat(24)], '超长标签截到 24，不是整条丢掉');
+    assert.equal(store.MAX_TAG_LEN, 24);
+    assert.equal(store.MAX_TAGS, 8);
+
+    // 截断后同名的两条要合并（去重放在截断之后）
+    const same = store.makeRecord({ name: '丁', doc, tags: ['y'.repeat(30), 'y'.repeat(40)] }).tags;
+    assert.deepEqual(same, ['y'.repeat(24)]);
+
+    // 非数组不是它接受的形状：收敛成 []，不抛异常
+    assert.deepEqual(store.makeRecord({ name: '戊', doc, tags: 'a,b' }).tags, []);
+    // normalizeTags 是同一份口径（io 的 parseTags 复用），单独导出
+    assert.deepEqual(store.normalizeTags([' 甲 ', '甲', '乙']), ['甲', '乙']);
+    assert.deepEqual(store.stripRecord({ tags: [' 甲 ', '甲', ''] }).tags, ['甲'], '列表视图也清洗');
+});
+
+test('updateProjectMeta：只改白名单字段，其它键忽略；记录不存在返回 null', async () => {
+    store.__resetMemory();
+    const { doc } = richDoc();
+    await store.putProject(
+        store.makeRecord({ id: 'meta-1', name: '原名', doc, file: 'C:/a.msp', pinned: false, tags: ['旧'] })
+    );
+    const before = await store.getProject('meta-1');
+
+    const out = await store.updateProjectMeta('meta-1', {
+        pinned: true,
+        tags: [' 新 ', '新', '二'],
+        name: 'patch 里改名', // 白名单外：忽略
+        file: 'C:/hack.msp', // 白名单外：忽略
+        project: { hacked: true },
+        bytes: 999,
+    });
+    assert.equal(out.pinned, true);
+    assert.deepEqual(out.tags, ['新', '二']);
+    assert.equal(out.name, '原名', '改名走 renameProject，不能从 patch 里改');
+    assert.equal(out.file, 'C:/a.msp', '绑定归属走 writeProjectFile，不能从 patch 里改');
+    assert.equal(out.bytes, before.bytes, 'bytes 由记录自己算，patch 不能改');
+
+    const full = await store.getProject('meta-1');
+    assert.equal(full.name, '原名');
+    assert.equal(full.file, 'C:/a.msp');
+    assert.equal(full.pinned, true);
+    assert.deepEqual(full.tags, ['新', '二']);
+    assert.ok(full.project && full.project.doc, '白名单更新不能把项目内容冲掉');
+
+    // 只给一个字段时，另一个保持原样
+    const only = await store.updateProjectMeta('meta-1', { pinned: false });
+    assert.equal(only.pinned, false);
+    assert.deepEqual(only.tags, ['新', '二']);
+
+    // 全是白名单外的键：返回当前视图、不改记录（空 patch 不产生写库）
+    const untouched = await store.updateProjectMeta('meta-1', { name: '又改' });
+    assert.equal(untouched.name, '原名');
+    assert.equal(untouched.pinned, false);
+
+    assert.equal(await store.updateProjectMeta('nope', { pinned: true }), null);
+    assert.equal(await store.updateProjectMeta('', { pinned: true }), null);
+    assert.equal(await store.updateProjectMeta(null, { pinned: true }), null);
+});
+
+test('sortProjects：pinned 永远最前，四种模式组内排序，同值稳定，不改入参', () => {
+    const rows = [
+        { id: 'a', name: 'B', savedAt: 100, openedAt: 50, bytes: 10, pinned: false },
+        { id: 'b', name: 'A', savedAt: 300, openedAt: 20, bytes: 5, pinned: true },
+        { id: 'c', name: 'C', savedAt: 100, openedAt: 90, bytes: 30, pinned: false },
+        { id: 'd', name: 'D', savedAt: 100, openedAt: 90, bytes: 30, pinned: false },
+        { id: 'e', name: 'E', savedAt: 200, openedAt: 10, bytes: 7, pinned: true },
+    ];
+    const ids = (list) => list.map((r) => r.id).join('');
+
+    // saved / opened：时间倒序；pinned 组内也按同一模式排（b 300/20 → e 200/10）
+    assert.equal(ids(store.sortProjects(rows, 'saved')), 'beacd');
+    assert.equal(ids(store.sortProjects(rows, 'opened')), 'becda');
+    // name：localeCompare；pinned 组内 A(E?) —— b=A、e=E 排前面，其余 B/C/D 按名字
+    assert.equal(ids(store.sortProjects(rows, 'name')), 'beacd');
+    // size：bytes 倒序；pinned 组内 e(7) 在 b(5) 前
+    assert.equal(ids(store.sortProjects(rows, 'size')), 'ebcda');
+    // 无效模式退回 saved（localStorage 里的旧值不该让列表变成随机顺序）
+    assert.equal(ids(store.sortProjects(rows, 'bogus')), 'beacd');
+    assert.equal(ids(store.sortProjects(rows, undefined)), 'beacd');
+
+    // 同值稳定：c/d 的 savedAt、openedAt、bytes 全相同，c 在入参里更靠前
+    assert.ok(ids(store.sortProjects(rows, 'saved')).includes('cd'), '同值时保持入参顺序');
+    assert.ok(ids(store.sortProjects(rows, 'size')).includes('cd'));
+    // 不修改入参（顺序与 pinned 原样）
+    assert.equal(ids(rows), 'abcde');
+    assert.notEqual(store.sortProjects(rows, 'saved'), rows, '返回的是新数组');
+    assert.equal(store.sortProjects(rows, 'saved')[0], rows[1], '元素仍是原记录引用（面板不用重建卡片）');
+
+    // 坏数据不炸：缺字段按 0、null 行保持原位置（稳定）、非数组返回 []
+    const messy = store.sortProjects([{ id: 'x' }, null, { id: 'y', savedAt: 5, pinned: true }], 'saved');
+    assert.equal(messy.map((r) => (r ? r.id : 'null')).join(','), 'y,x,null');
+    assert.deepEqual(store.sortProjects(null), []);
+    assert.deepEqual(store.sortProjects(undefined), []);
+});
+
+test('libraryTotals：count 只数记录，bytes 求和且坏数据按 0', () => {
+    assert.deepEqual(store.libraryTotals([]), { count: 0, bytes: 0 });
+    assert.deepEqual(store.libraryTotals(null), { count: 0, bytes: 0 });
+    assert.deepEqual(store.libraryTotals({ length: 3 }), { count: 0, bytes: 0 }, '不是数组就当空库');
+
+    const rows = [{ bytes: 10 }, { bytes: '20' }, { bytes: -5 }, { bytes: 'x' }, null, 5, 'bad'];
+    assert.deepEqual(store.libraryTotals(rows), { count: 4, bytes: 30 }, '非对象行不进 count，坏 bytes 按 0');
+});

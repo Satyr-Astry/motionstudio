@@ -36,8 +36,8 @@ test('projects 分片：两表键集合镜面，且每个键都真的并进了�
     const enKeys = Object.keys(enTable).sort();
     const zhKeys = Object.keys(zhTable).sort();
     assert.deepEqual(enKeys, zhKeys, 'en 与 zh-Hans 的键集合必须一一对应');
-    // 本片 = psd 解析器（61）+ 导出对话框（76）+ 项目库面板（83）= 220
-    assert.ok(enKeys.length >= 220, '这一片至少 220 条，实际 ' + enKeys.length);
+    // 本片 = psd 解析器（61）+ 导出对话框（76）+ 项目库面板（101）= 238
+    assert.ok(enKeys.length >= 238, '这一片至少 238 条，实际 ' + enKeys.length);
 
     const mergedEn = keysOf('en');
     const mergedZh = keysOf('zh-Hans');
@@ -219,6 +219,7 @@ test('zh-Hans 表：文案与词条化之前的原文逐字一致', () => {
         'projects.card.unsaved': '尚未保存',
         'projects.count.all': '共 {n} 个',
         'projects.count.matched': '匹配 {matched} / {n}',
+        'projects.count.size': '合计 {size}',
         'projects.create.done': '已新建项目',
         'projects.duplicate.done': '已复制为 {name}',
         'projects.empty': '还没有已保存的项目',
@@ -263,6 +264,9 @@ test('zh-Hans 表：文案与词条化之前的原文逐字一致', () => {
         'projects.offline.aria': '项目库（接口未就绪）',
         'projects.offline.text': '外壳没有注入 ctx.project，项目库暂不可用。',
         'projects.open.done': '已载入 {name}',
+        'projects.p2.notWired': '这个版本还没有接置顶与标签',
+        'projects.pin.off': '取消置顶',
+        'projects.pin.on': '置顶',
         'projects.remove.done': '已删除 {name}',
         'projects.rename.aria': '项目名称',
         'projects.rename.cancel': '取消',
@@ -278,6 +282,20 @@ test('zh-Hans 表：文案与词条化之前的原文逐字一致', () => {
         'projects.sheet.doneDir': '已导出精灵图 {n} 帧：{dir}',
         'projects.sheet.empty': '导出接口回了成功，但帧表是空的（0 帧）—— 检查时间范围与帧率',
         'projects.sheet.missing': '这个版本没有接导出精灵图（外壳没注入 exportSpritesheet）',
+        'projects.sort.aria': '项目排序',
+        'projects.sort.label': '排序',
+        'projects.sort.name': '名称',
+        'projects.sort.opened': '最近打开',
+        'projects.sort.saved': '最近保存',
+        'projects.sort.size': '大小',
+        'projects.tag.add': '添加标签',
+        'projects.tag.add.hint': '为这个项目添加或修改标签',
+        'projects.tag.filter.hint': '按标签「{tag}」筛选',
+        'projects.tag.more': '还有 {n} 个标签',
+        'projects.tag.updated': '已更新标签',
+        'projects.tagFilter.all': '全部标签',
+        'projects.tagFilter.aria': '按标签筛选项目',
+        'projects.tagFilter.label': '标签',
         'projects.thumb.empty': '无纹理',
         'projects.time.today': '今天 {hm}',
         'projects.unbind.done': '已解除文件绑定（项目仍留在库里）',

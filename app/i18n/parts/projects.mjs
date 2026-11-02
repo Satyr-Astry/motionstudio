@@ -173,6 +173,8 @@ export default {
         'projects.card.unsaved': 'Not saved yet',
         'projects.count.all': 'All {n} projects',
         'projects.count.matched': 'Matched {matched} / {n}',
+        // 库容量：有库时追加在计数行后面（`All 3 projects · Total 1.2 MB`）
+        'projects.count.size': 'Total {size}',
         'projects.create.done': 'Project created',
         'projects.duplicate.done': 'Copied as {name}',
         'projects.empty': 'No saved projects yet',
@@ -219,6 +221,11 @@ export default {
         'projects.offline.aria': 'Project library (interface not ready)',
         'projects.offline.text': 'The shell did not inject ctx.project, so the project library is unavailable.',
         'projects.open.done': 'Loaded {name}',
+        // 外壳还没接 P2 接口时的明确提示（半接线状态不许静默失败）
+        'projects.p2.notWired': 'This build has no pinning or tags yet',
+        // 收藏置顶：按钮 title / aria-label 用「置顶 / 取消置顶」；成功反馈由外壳顶栏 flash 负责
+        'projects.pin.off': 'Unpin',
+        'projects.pin.on': 'Pin to top',
         'projects.remove.done': 'Deleted {name}',
         'projects.rename.aria': 'Project name',
         'projects.rename.cancel': 'Cancel',
@@ -234,6 +241,23 @@ export default {
         'projects.sheet.doneDir': 'Exported {n} frames of sprite sheet to {dir}',
         'projects.sheet.empty': 'The export interface reported success but the frame table is empty (0 frames) — check the time range and frame rate',
         'projects.sheet.missing': 'Sprite sheet export is not wired in this version (the shell did not inject exportSpritesheet)',
+        // 排序下拉：label 是控件前的短词，四个选项与 SORT_MODES 一一对应（顺序即档位顺序）
+        'projects.sort.aria': 'Sort projects',
+        'projects.sort.label': 'Sort',
+        'projects.sort.name': 'Name',
+        'projects.sort.opened': 'Last opened',
+        'projects.sort.saved': 'Last saved',
+        'projects.sort.size': 'Size',
+        // 标签：卡片 chips（最多 3 个 + `+N`）、末尾 `+` 与点击 chip 的筛选提示
+        'projects.tag.add': 'Add tags',
+        'projects.tag.add.hint': 'Add or edit tags for this project',
+        'projects.tag.filter.hint': 'Filter by tag "{tag}"',
+        'projects.tag.more': '{n} more tags',
+        'projects.tag.updated': 'Tags updated',
+        // 顶部标签筛选下拉（第一项「全部标签」；库里没有标签时整条隐藏）
+        'projects.tagFilter.all': 'All tags',
+        'projects.tagFilter.aria': 'Filter projects by tag',
+        'projects.tagFilter.label': 'Tag',
         'projects.thumb.empty': 'No textures',
         'projects.time.today': 'Today {hm}',
         'projects.unbind.done': 'File binding removed (the project stays in the library)',
@@ -398,6 +422,8 @@ export default {
         'projects.card.unsaved': '尚未保存',
         'projects.count.all': '共 {n} 个',
         'projects.count.matched': '匹配 {matched} / {n}',
+        // 库容量：有库时追加在计数行后面（「共 3 个 · 合计 1.2 MB」）
+        'projects.count.size': '合计 {size}',
         'projects.create.done': '已新建项目',
         'projects.duplicate.done': '已复制为 {name}',
         'projects.empty': '还没有已保存的项目',
@@ -444,6 +470,11 @@ export default {
         'projects.offline.aria': '项目库（接口未就绪）',
         'projects.offline.text': '外壳没有注入 ctx.project，项目库暂不可用。',
         'projects.open.done': '已载入 {name}',
+        // 外壳还没接 P2 接口时的明确提示（半接线状态不许静默失败）
+        'projects.p2.notWired': '这个版本还没有接置顶与标签',
+        // 收藏置顶：按钮 title / aria-label 用「置顶 / 取消置顶」；成功反馈由外壳顶栏 flash 负责
+        'projects.pin.off': '取消置顶',
+        'projects.pin.on': '置顶',
         'projects.remove.done': '已删除 {name}',
         'projects.rename.aria': '项目名称',
         'projects.rename.cancel': '取消',
@@ -459,6 +490,23 @@ export default {
         'projects.sheet.doneDir': '已导出精灵图 {n} 帧：{dir}',
         'projects.sheet.empty': '导出接口回了成功，但帧表是空的（0 帧）—— 检查时间范围与帧率',
         'projects.sheet.missing': '这个版本没有接导出精灵图（外壳没注入 exportSpritesheet）',
+        // 排序下拉：label 是控件前的短词，四个选项与 SORT_MODES 一一对应（顺序即档位顺序）
+        'projects.sort.aria': '项目排序',
+        'projects.sort.label': '排序',
+        'projects.sort.name': '名称',
+        'projects.sort.opened': '最近打开',
+        'projects.sort.saved': '最近保存',
+        'projects.sort.size': '大小',
+        // 标签：卡片 chips（最多 3 个 + `+N`）、末尾 `+` 与点击 chip 的筛选提示
+        'projects.tag.add': '添加标签',
+        'projects.tag.add.hint': '为这个项目添加或修改标签',
+        'projects.tag.filter.hint': '按标签「{tag}」筛选',
+        'projects.tag.more': '还有 {n} 个标签',
+        'projects.tag.updated': '已更新标签',
+        // 顶部标签筛选下拉（第一项「全部标签」；库里没有标签时整条隐藏）
+        'projects.tagFilter.all': '全部标签',
+        'projects.tagFilter.aria': '按标签筛选项目',
+        'projects.tagFilter.label': '标签',
         'projects.thumb.empty': '无纹理',
         'projects.time.today': '今天 {hm}',
         'projects.unbind.done': '已解除文件绑定（项目仍留在库里）',
