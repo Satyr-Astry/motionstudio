@@ -224,6 +224,9 @@ export default {
         'shell.clip.exportCanceled': '{msg}; the file export was canceled too, the current frame was not saved',
         'shell.clip.copied': 'Current frame copied to the clipboard',
         'shell.save.canceled': 'Save canceled',
+        'shell.bone.fromObject.done': 'Created bone {name}',
+        'shell.bone.fromObject.noObject': 'Select an object first: the bone is built from its geometry',
+        'shell.bone.fromObject.noSize': 'The selected object has no measurable artwork (no texture pixels), so no bone can be built from it',
         // 三种结局必须可分辨：只入库 / 入库+回写文件 / 库写成功但文件没更新
         'shell.save.doneLibrary': 'Saved {label} to the project library (no .msp bound yet - use Save As to write a file)',
         'shell.save.doneWithFile': 'Saved {label} · wrote back to {file}',
@@ -565,6 +568,9 @@ export default {
         'shell.clip.exportCanceled': '{msg}；导出文件也取消了，当前帧没存下来',
         'shell.clip.copied': '已复制当前帧到剪贴板',
         'shell.save.canceled': '已取消保存',
+        'shell.bone.fromObject.done': '已建骨骼 {name}',
+        'shell.bone.fromObject.noObject': '先选中一个对象：骨骼要按它的几何来建',
+        'shell.bone.fromObject.noSize': '选中的对象没有可测量的内容（没有纹理像素），建不出骨骼',
         // 三种结局必须可分辨：只入库 / 入库+回写文件 / 库写成功但文件没更新
         'shell.save.doneLibrary': '已保存 {label} 到项目库（尚未绑定 .msp 文件 —— 要落盘请用「另存为」）',
         'shell.save.doneWithFile': '已保存 {label} · 已回写文件 {file}',

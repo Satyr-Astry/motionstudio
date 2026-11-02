@@ -633,6 +633,13 @@ export function mount(el, ctx) {
 
             const cel = celAt(layer, t);
 
+            // 骨骼行带自己的颜色标识（kind + 骨骼自定义色）：列表里一眼能分出「骨」与「皮」
+            const rowKind = layer.kind || 'paint';
+            rec.row.dataset.kind = rowKind;
+            rec.row.classList.toggle('is-bone', rowKind === 'bone');
+            if (rowKind === 'bone' && layer.bone && layer.bone.color && rec.row.style && typeof rec.row.style.setProperty === 'function') {
+                rec.row.style.setProperty('--bone', layer.bone.color);
+            }
             rec.row.classList.toggle('is-active', layer.id === active);
             // .is-sel 覆盖单选的 sel 与多选集合两者（多选集合在内存层，由 ctx 提供）
             rec.row.classList.toggle('is-sel', layer.id === sel || selIds().includes(layer.id));

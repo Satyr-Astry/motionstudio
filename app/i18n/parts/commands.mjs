@@ -50,6 +50,8 @@ export default {
 
         // 对象
         'cmd.object.addBone': 'Add bone',
+        'cmd.object.boneFromObject': 'Create bone from selected object',
+        'cmd.object.boneFromObject.hint': "Creates a bone in the same layer, matched to the selected object's position, rotation, scale and width (one undo step)",
         'cmd.object.bindSkin': 'Bind to selected bones',
         'cmd.object.unbindSkin': 'Unbind skin',
 
@@ -156,6 +158,8 @@ export default {
 
         // 对象
         'cmd.object.addBone': '新建骨骼',
+        'cmd.object.boneFromObject': '从选中对象建骨骼',
+        'cmd.object.boneFromObject.hint': '在选中对象同层建一根骨骼，位置/旋转/缩放与对象对齐、长度等于对象宽度（一步撤销）',
         'cmd.object.bindSkin': '绑定到选中骨骼',
         'cmd.object.unbindSkin': '解除蒙皮绑定',
 

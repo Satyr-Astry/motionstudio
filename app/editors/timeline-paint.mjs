@@ -452,6 +452,13 @@ export function rebuildRows(view, doc) {
         const row = document.createElement('div');
         row.className = 'tline-row';
         row.dataset.layer = obj.id;
+        // 骨骼行带自己的颜色标识（与层级面板同一口径）
+        const rowKind = obj.kind || 'paint';
+        row.dataset.kind = rowKind;
+        row.classList.toggle('is-bone', rowKind === 'bone');
+        if (rowKind === 'bone' && obj.bone && obj.bone.color && row.style && typeof row.style.setProperty === 'function') {
+            row.style.setProperty('--bone', obj.bone.color);
+        }
         row.style.height = ROW_H + 'px';
 
         const label = document.createElement('div');

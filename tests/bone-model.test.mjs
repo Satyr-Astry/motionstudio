@@ -13,6 +13,7 @@ import {
     makeObject,
     createDoc,
     objectsOf,
+    boneFromObjectSpec,
 } from '../app/core/doc-model.mjs';
 import { elementSize, anchorPoint, hitTest } from '../app/core/element.mjs';
 import { docToFile, jsonToDoc, VERSION } from '../app/shell/project-store.mjs';
@@ -259,3 +260,53 @@ test('骨骼放行不影响空手绘对象：没画任何东西的手绘对象�
     const doc = docOf([empty]);
     assert.equal(hitTest(doc, 0, 20, 20), null);
 });
+
+/* ─────── 从选中对象建骨骼（boneFromObjectSpec，命令面板的纯函数部分） ─────── */
+
+test('boneFromObjectSpec：与对象同父，锚点根部，名字是用户数据（英文）', () => {
+    const { boneFromObjectSpec, createDoc: mkDoc, makeObject: mkObj } = docModel();
+    const img = { width: 800, height: 600 };
+    const parent = mkObj({ id: 'p1', name: 'Rig' });
+    const obj = mkObj({ id: 'o1', name: 'Left Arm', parentId: 'p1', cels: [{ at: 0, image: img }] });
+    const spec = boneFromObjectSpec(obj);
+    assert.ok(spec, '有尺寸的对象应能建骨');
+    assert.equal(spec.kind, 'bone');
+    assert.equal(spec.parentId, 'p1', '骨骼必须与对象同父（兄弟），不能当它的子级');
+    assert.deepEqual(spec.anchor, { x: 0, y: 0.5 }, '骨骼旋转轴在根部中点');
+    assert.equal(spec.name, 'Left Arm bone', '名字进层级/存档，是用户数据，默认英文');
+    assert.equal(spec.bone.len, 800, '未缩放时长度 = 对象宽度');
+    assert.equal(spec.bone.width, BONE_DEFAULTS.width);
+    assert.equal(spec.bone.color, BONE_DEFAULTS.color);
+});
+
+test('boneFromObjectSpec：缩放过的对象按 scaleX 除回去（骨头视觉长度仍等于对象宽度）', () => {
+    const { boneFromObjectSpec } = docModel();
+    const img = { width: 400, height: 100 };
+    const obj = makeObject({ id: 'o2', name: 'Arm', cels: [{ at: 0, image: img }], transform: { keys: [{ t: 0, state: { scaleX: 2, scaleY: 2 } }] } });
+    const spec = boneFromObjectSpec(obj);
+    assert.equal(spec.bone.len, 200, '400 宽 ×2 缩放 → 骨头 len 必须是 200（再乘 scaleX 才是 400）');
+});
+
+test('boneFromObjectSpec：变换整份深拷贝（之后该对象再打帧不会带着骨头走）', () => {
+    const { boneFromObjectSpec } = docModel();
+    const img = { width: 100, height: 50 };
+    const obj = makeObject({ id: 'o3', name: 'Hand', cels: [{ at: 0, image: img }], transform: { keys: [{ t: 0, state: { x: 10, y: 20 } }, { t: 1, state: { x: 30 } }] } });
+    const spec = boneFromObjectSpec(obj);
+    assert.equal(spec.transform.keys.length, 2, '关键帧要跟着过来（骨头建好即对齐）');
+    assert.notEqual(spec.transform.keys[0].state, obj.transform.keys[0].state, 'state 必须是拷贝');
+    spec.transform.keys[0].state.x = 999;
+    assert.equal(obj.transform.keys[0].state.x, 10, '改规格不能影响原对象');
+});
+
+test('boneFromObjectSpec：没有对象 / 没尺寸时返回 null（命令层负责提示）', () => {
+    const { boneFromObjectSpec, makeObject: mkObj } = docModel();
+    assert.equal(boneFromObjectSpec(null), null);
+    assert.equal(boneFromObjectSpec(undefined), null);
+    assert.equal(boneFromObjectSpec({ id: 'x', name: 'Empty' }), null, '空对象没有可测量内容');
+    assert.equal(boneFromObjectSpec(mkObj({ id: 'b', kind: 'bone' })), null, '骨头没有纹理 → 无量宽度可依');
+});
+
+/** 本文件已有的 doc-model/替身工具做一层薄封装（避免重复造 fakeImage）。 */
+function docModel() {
+    return { boneFromObjectSpec, createDoc, makeObject, BONE_DEFAULTS, BONE_ANCHOR };
+}

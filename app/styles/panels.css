@@ -929,6 +929,12 @@ input.lyr-rename {
     border-color: #fff; background: #fff; box-shadow: 0 0 0 2px rgba(74, 125, 255, 0.55);
 }
 
+
+/* 骨骼行：与普通对象区分（左侧 2px 用骨骼自身颜色，box-shadow 不占布局） */
+.tline-row.is-bone .tline-label,
+.lyr-row.is-bone {
+    box-shadow: inset 2px 0 0 var(--bone, #7d8fa8);
+}
 /* 缓动为 hold 的关键帧画成方块，便于一眼分辨 */
 .tline-kf.is-hold {
     background: var(--ink-dim); border-radius: var(--r-0);
@@ -1168,7 +1174,9 @@ input.lyr-rename {
 /* 记号与名称不许被压成竖排（弹性尺寸不属于几何，允许写在 CSS 里） */
 .tline-legend-mark { flex: 0 0 auto; font-size: 10px; line-height: 1; }
 .tline-legend-mark.is-cel { color: var(--ok); }
-.tline-legend-mark.is-kf { color: var(--accent-ink); }\n/* B1：通道键——空心、按通道上色；图例这里用中性青表示「不是共用关键帧」 */\n.tline-legend-mark.is-ch { color: #3aa8a0; }
+.tline-legend-mark.is-kf { color: var(--accent-ink); }
+/* B1：通道键——空心、按通道上色；图例这里用中性青表示「不是共用关键帧」 */
+.tline-legend-mark.is-ch { color: #3aa8a0; }
 
 .tline-legend-name { flex: 0 0 auto; white-space: nowrap; color: var(--ink); font-weight: 600; }
 

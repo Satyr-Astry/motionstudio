@@ -173,3 +173,32 @@ test('骨骼段的四个词条中英都齐，且 en 侧不是中文', () => {
     assert.deepEqual(en, ['Bone', 'Length', 'Thickness', 'Bone colour', 'Bone']);
     for (const text of en) assert.ok(!/[\u4e00-\u9fff]/.test(text), `en 侧出现中文：${text}`);
 });
+
+/* ─────── 从选中对象建骨骼（命令 + 骨骼行视觉） ─────── */
+
+test('命令：object.bone-from-object 已注册且真的走 addObject + setDoc + 选中新骨', () => {
+    const src = readFileSync(new URL('../app/shell/app.mjs', import.meta.url), 'utf8');
+    const build = src.slice(src.indexOf('function buildCommands()'), src.indexOf('function onKeyDown'));
+    assert.match(build, /id: 'object\.bone-from-object'/, '命令面板缺「从选中对象建骨骼」');
+    assert.match(build, /run: \(\) => addBoneFromObject\(\)/);
+    assert.match(src, /function addBoneFromObject\(\)/);
+    const fn = src.slice(src.indexOf('function addBoneFromObject'), src.indexOf('function bindSkinToSelected'));
+    assert.match(fn, /boneFromObjectSpec\(sel\)/, '规格必须来自 core 的纯函数（几何口径可测）');
+    assert.match(fn, /addObject\(doc, spec\)/);
+    assert.match(fn, /setDoc\(\(\) => next, \{ label: t\('cmd\.object\.boneFromObject'\) \}\)/, '必须一步撤销且带命令名');
+    assert.match(fn, /setSelection\(\{ id: created\.id \}\)/, '建完要选中新骨骼（属性面板骨骼段随即出现）');
+});
+
+test('骨骼行视觉：层级面板与时间轴都按 data-kind / is-bone / --bone 上色', () => {
+    const layers = readFileSync(new URL('../app/editors/layers.mjs', import.meta.url), 'utf8');
+    const timeline = readFileSync(new URL('../app/editors/timeline-paint.mjs', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../app/styles/panels.css', import.meta.url), 'utf8');
+    for (const [name, src] of [['layers', layers], ['timeline', timeline]]) {
+        assert.match(src, /\.classList\.toggle\('is-bone', rowKind === 'bone'\)/, name + ' 缺骨骼行样式类');
+        assert.match(src, /row\.dataset\.kind = rowKind/, name + ' 缺 data-kind（测试/样式可挂）');
+        assert.match(src, /setProperty\('--bone', layer\.bone\.color\)|setProperty\('--bone', obj\.bone\.color\)/, name + ' 没把骨骼颜色喂给行');
+    }
+    assert.match(css, /\.tline-row\.is-bone \.tline-label,/, '缺骨骼时间轴行样式');
+    assert.match(css, /\.lyr-row\.is-bone/, '缺骨骼层级行样式');
+    assert.match(css, /inset 2px 0 0 var\(--bone, #7d8fa8\)/, '骨骼行左侧色条必须用骨骼自身颜色');
+});

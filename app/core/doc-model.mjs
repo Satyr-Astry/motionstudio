@@ -378,6 +378,50 @@ export function objectSize(obj) {
 }
 
 /**
+ * 「从选中对象建骨骼」的规格（纯函数，命令面板「从选中对象建骨骼」用）。
+ *
+ * 目标：用户选中一个角色部件、跑一次命令，就在**同层**（同父，兄弟节点）得到一根
+ * 与它对齐的骨头 —— 位置/旋转/缩放沿用对象当前变换，长度等于对象的视觉宽度。
+ * 细节：
+ *   - 骨骼按自己的 `scaleX` 缩放，所以 `len = 对象宽 / |scaleX|`，否则缩放过的对象会得到
+ *     一根明显更长/更短的骨头；
+ *   - 锚点用骨骼根部中点（`BONE_ANCHOR`），旋转轴在根部，符合骨链直觉；
+ *   - 名字是**用户数据**（进层级、进 `.msp`），默认英文 `<对象名> bone`，不跟界面语言；
+ *   - 变换整份深拷贝（含 `channels`），骨骼刚建出来就与对象重合，用户只需拖目标或打帧。
+ *
+ * @param {object|null} obj 选中的对象
+ * @returns {object|null} 可直接喂给 `addObject` 的规格；对象不存在 / 没尺寸时 null
+ */
+export function boneFromObjectSpec(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    const size = objectSize(obj);
+    if (!size || !(size.w > 0)) return null;
+    const trk = obj.transform && Array.isArray(obj.transform.keys) ? obj.transform : null;
+    const st = trk && trk.keys.length && trk.keys[0].state ? trk.keys[0].state : {};
+    const sxRaw = Number(st.scaleX);
+    const sx = Number.isFinite(sxRaw) && sxRaw !== 0 ? Math.abs(sxRaw) : 1;
+    const len = Math.max(1, Math.round((size.w / sx) * 100) / 100);
+    const base = String(obj.name == null ? '' : obj.name).trim() || 'Object';
+    // 变换里只有数字/字符串/嵌套对象（没有位图），JSON 拷贝足够且不会共享引用
+    let transform;
+    if (trk) {
+        try {
+            transform = JSON.parse(JSON.stringify(trk));
+        } catch (err) {
+            transform = undefined;
+        }
+    }
+    return {
+        kind: 'bone',
+        name: base + ' bone',
+        parentId: obj.parentId || undefined,
+        anchor: Object.assign({}, BONE_ANCHOR),
+        bone: { len: len, width: BONE_DEFAULTS.width, color: BONE_DEFAULTS.color },
+        transform: transform,
+    };
+}
+
+/**
  * 改对象自己的画布尺寸：所有纹理位图整张拉伸（等同 Photoshop 的「图像大小」），
  * 所以视觉形状不变、只是分辨率变了。位图怎么造交给调用方注入的 makeCanvas，
  * doc-model 自己不碰 DOM。

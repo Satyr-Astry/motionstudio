@@ -72,7 +72,7 @@ import { installLayerKeys } from '../editors/layer-keys.mjs';
 import { loadLayout } from './persist.mjs';
 import * as canvasEditor from '../editors/canvas.mjs';
 import * as DS from './doc-state.mjs';
-import { DEFAULT_OBJECT_NAME, nextObjectName } from '../core/doc-model.mjs';
+import { DEFAULT_OBJECT_NAME, nextObjectName, boneFromObjectSpec } from '../core/doc-model.mjs';
 
 import {
     buildViews,
@@ -1286,6 +1286,37 @@ function addBoneObject() {
 }
 
 /**
+ * 「从选中对象建骨骼」：与选中对象**同父**建一根骨头，位置/旋转/缩放沿用对象当前变换，
+ * 长度 = 对象视觉宽度（见 `boneFromObjectSpec`）。命令面板入口，一步撤销。
+ *
+ * 与 `addBoneObject`（裸建一根）分开是因为问题不同：那个回答「我要在空场景里加骨」，
+ * 这个回答「我已经有一个手臂/腿的对象，想直接在原地得到对应的骨头」。
+ */
+function addBoneFromObject() {
+    const doc = state.doc;
+    if (!doc) return null;
+    const curId = (state.selection && state.selection.id) || state.activeLayerId || null;
+    const sel = curId ? objectById(doc, curId) : null;
+    if (!sel) {
+        flash(t('shell.bone.fromObject.noObject'), 'error');
+        return null;
+    }
+    const spec = boneFromObjectSpec(sel);
+    if (!spec) {
+        flash(t('shell.bone.fromObject.noSize'), 'error');
+        return null;
+    }
+    const next = addObject(doc, spec);
+    const list = objectsOf(next);
+    const created = list[list.length - 1];
+    if (!created) return null;
+    setDoc(() => next, { label: t('cmd.object.boneFromObject') });
+    ctx.setSelection({ id: created.id });
+    flash(t('shell.bone.fromObject.done', { name: created.name }));
+    return created.id;
+}
+
+/**
  * 蒙皮 P2-B：把「当前对象」绑到「被选中的骨骼」上。
  *
  * 选择模型（读 app.mjs 的 state 得到）：画布单选是 `state.selection.id`，多选是
@@ -1546,6 +1577,12 @@ function buildCommands() {
             id: 'object.add-bone', keys: '', run: () => addBoneObject(),
             get title() { return t('cmd.object.addBone'); },
             get hint() { return t('cmd.object.addBone.hint'); },
+            get group() { return t('cmd.group.edit'); },
+        },
+        {
+            id: 'object.bone-from-object', keys: '', run: () => addBoneFromObject(),
+            get title() { return t('cmd.object.boneFromObject'); },
+            get hint() { return t('cmd.object.boneFromObject.hint'); },
             get group() { return t('cmd.group.edit'); },
         },
         {

@@ -71,6 +71,7 @@ const ID_CONTRACT = [
     'file.open',
     'file.save',
     'object.add-bone',
+    'object.bone-from-object',
     'object.bind-skin',
     'object.unbind-skin',
     'play.first',
