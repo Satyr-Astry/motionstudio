@@ -1,3 +1,37 @@
+## v0.5.0-alpha.35 — 2026-11-02 · 分层第一次有了机器守卫
+
+`CONTRACT.md` 早写了 `app/` 的分层（core / paint / editors / shell / i18n），但**没有一行代码检查它**。分层腐化不会红、不会崩：某天有人在 `core/` 里 `import` 了 DOM，「core 是纯逻辑、能被 Node 单测」这条前提就悄悄作废了 —— 而 `npm test` 依然全绿。
+
+这一版加了第四道静态闸 `_check-layers.mjs`，并接进 `npm run check`。
+
+### 规则（当前实测 0 违规）
+
+| 导入方 | 允许 |
+|---|---|
+| `core/` | `core/`、`i18n/` + **一条白名单**（`evaluator → paint/effects`，纯滤镜函数，反过来会成环） |
+| `paint/` | `core/`、`paint/`、`i18n/` |
+| `i18n/` | 只有自己（叶子层） |
+| `editors/` | `core/`、`paint/`、`editors/`、`i18n/` + 两条白名单（项目库读存档、偏好面板读 doc-state） |
+| `shell/` | 全部（装配层） |
+
+**为什么 `core → i18n` 是允许的**：`i18n` 是叶子层，只 import 自己的词条表；本地化 P2/P3 之后 `timegraph.describeTime`、`psd` 的错误串、`brush` 的笔名都在词条表里。硬要 core 不碰 i18n，只能把文案重新写死回 core —— 那是倒退。
+
+### 白名单本身也被检查
+
+如果某条白名单已经用不上（对应的 import 不在了），脚本会报「多余的白名单」并 exit 1。否则白名单只会越攒越多，最后没人知道它还挡着什么。当前三条白名单全部命中。
+
+### 它抓得住什么
+
+`tests/layer-gate.test.mjs`（8 条）用**合成边**做负对照：`core→shell`、`core→editors`、`paint→editors`、`i18n→core`、`editors→shell` 五类越界都会被判违规；`editors→shell` 只对白名单里的那两个文件放行，换个文件就红。另有一条「真跑一次必须 exit 0」与一条「core/paint 的日内边里不许出现指向上层的 import」。
+
+### 数字变化
+
+`npm run check` 从三道门变成四道；语法门新增 `_check-layers.mjs`（111/111：106 个 `app/` 模块 + 5 个根工具脚本）。
+
+### 验证
+
+`npm test` **1577 / 1575 pass / 2 skipped / 0 fail**（114 个测试文件）；`npm run check` 四道全绿（静态 106 模块 0/0/0、语法 111/111、分层 0 违规、本地化 153 条缺口 0）；`npm run smoke` 15/15、0 条 console 错误。
+
 ## v0.5.0-alpha.34 — 2026-11-02 · 应用内帮助讲清楚了骨骼与 IK
 
 `alpha.20`–`alpha.30` 把骨骼、蒙皮、刷权重、IK 一路做完了，但**应用内的「帮助」面板一句都没提**：概念段只讲纹理 / 关键帧 / 时间通道。用户按 `?` 或开帮助面板，会以为这软件只有画与关键帧 —— 功能存在、入口在命令面板里，却没人告诉他。
