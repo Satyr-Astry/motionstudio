@@ -17,7 +17,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 import * as ipc from '../app/shell/ipc.mjs';
 import { actVerdict } from '../app/editors/projects.mjs';
@@ -424,7 +424,11 @@ test('源码守卫：saveProject 的回写分支与自动保存的回写路都�
     assert.match(auto, /if \(file && !back\.ok\) flash\(saveFlash\(/, '自动保存回写失败必须用错误档说出来');
 });
 
-test('源码守卫：预加载与主进程都接上了无对话框的回写通道', () => {
+test('源码守卫：预加载与主进程都接上了无对话框的回写通道', {
+    // 拆仓后 preload.js / main.js 在 motionstudio-desktop 壳仓 —— 这条守卫跟着壳走
+    // （壳仓 `test/channels.test.mjs` 里有等价断言）；核仓形态下只验证自己这一半。
+    skip: !existsSync(new URL('../preload.js', import.meta.url)) && '核仓形态：壳文件已迁到 motionstudio-desktop',
+}, () => {
     const ipcSrc = read('../app/shell/ipc.mjs');
     assert.match(ipcSrc, /call\('saveProjectTo', \[target, payload\]\)/, 'ipc 包装没接通道');
     assert.match(ipcSrc, /八个通道/, '通道数注释要与实际一致');

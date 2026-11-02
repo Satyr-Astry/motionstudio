@@ -101,5 +101,9 @@ test('真实仓库：模块数 / 测试文件数与文件系统一致，且文�
 test('ROOT_TOOLS 清单与语法门保持同一份（别只在一处加脚本）', () => {
     assert.ok(ROOT_TOOLS.includes('tools-serve.mjs'));
     assert.ok(ROOT_TOOLS.includes('tools-smoke.cjs'));
-    assert.ok(ROOT_TOOLS.length >= 5, '根工具至少 5 个，实际 ' + ROOT_TOOLS.length);
+    assert.ok(ROOT_TOOLS.includes('_check-layers.mjs'));
+    assert.ok(ROOT_TOOLS.includes('_check-docs.mjs'));
+    // 拆仓后壳侧工具（tools-split / 壳通道模板）已迁走，核仓只剩这四个根工具；
+    // 这条断言防的是「只在一处加脚本」造成的语法门漏检，不是「越多越好」。
+    assert.equal(ROOT_TOOLS.length, 4, '核仓根工具应为 4 个（serve / smoke / layers / docs），实际 ' + ROOT_TOOLS.length);
 });

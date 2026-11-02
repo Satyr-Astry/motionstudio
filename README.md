@@ -73,23 +73,32 @@ The payoff is direct: paint one drawing at 0.2s and the next at 3s without inser
 
 ## Running it
 
-### Desktop (current, verified platform)
+This repository is the **core** (renderer + tests + docs + quality gates). It runs as a plain static site; the Electron desktop shell lives in a separate repository.
 
-Node 20+ is only needed to launch Electron — the app itself has zero third-party runtime dependencies.
+### Browser (this repository)
+
+`app/` **is** the site: zero build step, zero third-party runtime dependencies.
 
 ```bash
 git clone https://github.com/Satyr-Astry/motionstudio.git
 cd motionstudio
-npm install        # Electron is the only dev dependency
+npm run serve        # node tools-serve.mjs → http://127.0.0.1:43117
+```
+
+Or point any static server at `app/` (`.mjs` must be served as JavaScript; `file://` will not work because of module CORS). See [Browser](#browser) for the three requirements.
+
+### Desktop (separate repository)
+
+The Electron shell — native file dialogs, exact-path export, NSIS packaging — is [`motionstudio-desktop`](https://github.com/Satyr-Astry/motionstudio-desktop), which mounts this repository at `core/` as a git submodule:
+
+```bash
+git clone --recursive https://github.com/Satyr-Astry/motionstudio-desktop.git
+cd motionstudio-desktop
+npm install
 npm start
 ```
 
-Electron starts a local static server (43117 by default, next free port otherwise) and loads the renderer from it; `Ctrl+R` reloads after a source edit.
-
-> **npm 11+** does not run dependency install scripts by default. If startup reports
-> `Electron failed to install correctly`, run `node node_modules/electron/install.js`.
->
-> You can also skip `npm install` entirely: `npx --yes electron .`
+Postinstall does not always run (npm 11+); if `core/` is empty run `git submodule update --init --recursive`. Desktop releases are published from that repository.
 
 ### Browser
 
@@ -99,7 +108,7 @@ Exactly one module touches desktop capability — [app/shell/ipc.mjs](app/shell/
 
 ### Repository split
 
-The desktop **shell** (`main.js`, `preload.js`, the Electron packaging scripts) is being moved to its own repository, which will be where desktop releases are published. This repository becomes the **core**: the renderer (`app/`), tests, docs and the quality gates. The contract between the two halves is the eight IPC channel names — see [Core concepts](#core-concepts). Until the split lands, both live here.
+This repository is the **core**: the renderer (`app/`), tests, docs and the quality gates. The desktop **shell** (`main.js`, `preload.js`, IPC, Electron packaging) lives in [`motionstudio-desktop`](https://github.com/Satyr-Astry/motionstudio-desktop) and mounts this repository at `core/` as a git submodule. The contract between the two halves is the eight IPC channel names — see [Core concepts](#core-concepts); the desktop repository's `test/channels.test.mjs` pins it in both directions. Desktop releases are published from the shell repository; the web build is this repository deployed as a static site.
 
 ## Three workspaces
 
@@ -121,7 +130,7 @@ The paint board has its own canvas and camera — that is the precondition for "
 - **Drawing / exposure** — a keyframe's `drawing` id selects which texture shows from that moment on. `null` is an explicit blank; a missing field inherits the previous one.
 - **Keyframe** — `{ t, state, ease, h1, h2, drawing }`.
 - **Channel** — one track per animatable quantity, each with its own easing. Effect parameters are channels too (`fx.<effectId>.<param>`).
-- **IPC bridge** — the eight channels the renderer may call: `exportFrames`, `exportSheet`, `saveProject`, `saveProjectTo` (write back without a dialog), `loadProject`, `saveBinary`, `importFile`, `openFolder`. The function name in `ipc.mjs`, the method name in `preload.js` and the channel string in `main.js` must stay identical; a contract test for this is on the list when the split happens.
+- **IPC bridge** — the eight channels the renderer may call: `exportFrames`, `exportSheet`, `saveProject`, `saveProjectTo` (write back without a dialog), `loadProject`, `saveBinary`, `importFile`, `openFolder`. The function name in `ipc.mjs`, the method name in `preload.js` and the channel string in `main.js` must stay identical; the desktop shell repository's `test/channels.test.mjs` pins that contract against this repository's `app/shell/ipc.mjs`.
 
 ## Shortcuts
 
@@ -165,9 +174,7 @@ Reading accepts v1 / v2 / v3 / v4 and legacy `.json` projects; a file whose `for
 ## Repository layout
 
 ```
-main.js              desktop shell: local static server + window + file-dialog IPC
-preload.js           contextBridge, minimal surface
-app/
+app/                 ← this is the site root (static, no build step)
   core/              pure logic, no DOM: doc-model / cel / transform / evaluator /
                      timegraph / timebase / lattice / element / history / psd
   paint/             drawing & compositing: engine (stage) / stroke / brush /
@@ -176,11 +183,13 @@ app/
                      curve / palette / properties / projects / help / toolbar
   shell/             shell glue: app (assembly) / view-host (area tree) /
                      doc-state / project-io / project-store / spritesheet /
-                     video-plan / ipc
+                     video-plan / ipc (the only bridge to the desktop shell)
   styles/            design tokens and stylesheets
 docs/                contracts (CONTRACT-v*.md), ledgers, guides
 tests/               node:test unit suites
 ```
+
+The desktop shell (`main.js`, `preload.js`, packaging) is **not** in this repository — see [motionstudio-desktop](https://github.com/Satyr-Astry/motionstudio-desktop).
 
 ## Tests and quality gates
 
@@ -198,7 +207,7 @@ npm run smoke          # boots app/ in a shell-less window and mounts every edit
 
 `npm run smoke` serves `app/` from a throwaway HTTP server and loads it in an Electron window **with no preload and no nodeIntegration** — i.e. exactly what a browser gets. It then switches a panel through every editor in the registry and flips the language both ways, collecting any console error along the way. It is also the browser-mode acceptance test: `window.motionAPI` must be absent and the web bridge must be in place.
 
-Current baseline: **1689 tests / 1687 pass / 2 skipped / 0 fail** across 121 test files; static check scans 105 modules with 0 leftovers, 0 broken imports and 0 unused imports; syntax check 111/111 (105 app/ modules + 6 root tool scripts); layering check reports 0 cross-layer imports; i18n check reports 129 strings still outside the dictionary and 0 structural gaps; smoke mounts **15/15** editors with 0 console errors. Run `npm test`, `npm run check` and `npm run smoke` before handing work over.
+Current baseline: **1684 tests / 1677 pass / 7 skipped / 0 fail** across 120 test files; static check scans 105 modules with 0 leftovers, 0 broken imports and 0 unused imports; syntax check 109/109 (105 app/ modules + 4 root tool scripts); layering check reports 0 cross-layer imports; i18n check reports 129 strings still outside the dictionary and 0 structural gaps; smoke mounts **15/15** editors with 0 console errors. Run `npm test`, `npm run check` and `npm run smoke` before handing work over.
 
 ## Design principles
 

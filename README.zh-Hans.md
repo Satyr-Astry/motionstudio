@@ -73,23 +73,32 @@ MotionStudio 面向**独立游戏的 2D 美术资产**与**短动效**，不做�
 
 ## 运行方式
 
-### 桌面端（当前验证过的形态）
+本仓是**核**（渲染层 + 测试 + 文档 + 质量门），本身就是一个静态站点；Electron 桌面壳在独立仓库。
 
-Node 20+ 只用来启动 Electron，应用本身零第三方运行时依赖。
+### 浏览器（本仓）
+
+`app/` **就是**站点：零构建步骤、零第三方运行时依赖。
 
 ```bash
 git clone https://github.com/Satyr-Astry/motionstudio.git
 cd motionstudio
-npm install        # 只装 Electron 这一个开发依赖
+npm run serve        # node tools-serve.mjs → http://127.0.0.1:43117
+```
+
+也可以把 `app/` 交给任意静态服务器（`.mjs` 必须以 JavaScript 的 MIME 类型发出；`file://` 会被模块 CORS 挡住）。三条要求见下方「浏览器」小节。
+
+### 桌面端（独立仓库）
+
+Electron 壳（本机文件对话框、导出到指定路径、NSIS 安装包）在 [`motionstudio-desktop`](https://github.com/Satyr-Astry/motionstudio-desktop)，它把本仓以 git submodule 挂在 `core/`：
+
+```bash
+git clone --recursive https://github.com/Satyr-Astry/motionstudio-desktop.git
+cd motionstudio-desktop
+npm install
 npm start
 ```
 
-启动后 Electron 会起一个本机静态服务（默认 43117，被占用则顺延），改完源码按 `Ctrl+R` 重载。
-
-> **npm 11 及以上**默认不执行依赖的 install/postinstall 脚本。如果启动时报
-> `Electron failed to install correctly`，补一句 `node node_modules/electron/install.js` 即可。
->
-> 不装依赖也能跑：`npx --yes electron .`
+`postinstall` 不一定执行（npm 11+）；`core/` 若是空的，补一句 `git submodule update --init --recursive`。桌面发行版从那个仓库发布。
 
 ### 浏览器
 
@@ -99,7 +108,7 @@ npm start
 
 ### 仓库拆分
 
-桌面**壳**（`main.js`、`preload.js`、Electron 打包脚本）将迁到独立仓库，桌面发行版在那边发布；本仓库成为**核**：渲染层（`app/`）、测试、文档与质量门。两半之间的契约是那 8 个 IPC 通道名。拆分落地前，两者同在本仓库。
+桌面**壳**（`main.js`、`preload.js`、IPC、Electron 打包）已独立到 [`motionstudio-desktop`](https://github.com/Satyr-Astry/motionstudio-desktop)，它把本仓以 git submodule 挂在 `core/`。两半之间的契约是那 8 个 IPC 通道名（见「核心概念」），由壳仓的 `test/channels.test.mjs` 双向钉住。桌面发行版从壳仓发布；网页版就是本仓当静态站点部署。
 
 ## 三个工作区
 
@@ -165,9 +174,7 @@ npm start
 ## 目录结构
 
 ```
-main.js              桌面壳：本机静态服务 + 窗口 + 文件对话框 IPC
-preload.js           contextBridge 暴露的最小 API
-app/
+app/                 ← 站点根（静态，无构建步骤）
   core/              纯逻辑、零 DOM：doc-model / cel / transform / evaluator /
                      timegraph / timebase / lattice / element / history / psd
   paint/             绘制与合成：engine（舞台）/ stroke / brush / composite /
@@ -185,7 +192,7 @@ tests/               node:test 单元测试
 
 ```bash
 npm test               # node --test tests/*.test.mjs
-npm run check          # 静态一致性（帧概念残留 + 失效 import）+ 语法检查 + 本地化进度
+npm run check          # 五道门：静态一致性 + 语法 + 分层 + 文档基线 + 本地化
 npm run check:static   # 只跑静态一致性
 npm run check:syntax   # 只跑语法检查（逐个 node --check）
 npm run smoke          # 无壳窗口里把 app/ 起起来，逐个挂载全部编辑器
@@ -195,7 +202,7 @@ npm run smoke          # 无壳窗口里把 app/ 起起来，逐个挂载全部�
 
 `npm run smoke` 用一个临时 HTTP 服务器把 `app/` 起起来，在**不挂 preload、不开 nodeIntegration** 的 Electron 窗口里加载 —— 也就是浏览器拿到的东西。它随后把一个面板轮着切过注册表里的每一个编辑器，再把界面语言来回切一遍，全程收集 console 错误。它同时是浏览器模式的验收：`window.motionAPI` 必须不存在、网页桥必须已就位。
 
-当前基线：**1689 tests / 1687 pass / 2 skipped / 0 fail**（121 个测试文件）；静态检查扫描 105 个模块，残留 0、坏 import 0、未使用 import 0；语法检查 111/111（105 个 app/ 模块 + 6 个根工具脚本）；分层检查 0 处跨层 import；本地化检查报告 129 条文案尚未进词条表、结构缺口 0 处；冒烟 **15/15** 个编辑器挂载成功、0 条 console 错误。改代码后 `npm test`、`npm run check` 与 `npm run smoke` 都跑一遍。
+当前基线：**1684 tests / 1677 pass / 7 skipped / 0 fail**（120 个测试文件）；静态检查扫描 105 个模块，残留 0、坏 import 0、未使用 import 0；语法检查 109/109（105 个 app/ 模块 + 4 个根工具脚本）；分层检查 0 处跨层 import；本地化检查报告 129 条文案尚未进词条表、结构缺口 0 处；冒烟 **15/15** 个编辑器挂载成功、0 条 console 错误。改代码后 `npm test`、`npm run check` 与 `npm run smoke` 都跑一遍。
 
 ## 设计原则
 

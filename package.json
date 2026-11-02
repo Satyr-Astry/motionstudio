@@ -1,31 +1,9 @@
 {
   "name": "motionstudio",
-  "version": "0.5.0-alpha.47",
+  "version": "0.6.0",
   "private": true,
-  "description": "MotionStudio — a time-driven 2D character and effects animation tool (alpha preview)",
-  "main": "main.js",
+  "description": "MotionStudio core — renderer, tests, docs and quality gates (static site root: app/). The Electron desktop shell lives in the motionstudio-desktop repository.",
   "license": "MIT",
-  "scripts": {
-    "start": "electron .",
-    "test": "node --test tests/*.test.mjs",
-    "check": "node _check-static.mjs && node _check-syntax.mjs && node _check-layers.mjs && node _check-docs.mjs && node _check-i18n.mjs",
-    "check:static": "node _check-static.mjs",
-    "check:syntax": "node _check-syntax.mjs",
-    "check:i18n": "node _check-i18n.mjs",
-    "check:i18n:strict": "node _check-i18n.mjs --strict",
-    "smoke": "set ELECTRON_RUN_AS_NODE=&& electron tools-smoke.cjs",
-    "dist": "electron-builder --win nsis --publish never",
-    "dist:dir": "electron-builder --win dir --publish never",
-    "serve": "node tools-serve.mjs",
-    "split": "node tools-split.mjs",
-    "split:apply": "node tools-split.mjs --apply",
-    "check:layers": "node _check-layers.mjs",
-    "check:docs": "node _check-docs.mjs"
-  },
-  "devDependencies": {
-    "electron": "^40.10.2",
-    "electron-builder": "^26.18.0"
-  },
   "author": "Satyr_Astry",
   "repository": {
     "type": "git",
@@ -44,44 +22,19 @@
     "texture",
     "psd"
   ],
-  "build": {
-    "appId": "com.satyr.motionstudio",
-    "productName": "MotionStudio",
-    "copyright": "Copyright © 2026 Satyr_Astry",
-    "directories": {
-      "output": "dist",
-      "buildResources": "build"
-    },
-    "files": [
-      "main.js",
-      "preload.js",
-      "package.json",
-      "app/**/*",
-      "!app/promo/img/**",
-      "!**/*.map"
-    ],
-    "extraMetadata": {
-      "main": "main.js"
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "artifactName": "MotionStudio-${version}-setup.${ext}"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "MotionStudio",
-      "deleteAppDataOnUninstall": false
-    }
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "node _check-static.mjs && node _check-syntax.mjs && node _check-layers.mjs && node _check-docs.mjs && node _check-i18n.mjs",
+    "check:static": "node _check-static.mjs",
+    "check:syntax": "node _check-syntax.mjs",
+    "check:layers": "node _check-layers.mjs",
+    "check:docs": "node _check-docs.mjs",
+    "check:i18n": "node _check-i18n.mjs",
+    "check:i18n:strict": "node _check-i18n.mjs --strict",
+    "smoke": "set ELECTRON_RUN_AS_NODE=&& electron tools-smoke.cjs",
+    "serve": "node tools-serve.mjs"
+  },
+  "devDependencies": {
+    "electron": "^40.10.2"
   }
 }

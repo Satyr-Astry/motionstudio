@@ -1,4 +1,34 @@
-## v0.5.0-alpha.47 — 2026-11-03 · 项目版本历史：保存留快照，能回到过去
+## v0.6.0 — 2026-11-03 · 拆仓：核仓独立，桌面壳迁往 motionstudio-desktop
+
+单仓时代结束。本仓从此只放**核**：渲染层（`app/`，静态站点根）、测试、文档、质量门；Electron 桌面壳（`main.js` / `preload.js` / IPC / 打包）迁到新仓 [`motionstudio-desktop`](https://github.com/Satyr-Astry/motionstudio-desktop)，它把本仓以 **git submodule** 挂在 `core/`。两半之间的缝仍然只有一条：`app/shell/ipc.mjs` 的 `bridge()` 读 `window.motionAPI`，通道契约由壳仓的 `test/channels.test.mjs` 与核仓的 `tests/ipc-contract.test.mjs` 各守一半。
+
+### 本仓删了什么
+
+- `main.js`（422 行）、`preload.js`（40 行）—— 桌面入口与桥暴露面；
+- `tools-pack.mjs` —— 手写打包脚本（electron-builder 的 NSIS / dir 目标已覆盖，且它对 submodule 的 `.git` 文件没有过滤）；
+- `tools-split.mjs` + `tests/split-plan.test.mjs` —— 一次性迁移工具与它的测试（本仓已不需要）；
+- `tools-shell-channels.tpl.mjs` —— 壳仓 `test/channels.test.mjs` 的模板（已落地到壳仓）。
+
+### 本仓改了什么
+
+- `package.json`：删 `main` / `build` / `start` / `dist` / `dist:dir` / `split` 脚本与 `electron-builder` 依赖；`electron` 保留**只为** `npm run smoke`（唯一能抓「测试全绿 + 面板白屏」的闸）；`check` 仍是五道门；`serve` 成为运行入口；版本升到 `0.6.0`。
+- `_check-syntax.mjs` / `_check-docs.mjs` 的 `ROOT_TOOLS` 从 6 个收到 **4 个**（`tools-serve.mjs` / `tools-smoke.cjs` / `_check-layers.mjs` / `_check-docs.mjs`），语法检查因此从 111 变为 **109/109**。
+- 新增 `.gitattributes`（`* text=auto eol=lf`），与壳仓同一套行尾规则。
+- README 两版：运行方式改为「本仓跑 `npm run serve`（网页）／桌面版去壳仓 `clone --recursive`」；目录结构删掉壳文件；「Repository split」从计划改成既成事实；基线数字按拆后实测更新。
+- 桌面壳的 `main.js` 不是删掉，而是**搬走并改一行**：`APP_DIR` 由 `__dirname/app` 改为 `__dirname/core/app`（核仓的站点根自带一层 `app/`）；壳仓的打包 `files` 指向 `core/app/**/*` 并排除 `!core/.git`。
+
+### 验证
+
+本仓：`npm test` **1684 / 1677 pass / 7 skipped / 0 fail**（120 个测试文件；拆走 `tests/split-plan.test.mjs` 的 5 条）；`npm run check` 五道门全绿（静态 105 模块 0/0/0 · 语法 109/109 · 分层 0 违规 · 文档基线一致 · 本地化 129 条待迁、缺口 0）；`npm run smoke` 15/15 编辑器、`PROBLEMS []`。
+
+壳仓：`npm run check:syntax` 通过；`npm test` 通道契约 **6/6**；Electron 探针确认窗口从 `core/app/index.html` 起、`window.motionAPI` 是对象且八个方法齐全（`exportFrames`…`openFolder`）、7 个 canvas、11 个顶栏按钮；`npm run dist:dir` 打包后 `app.asar` 共 130 项，含 `core/app/index.html` 与 `core/app/shell/app.mjs`（`core/app` 下 125 个文件），**不含** `core/.git` / `core/tests` / `core/docs` / `core/_check-*`；`dist/win-unpacked/MotionStudio.exe` 启动后保持运行、可正常关窗。
+
+### 需要知道的
+
+- 老的单仓 clone 仍可当**核**用（`npm run serve`），但不再有桌面壳；桌面版请重新 `git clone --recursive` 壳仓。
+- 本仓版本号从此是**唯一产品版本号**；壳仓默认同版本，壳单独修 bug 用 `<核版本>.<壳修订>`（见壳仓 README §版本号规则）。
+- `.msp` 存档格式**不变**（仍是 v4）：拆仓只动代码组织，不动数据。
+
 
 项目库 P2 的最后一块。以前只有「当前存档」一个状态：改坏了、误覆盖了，除了「另存为」分叉没有别的退路。这一版让**每次保存都留一份快照**（最近 10 份），项目面板能列出并恢复到任意一份，而且**恢复本身可逆**——恢复前会先把当前状态也存成一份历史。
 

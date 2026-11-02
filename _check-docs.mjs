@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
 /** 与 `_check-syntax.mjs` 的 ROOT_TOOLS 保持同一份清单（那边改了这里也要改）。 */
-export const ROOT_TOOLS = ['tools-serve.mjs', 'tools-smoke.cjs', 'tools-split.mjs', 'tools-shell-channels.tpl.mjs', '_check-layers.mjs', '_check-docs.mjs'];
+export const ROOT_TOOLS = ['tools-serve.mjs', 'tools-smoke.cjs', '_check-layers.mjs', '_check-docs.mjs'];
 
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
