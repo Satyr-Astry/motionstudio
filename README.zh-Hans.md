@@ -190,7 +190,7 @@ npm run smoke          # 无壳窗口里把 app/ 起起来，逐个挂载全部�
 
 `npm run smoke` 用一个临时 HTTP 服务器把 `app/` 起起来，在**不挂 preload、不开 nodeIntegration** 的 Electron 窗口里加载 —— 也就是浏览器拿到的东西。它随后把一个面板轮着切过注册表里的每一个编辑器，再把界面语言来回切一遍，全程收集 console 错误。它同时是浏览器模式的验收：`window.motionAPI` 必须不存在、网页桥必须已就位。
 
-当前基线：**1564 tests / 1562 pass / 2 skipped / 0 fail**（112 个测试文件）；静态检查扫描 106 个模块，残留 0、坏 import 0、未使用 import 0；语法检查 108/108（106 个 app/ 模块 + 2 个根工具脚本）；本地化检查报告 153 条文案尚未进词条表、结构缺口 0 处；冒烟 **15/15** 个编辑器挂载成功、0 条 console 错误。改代码后 `npm test`、`npm run check` 与 `npm run smoke` 都跑一遍。
+当前基线：**1569 tests / 1567 pass / 2 skipped / 0 fail**（113 个测试文件）；静态检查扫描 106 个模块，残留 0、坏 import 0、未使用 import 0；语法检查 109/109（106 个 app/ 模块 + 3 个根工具脚本）；本地化检查报告 153 条文案尚未进词条表、结构缺口 0 处；冒烟 **15/15** 个编辑器挂载成功、0 条 console 错误。改代码后 `npm test`、`npm run check` 与 `npm run smoke` 都跑一遍。
 
 ## 设计原则
 

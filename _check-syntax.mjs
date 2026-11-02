@@ -24,7 +24,7 @@ const TARGETS = ['app'];
 // 写坏了只有到真去跑的时候才知道。它不属于 app/，不在 `_check-static.mjs` 的扫描范围里，只能在这里兜。
 // （`tools-smoke.cjs` 是 CommonJS，`node --check` 也能查，但它要求 electron 环境才能跑，
 //   这里只查语法、不执行，所以一并纳入是安全的。）
-const ROOT_TOOLS = ['tools-serve.mjs', 'tools-smoke.cjs'];
+const ROOT_TOOLS = ['tools-serve.mjs', 'tools-smoke.cjs', 'tools-split.mjs'];
 
 function walk(dir, out) {
     for (const name of readdirSync(dir)) {

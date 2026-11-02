@@ -1,3 +1,34 @@
+## v0.5.0-alpha.31 — 2026-11-02 · 拆仓从「方案」变成「一条命令」
+
+拆仓方案（`docs/拆仓方案-2026-11-02.md`）写了九步，但前四步全是**机械搬运**：建两个目录、把文件分到两边、生成两份 `package.json`、改 `main.js` 里那一行静态服务路径。手工做一次要二十分钟，做第二次一定会漏。
+
+这一版把这几步做成 `tools-split.mjs`：**默认只预演，不改任何文件**；加 `--apply` 才真的写到一个新目录（不删当前仓库的任何东西）。
+
+### 它做什么
+
+- **核仓**（`<out>/motionstudio`）：`app/` `tests/` `docs/` 三道闸 `tools-*.mjs` `package-lock.json` 两版 README，以及一份**删掉全部桌面字段**的 `package.json` —— 没有 `main`、没有 `build`、没有 `dist`，`devDependencies` 只留 `electron`（唯一理由：`npm run smoke` 需要一个 Electron 二进制去开无 preload 的窗口）。
+- **壳仓**（`<out>/motionstudio-desktop`）：`main.js` `preload.js` `tools-pack.mjs`，`package.json` 的 `files` 改成 `core/app/**/*` 并加 `!core/.git`（submodule 的 `.git` 是**文件**，会被 `copyDir` 当普通文件拷进安装目录），`postinstall` 拉 submodule，另生成一份跨仓通道测试骨架 `test/channels.test.mjs`。
+- **`main.js`** 里指向 `app` 的静态服务路径改写为 `core/app`，找不到目标行时**原样返回并警告**（不猜、不改坏）。
+
+### 为什么挂载点是 `core/` 而不是 `app/`
+
+核仓的站点根就是它自己的 `app/`。如果把 submodule 挂到壳仓的 `app/`，入口会变成 `app/app/index.html`，而 `main.js` 期望 `__dirname/app/index.html` —— 静态服务直接 404 白屏。挂 `core/` 只需改 `main.js` 一行，代价最小。
+
+### 它不做什么
+
+**不碰 git**。`git init`、`git tag -split-baseline`、`git submodule add` 全部留给人工 —— 这些是有副作用的操作，值得看一眼再敲。脚本跑完会打印接下来的四步。
+
+### 验证
+
+`npm test` **1569 tests / 1567 pass / 2 skipped / 0 fail**（113 个测试文件）；静态检查 **106** 个模块、残留 0、坏 import 0、未使用 import 0；语法检查 **109/109**（`tools-split.mjs` 也进了语法门）；本地化 **153** 条待迁、缺口 0；`npm run smoke` 15/15 编辑器、0 条 console 错误。
+
+### 用法
+
+```
+npm run split            # 预演：打印要搬什么、要改哪几份
+npm run split:apply      # 真的写到 ../motionstudio-split/（目标目录已存在会拒绝，不覆盖）
+```
+
 ## v0.5.0-alpha.30 — 2026-11-02 · 让 IK 看得见
 
 上一版 IK 能用了，但**约束在数据里，画布上看不出来**：用户会看到骨头自己转，却不知道是哪个对象在拽它、这根骨属不属于某条链。这一版在画布上补了一层连线。
