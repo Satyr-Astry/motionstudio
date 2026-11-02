@@ -102,8 +102,8 @@ test('存档往返：ik 逐字段还原，解算结果一个字节都不进档',
     const file = docToFile(doc);
     const el = file.elements.find((o) => o.id === 'b');
     assert.ok(el, '存档里应有 b');
-    assert.deepEqual(el.ik, { targetId: 't1', chain: 2, iterations: 16, enabled: true }, 'ik 应完整落盘');
-    assert.equal(Object.keys(el.ik).sort().join(','), 'chain,enabled,iterations,targetId', 'ik 只许四个键');
+    assert.deepEqual(el.ik, { targetId: 't1', chain: 2, iterations: 16, enabled: true, bend: 'auto' }, 'ik 应完整落盘');
+    assert.equal(Object.keys(el.ik).sort().join(','), 'bend,chain,enabled,iterations,targetId', 'ik 只许五个键（targetId/chain/iterations/enabled/bend）');
     // 解算结果不该以任何形式出现在文件里
     const blob = JSON.stringify(file);
     assert.ok(!blob.includes('"ikNow"'), '解算结果不许进档');

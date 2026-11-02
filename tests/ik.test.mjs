@@ -137,11 +137,15 @@ test('normalizeIk：夹取 chain / iterations，坏 targetId 整条作废', () =
     assert.equal(normalizeIk({}), null, '没有 targetId 就没有约束');
     assert.equal(normalizeIk({ targetId: 42 }), null, 'targetId 必须是字符串');
     const a = normalizeIk({ targetId: 'x' });
-    assert.deepEqual(a, { targetId: 'x', chain: 2, iterations: 8, enabled: true });
+    assert.deepEqual(a, { targetId: 'x', chain: 2, iterations: 8, enabled: true, bend: 'auto' });
     assert.equal(normalizeIk({ targetId: 'x', chain: 0 }).chain, 1);
     assert.equal(normalizeIk({ targetId: 'x', chain: 99 }).chain, IK_MAX_CHAIN);
     assert.equal(normalizeIk({ targetId: 'x', iterations: 0 }).iterations, 1);
     assert.equal(normalizeIk({ targetId: 'x', enabled: false }).enabled, false);
+    // 肘部朝向：只认 auto/left/right，坏值回落 auto
+    assert.equal(normalizeIk({ targetId: 'x' }).bend, 'auto');
+    assert.equal(normalizeIk({ targetId: 'x', bend: 'left' }).bend, 'left');
+    assert.equal(normalizeIk({ targetId: 'x', bend: '旁' }).bend, 'auto');
 });
 
 test('目标落在链内（自引用/祖先）→ 拒绝解算，产出空表', () => {

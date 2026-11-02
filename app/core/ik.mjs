@@ -49,7 +49,9 @@ export const IK_MAX_STEP = 0.35;
 /** 防环用的父链上限，与 evaluator/skin 的 64 保持一致。 */
 const MAX_DEPTH = 64;
 
-export const IK_DEFAULTS = Object.freeze({ chain: 2, iterations: 8, enabled: true });
+export const IK_DEFAULTS = Object.freeze({ chain: 2, iterations: 8, enabled: true, bend: 'auto' });
+/** 肘部朝向：auto = 保持当前那侧；left / right = 强制某一侧（屏幕坐标，y 向下）。 */
+export const IK_BENDS = Object.freeze(['auto', 'left', 'right']);
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const clampInt = (v, lo, hi, dflt) => {
@@ -70,6 +72,7 @@ export function normalizeIk(v) {
         chain: clampInt(v.chain, 1, IK_MAX_CHAIN, IK_DEFAULTS.chain),
         iterations: clampInt(v.iterations, 1, IK_MAX_ITERATIONS, IK_DEFAULTS.iterations),
         enabled: v.enabled !== false,
+        bend: IK_BENDS.includes(v.bend) ? v.bend : IK_DEFAULTS.bend,
     };
 }
 
@@ -101,6 +104,78 @@ function worldOf(doc, el, t) {
         m = mulMatrix(m, elementMatrix(node, lt, elementSize(doc, node, lt)));
     }
     return m;
+}
+
+/**
+ * 把「绕 P 旋转 delta」左乘到 joints[index..] 的所有骨上（世界空间）。
+ * 与 CCD 里那段 D = T(P)·R(δ)·T(−P) 同构，抽出来给解析解复用。
+ */
+function rotateBoneWorld(M, joints, index, P, delta) {
+    if (!Number.isFinite(delta) || Math.abs(delta) < 1e-12) return;
+    const D = mulMatrix(mulMatrix(translate(P), rotate(delta)), translate({ x: -P.x, y: -P.y }));
+    for (let j = index; j < joints.length; j++) {
+        M.set(joints[j].el.id, mulMatrix(D, M.get(joints[j].el.id)));
+    }
+}
+
+/**
+ * 两骨链的解析解（余弦定理）：直接算出两个关节的目标角度，一步到位。
+ *
+ * 为什么两骨要单独解：CCD 是迭代近似（容差 1e-3），而两骨有唯一解，
+ * 可以精确命中（误差 1e-9 量级）；更重要的是**肘部朝向可指定** ——
+ * CCD 从当前姿态起步，目标拖过链的延长线时会「翻面」，解析解可以直接选边。
+ *
+ * 同时处理两种够不着的情形：太远 → 伸直（β≈0）；太近（< |L1−L2|）→ 折到最短可达。
+ * 两种都不保证命中目标，但姿态合理、不产生 NaN。
+ *
+ * @returns {boolean} 是否已解算（false 时调用方回落到 CCD）
+ */
+function solveTwoBoneExact(M, joints, tipPoint, target, bend) {
+    if (!joints || joints.length !== 2) return false;
+    const j0 = joints[0];
+    const j1 = joints[1];
+    const m0 = M.get(j0.el.id);
+    const m1 = M.get(j1.el.id);
+    if (!finiteMatrix(m0) || !finiteMatrix(m1)) return false;
+
+    const P0 = applyMatrix(m0, j0.pivot);
+    const P1 = applyMatrix(m1, j1.pivot);
+    const E = applyMatrix(m1, tipPoint);
+    const L1 = Math.hypot(P1.x - P0.x, P1.y - P0.y);
+    const L2 = Math.hypot(E.x - P1.x, E.y - P1.y);
+    if (!(L1 > 1e-9) || !(L2 > 1e-9)) return false;
+
+    const dx = target.x - P0.x;
+    const dy = target.y - P0.y;
+    const dist = Math.hypot(dx, dy);
+    if (!(dist > 1e-9)) return false;   // 目标压在根关节上：方向无定义，交给 CCD 兜底
+
+    const a = Math.atan2(dy, dx);
+    // 肘部朝向：left / right 强制；auto 保持当前那侧（叉积符号）
+    let sign = bend === 'left' ? -1 : bend === 'right' ? 1 : 0;
+    if (!sign) {
+        const ux = P1.x - P0.x;
+        const uy = P1.y - P0.y;
+        sign = ux * dy - uy * dx >= 0 ? 1 : -1;
+    }
+
+    // 可达距离夹取：把「够不着」映射到链能表达的极限姿态
+    const reach = Math.max(Math.abs(L1 - L2) + 1e-9, Math.min(dist, L1 + L2 - 1e-9));
+    const cosB = Math.max(-1, Math.min(1, (L1 * L1 + reach * reach - L2 * L2) / (2 * L1 * reach)));
+    const beta = Math.acos(cosB);
+    const theta1New = wrapAngle(a + sign * beta);
+    const theta1Now = Math.atan2(P1.y - P0.y, P1.x - P0.x);
+    rotateBoneWorld(M, joints, 0, P0, wrapAngle(theta1New - theta1Now));
+
+    // 第二根骨：让「中关节 → 末端」指向目标。可达时这一步就是精确命中
+    // （β 由余弦定理选出，所以 |P1' − T| 恰好等于 L2）。
+    const m1b = M.get(j1.el.id);
+    const P1b = applyMatrix(m1b, j1.pivot);
+    const Eb = applyMatrix(m1b, tipPoint);
+    const theta2Now = Math.atan2(Eb.y - P1b.y, Eb.x - P1b.x);
+    const theta2New = Math.atan2(target.y - P1b.y, target.x - P1b.x);
+    rotateBoneWorld(M, joints, 1, P1b, wrapAngle(theta2New - theta2Now));
+    return true;
 }
 
 /** 骨骼的尺寸（`elementSize` 对 bone 返回 `{w:len,h:width}`）。 */
@@ -186,7 +261,7 @@ export function ikChains(doc) {
         const ids = new Set(bones.map((b) => b.id));
         if (ids.has(ik.targetId)) continue;
 
-        out.push({ tipId: el.id, targetId: ik.targetId, iterations: ik.iterations, bones });
+        out.push({ tipId: el.id, targetId: ik.targetId, iterations: ik.iterations, bend: ik.bend, bones });
     }
     return out;
 }
@@ -222,7 +297,10 @@ export function solveIk(doc, t) {
         const joints = chain.bones.map((b) => ({ el: b, pivot: pivotLocal(doc, b, time) }));
         const tipPoint = tipLocal(doc, tip, time);
 
-        for (let iter = 0; iter < chain.iterations; iter++) {
+        // 两骨链先试解析解：精确命中 + 可按 bend 选肘部朝向；三骨以上没有唯一解，仍走 CCD
+        const exact = chain.bones.length === 2
+            && solveTwoBoneExact(M, joints, tipPoint, target, chain.bend);
+        for (let iter = 0; !exact && iter < chain.iterations; iter++) {
             for (let i = joints.length - 1; i >= 0; i--) {
                 const { el, pivot } = joints[i];
                 const mi = M.get(el.id);

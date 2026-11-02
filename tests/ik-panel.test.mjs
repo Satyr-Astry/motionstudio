@@ -44,9 +44,19 @@ test('链长输入夹在 1..IK_MAX_CHAIN，且只读 core 的常量', () => {
     assert.ok(IK_MAX_CHAIN >= 2, '链长上限至少 2（一根骨的 IK 没有意义）');
 });
 
-test('没有目标时不给「能点但无效」的输入：链长框按目标状态禁用', () => {
-    assert.ok(SRC.includes('ikChain.disabled = !(ik && ik.targetId)'),
-        '链长框必须按「有没有目标」禁用');
+test('没有目标时不给「能点但无效」的输入：链长与肘部朝向一起禁用', () => {
+    assert.ok(SRC.includes('const on = !!(ik && ik.targetId)'), '缺「有没有目标」的判定');
+    assert.ok(SRC.includes('ikChain.disabled = !on'), '链长框必须按「有没有目标」禁用');
+    assert.ok(SRC.includes('ikBend.disabled = !on'), '肘部朝向也必须一起禁用');
+});
+
+test('肘部朝向下拉：三个选项都来自 IK_BENDS，写口与回填都接上', () => {
+    assert.ok(SRC.includes("IK_BENDS"), '没引用 IK_BENDS（选项表必须来自 core）');
+    assert.ok(SRC.includes("'ik-bend'"), '缺 data-k 标记');
+    assert.ok(SRC.includes("t('props.obj.ikBend.' + id)"), '选项文案没走词条');
+    assert.ok(SRC.includes("commitIk({ bend: String(ikBend.value || 'auto') })"), '没有写口');
+    assert.ok(SRC.includes('ikBend.value = ik ? ik.bend : IK_DEFAULTS.bend'), '没有回填');
+    assert.ok(SRC.includes('next.bend === base.bend'), '变更判定漏了 bend（会每次都写一遍文档）');
 });
 
 test('目标下拉列出除自己以外的对象，并有「（无）」选项', () => {
@@ -69,5 +79,5 @@ test('行为：没有目标的约束归一为 null（不留 targetId 空壳）',
     assert.equal(normalizeIk({ targetId: '' }), null);
     assert.equal(normalizeIk({ chain: 2 }), null);
     const on = normalizeIk({ targetId: 'obj-2', chain: 3, enabled: false });
-    assert.deepEqual(on, { targetId: 'obj-2', chain: 3, iterations: IK_DEFAULTS.iterations, enabled: false });
+    assert.deepEqual(on, { targetId: 'obj-2', chain: 3, iterations: IK_DEFAULTS.iterations, enabled: false, bend: 'auto' });
 });

@@ -6,7 +6,7 @@ import { effectAt, findEffectById } from '../paint/effects.mjs';
 import { objectSize, setObjectSize, objectById, BONE_DEFAULTS } from '../core/doc-model.mjs';
 import { patchLayer } from '../core/cel.mjs';
 import { skinOf } from '../core/skin.mjs';
-import { IK_DEFAULTS, IK_MAX_CHAIN, normalizeIk } from '../core/ik.mjs';
+import { IK_BENDS, IK_DEFAULTS, IK_MAX_CHAIN, normalizeIk } from '../core/ik.mjs';
 import { createSurface } from '../paint/surface.mjs';
 import { createXformPanel } from './xform.mjs';
 import { icon } from '../core/icons.mjs';
@@ -311,6 +311,22 @@ export function mount(el, ctx) {
         min: 1, max: IK_MAX_CHAIN, step: 1, value: IK_DEFAULTS.chain, key: 'ik-chain',
     });
 
+    // 肘部朝向：两骨链有解析解，可以直接选边；三骨以上走 CCD，这一项只影响起步姿态
+    const ikBendField = makeRow(ikBody, t('props.obj.ikBend'));
+    const ikBend = document.createElement('select');
+    ikBend.className = 'prop-num';
+    ikBend.dataset.k = 'ik-bend';
+    ikBend.style.flex = '1 1 auto';
+    ikBend.style.width = 'auto';
+    ikBend.title = t('props.obj.ikBendHint');
+    for (const id of IK_BENDS) {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = t('props.obj.ikBend.' + id);
+        ikBend.appendChild(opt);
+    }
+    ikBendField.appendChild(ikBend);
+
     /** 当前对象的 IK 约束（已归一；没有就是 null）。 */
     function ikOf(layer) {
         return layer ? normalizeIk(layer.ik) : null;
@@ -333,15 +349,18 @@ export function mount(el, ctx) {
             chain: cur ? cur.chain : IK_DEFAULTS.chain,
             iterations: cur ? cur.iterations : IK_DEFAULTS.iterations,
             enabled: cur ? cur.enabled : IK_DEFAULTS.enabled,
+            bend: cur ? cur.bend : IK_DEFAULTS.bend,
         };
         const next = Object.assign(base, patch);
         if (cur && next.targetId === base.targetId && next.chain === base.chain
-            && next.iterations === base.iterations && next.enabled === base.enabled) return;
+            && next.iterations === base.iterations && next.enabled === base.enabled
+            && next.bend === base.bend) return;
         patchActive({ ik: next.targetId ? next : null });
         refresh();
     }
 
     ikOn.addEventListener('change', () => commitIk({ enabled: !!ikOn.checked }));
+    ikBend.addEventListener('change', () => commitIk({ bend: String(ikBend.value || 'auto') }));
     ikTarget.addEventListener('change', () => commitIk({ targetId: String(ikTarget.value || '') }));
     for (const ev of ['change', 'keydown']) {
         ikChain.addEventListener(ev, (e) => {
@@ -604,8 +623,12 @@ export function mount(el, ctx) {
             }
         }
         ikTarget.value = ik ? ik.targetId : '';
-        // 没有目标就不可能解算：链长框灰掉比留一个能点但无效的输入框更诚实
-        ikChain.disabled = !(ik && ik.targetId);
+        if (document.activeElement !== ikBend) ikBend.value = ik ? ik.bend : IK_DEFAULTS.bend;
+        // 没有目标就不可能解算：链长与肘部朝向一起灰掉，
+        // 比留一个能点但无效的控件更诚实
+        const on = !!(ik && ik.targetId);
+        ikChain.disabled = !on;
+        ikBend.disabled = !on;
     }
 
     /** 骨骼组：只有 kind === 'bone' 的对象出现；取值时不覆盖正在编辑的输入框。 */
