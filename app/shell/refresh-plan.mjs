@@ -32,6 +32,19 @@ export const TIME_DRIVEN_EDITORS = new Set(['canvas', 'board', 'timeline', 'curv
 export const CEL_GRANULAR_EDITORS = new Set(['layers']);
 
 /**
+ * 与时间无关的编辑器：内容只跟文档结构或本机偏好走，播放期间一动不动。
+ *
+ * **为什么要显式列出来**（而不是「不在前两个集合里就算静止」）：
+ * 新加一个编辑器时，如果它其实读 `ctx.time()` 却没人把它登记进 `TIME_DRIVEN_EDITORS`，
+ * 症状是「播放时这个面板不更新」—— 不报错、不红，极难自查。
+ * 列出这张表之后，`tests/refresh-plan.test.mjs` 会断言
+ * 「集合三者的并集 == registry.EDITORS」，新编辑器漏登记就会当场红。
+ */
+export const STATIC_EDITORS = new Set([
+    'toolbar', 'tree', 'palette', 'doc', 'onion', 'info', 'prefs', 'help', 'projects',
+]);
+
+/**
  * 一轮刷新的决策。
  *
  * @param {string[]} editors 当前工作区里的编辑器 id（顺序无关，重复无意义）

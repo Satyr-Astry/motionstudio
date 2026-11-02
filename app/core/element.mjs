@@ -411,6 +411,9 @@ function clampIdx(v, lo, hi) {
 export function hitTest(doc, time, x, y, opts) {
     const o = opts || {};
     const list = doc.objects || doc.layers || [];
+    // 命中阈值：**alpha > threshold 才算命中**。注意与 paint/engine.mjs 的
+    // `pixelHex(d, alphaMin)` 语义相反（那边 alpha < 阈值就返回 null，是取色器语义）。
+    // 两处常量都是 8 但方向不同，分开是有意的 —— 别合并（见「待修与优化清单」D6）。
     const threshold = o.threshold == null ? 8 : o.threshold;
     const tol = Number.isFinite(o.tolerance) && o.tolerance > 0 ? o.tolerance : 0;
     const skip = o.skip && o.skip.length ? new Set(o.skip) : null;

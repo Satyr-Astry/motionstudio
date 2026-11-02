@@ -39,6 +39,14 @@ export const TOOLS = Object.freeze([
  * alpha 低于阈值（默认 8）视为**取不到**：透明像素在这里没有「颜色」可言，
  * 硬取出来会是 `#000000`，等于把画布背景当成黑色 —— 这是取色器最常见的错觉。
  */
+/**
+ * 取色器语义：**alpha < 阈值就算取不到**（返回 null），与命中测试的语义不要混。
+ *
+ * `app/core/element.mjs` 的 `hitTest` 用的是「`alpha > threshold` 才算命中」——
+ * 两者阈值常量都是 8，但**方向相反**：这里 8 以下是「透明到不值得取」，
+ * 那边是「透明到不该被点中」。分开是有意的（取色要能取到几乎透明的颜色，
+ * 命中则不该被一个 1/255 的噪点抓住），**不要为了「统一」把它们合并**。
+ */
 export function pixelHex(d, alphaMin) {
     const lo = Number.isFinite(alphaMin) ? alphaMin : 8;
     if (!d || d.length < 4) return null;
