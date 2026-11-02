@@ -404,12 +404,12 @@ export function createInput(deps) {
             if (!r.moved) return;
             const next = writeKey(doc, drag.elId, t, { warp: softPatch(s.base, r.pts) });
             if (next === doc) return;
-            ctx.setDoc(next, { silent: true, label: '格点变形' });
+            ctx.setDoc(next, { silent: true, label: tr('canvas.lattice.label') });
             s.moved = true;
             // 影响顶点数只在变化时报一次，别每帧刷提示
             if (s.lastMoved !== r.moved) {
                 s.lastMoved = r.moved;
-                if (ctx.notify) ctx.notify('格点变形：影响 ' + r.moved + ' 个顶点');
+                if (ctx.notify) ctx.notify(tr('canvas.lattice.moved', { n: r.moved }));
             }
             if (typeof ctx.requestRender === 'function') ctx.requestRender();
             return;
@@ -510,21 +510,21 @@ export function createInput(deps) {
             if (canceled) {
                 if (softState && softState.moved && before) ctx.setDoc(before, { silent: true });
                 if (typeof ctx.requestRender === 'function') ctx.requestRender();
-                if (ctx.notify) ctx.notify('已取消');
+                if (ctx.notify) ctx.notify(tr('canvas.canceled'));
                 return;
             }
             const after = ctx.doc();
             if (softState && softState.moved && before && after && before !== after) {
                 const cmd = {
-                    label: '格点变形',
+                    label: tr('canvas.lattice.label'),
                     undo: () => ctx.setDoc(before, { silent: true }),
                     redo: () => ctx.setDoc(after, { silent: true }),
                 };
                 if (ctx.engine && typeof ctx.engine.pushCommand === 'function') ctx.engine.pushCommand(cmd);
                 else if (ctx.engine && ctx.engine.history) ctx.engine.history.push(cmd);
-                if (ctx.notify) ctx.notify('已变形网格');
+                if (ctx.notify) ctx.notify(tr('canvas.lattice.done'));
             } else if (ctx.notify) {
-                ctx.notify('这次拖动没有改变网格');
+                ctx.notify(tr('canvas.lattice.noChange'));
             }
             return;
         }
@@ -536,12 +536,12 @@ export function createInput(deps) {
             if (dragCanceled) {
                 dragCanceled = false;
                 if (typeof ctx.requestRender === 'function') ctx.requestRender();
-                if (ctx.notify) ctx.notify('已取消');
+                if (ctx.notify) ctx.notify(tr('canvas.canceled'));
                 return;
             }
             if (typeof ctx.setAnchor === 'function') {
                 ctx.setAnchor(elId, { x: pv.u, y: pv.v }, { keepPlace: true });
-                if (ctx.notify) ctx.notify('已移动旋转原点');
+                if (ctx.notify) ctx.notify(tr('canvas.anchor.done'));
             }
             return;
         }
@@ -551,12 +551,12 @@ export function createInput(deps) {
         if (before && after && before !== after) {
             // 一次拖动 = 一条撤销记录
             ctx.engine.history.push({
-                label: '变换',
+                label: tr('canvas.transform.label'),
                 undo: () => ctx.setDoc(before),
                 redo: () => ctx.setDoc(after),
             });
         }
-        if (ctx.notify) ctx.notify('已更新关键帧');
+        if (ctx.notify) ctx.notify(tr('canvas.transform.done'));
     }
 
     /** 叠加层画「预览十字」用：拖动中返回 { u, v, elId }，其余时候 null */

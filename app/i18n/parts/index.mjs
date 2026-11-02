@@ -20,6 +20,7 @@ import layersPart from './layers.mjs';
 import propsPart from './props.mjs';
 import timelinePart from './timeline.mjs';
 import projectsPart from './projects.mjs';
+import canvasPart from './canvas.mjs';
 
 export const PARTS = [
     helpPart,
@@ -32,4 +33,5 @@ export const PARTS = [
     propsPart,
     timelinePart,
     projectsPart,
+    canvasPart,
 ];
