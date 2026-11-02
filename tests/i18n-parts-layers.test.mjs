@@ -69,6 +69,16 @@ test('layers 分片：en 表里不许有中文', () => {
     }
 });
 
+test('layers 分片：B2 折叠词条两边镜面，默认语言读出来是英文', () => {
+    // 英文优先：默认 locale = en，`curve.fold.selected` 必须直接是可读英文句子
+    for (const k of ['curve.fold.collapse', 'curve.fold.expand', 'curve.fold.rowHint', 'curve.fold.selected']) {
+        assert.equal(typeof enTable[k], 'string', 'en 缺 ' + k);
+        assert.equal(typeof zhTable[k], 'string', 'zh-Hans 缺 ' + k);
+        assert.equal(t(k, { n: 3 }), enTable[k].replace('{n}', '3'), k + ' 在默认语言下没读出英文');
+    }
+    assert.equal(t('curve.fold.selected', { n: 3 }), 'Selected 3 channels');
+});
+
 test('layers 分片：中文原文逐字未变（翻译时顺手改词就红）', () => {
     // 抽样钉死：动作标题、拖拽拒绝原因、时间通道浮层、行尾提示、通知、曲线提示。
     // 期望值就是词条化之前 layers.mjs / curve.mjs 里的原话。
@@ -97,6 +107,11 @@ test('layers 分片：中文原文逐字未变（翻译时顺手改词就红）'
         'curve.canvas.solo': '独立',
         'curve.canvas.sameTime': '同刻',
         'curve.menu.deleteKey': '删除关键帧',
+        // B2 通道折叠（0.6.1）：新增词条的原文一并钉死，改一个字就红
+        'curve.fold.collapse': '把通道列表收成「已选 N 条」',
+        'curve.fold.expand': '展开完整通道列表',
+        'curve.fold.rowHint': '已选通道 · 点击展开完整列表',
+        'curve.fold.selected': '已选 {n} 条通道',
         'dragtip.snap.frame': '吸附:帧',
         'dragtip.snap.grid': '吸附:网格',
         'dragtip.snap.free': '自由',

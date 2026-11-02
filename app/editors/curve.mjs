@@ -62,6 +62,56 @@ export function focusChannelTarget(chId, t) {
     return { ch: chId, t: at };
 }
 
+/**
+ * 折叠摘要（B2 的纯函数部分）：把「聚焦通道 + 参考线」收成一行 `已选 N 条`。
+ *
+ * 折叠态只影响**显示**，所以这里只做「数一遍、取一遍名字」，不读 DOM、不碰 `refs`
+ * 本身（传进来的 Set/数组原样不动）—— 选择集与参考线因此和折叠相互独立。
+ * 计数口径：focus 永远算第一条（就算它同时在 refs 里也只算一次），其余按 refs 去重后累加。
+ * 只剩聚焦一条时不报数（「已选 1 条」没有信息量），直接把通道名当摘要。
+ *
+ * @param {string|null} focusId 当前聚焦通道 id
+ * @param {Iterable<string>|null} refs 参考线通道 id（Set 或数组）
+ * @param {(id: string) => string} nameOf 通道 id → 显示名（DOM 侧传 `chById(id).label`）
+ * @returns {{count: number, focusName: string, refNames: string[], ids: string[], text: string}}
+ *   `count` = focus + refs 的去重总数；`text` 是给 UI 直接用的那一行（`count<=1` 时就是 focusName）。
+ *   `text` 会走一次词典（`curve.fold.selected`），其余字段与语言无关。
+ */
+export function foldSummary(focusId, refs, nameOf) {
+    const labelOf = typeof nameOf === 'function' ? nameOf : (id) => String(id == null ? '' : id);
+    const ids = [];
+    const seen = new Set();
+    const add = (id) => {
+        // 只认非空字符串：通道 id 不可能是数字/对象，脏值安静跳过比把面板画崩强
+        if (typeof id !== 'string' || !id || seen.has(id)) return;
+        seen.add(id);
+        ids.push(id);
+    };
+    add(focusId);
+    if (refs) for (const id of refs) add(id);
+    const focusName = focusId ? labelOf(focusId) : '';
+    const refNames = ids.filter((id) => id !== focusId).map((id) => labelOf(id));
+    const count = ids.length;
+    return {
+        count,
+        focusName,
+        refNames,
+        ids,
+        text: count > 1 ? tr('curve.fold.selected', { n: count }) : focusName,
+    };
+}
+
+/**
+ * 折叠判定（纯函数）：工具条那颗按钮点一下翻面。
+ * 非真值（undefined / null / 0）一律按「当前是展开态」处理 —— 闭合变量初值就是 `false`。
+ *
+ * @param {boolean|undefined|null} folded 当前折叠态
+ * @returns {boolean} 翻面后的折叠态
+ */
+export function toggleFold(folded) {
+    return !folded;
+}
+
 export function mount(el, ctx) {
     const root = document.createElement('div');
     root.className = 'curve';
@@ -85,6 +135,22 @@ export function mount(el, ctx) {
     chSolo.textContent = '⤴';
     chBtn.appendChild(chSolo);
     bar.appendChild(chBtn);
+
+    /* ── 折叠按钮（B2）：把通道面板从整张列表收成一行「已选 N 条」。
+     * 图标复用现成的 chevron：展开时朝上（点击收起）、折叠时朝下（点击展开）；
+     * 语义只走 title / aria-label / aria-expanded，不额外造图标。 */
+    const foldBtn = document.createElement('button');
+    foldBtn.type = 'button';
+    foldBtn.className = 'curve-fold-btn ms-icon-btn';
+    foldBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        folded = toggleFold(folded);
+        // 面板本来收着时点折叠看不到任何变化（列表没展开）—— 顺手把面板打开，
+        // 「整张列表 ↔ 摘要行」的切换才是当场可见的；再点一次就换回来。
+        if (pop.hidden) openPop();
+        paint();
+    });
+    bar.appendChild(foldBtn);
 
     /* ── 缓动预设：选中关键帧后一键换线型（比拖柄快得多）。图标化，语义留在 title 里 ── */
     // 关键字与第三个元素是**落盘的缓动名**，不许动；显示名（按钮里的短语 + title 全句）
@@ -136,6 +202,30 @@ export function mount(el, ctx) {
     pop.className = 'curve-pop';
     pop.hidden = true;
 
+    /* 通道行列表与折叠摘要行**互斥**：折叠只切 visible，不重建行 ——
+     * 行上的 is-focus / is-ref 由 syncPopRows 维护，重建会连滚动位置一起丢掉。 */
+    const chList = document.createElement('div');
+    chList.className = 'curve-ch-list';
+    const foldRow = document.createElement('button');
+    foldRow.type = 'button';
+    foldRow.className = 'curve-fold';
+    foldRow.hidden = true;
+    const foldDot = document.createElement('span');
+    foldDot.className = 'curve-fold-dot';
+    const foldName = document.createElement('span');
+    foldName.className = 'curve-fold-name';
+    const foldCount = document.createElement('span');
+    foldCount.className = 'curve-fold-count';
+    foldRow.append(foldDot, foldName, foldCount);
+    foldRow.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        // 摘要行本身就是第二个「展开」入口（与工具条那颗按钮等价），
+        // 折叠态下用户点摘要就能回到完整列表，不必先找按钮。
+        folded = false;
+        paint();
+    });
+    pop.append(chList, foldRow);
+
     const wrap = document.createElement('div');
     wrap.className = 'curve-plot-wrap';
 
@@ -157,6 +247,13 @@ export function mount(el, ctx) {
     let timeOffset = 0;       // 横轴窗口起点（秒）。中键拖动可以平移，滚轮只改窗口宽度
     let selKeys = [];         // 多选：[{ layerId, chId, index, part }]
     let sel = null;           // primary（最后点中的那个），切线柄与提示条只跟它走
+    /**
+     * 通道面板是否折叠成「已选 N 条」。
+     * 这是 **mount 闭包变量**：`refresh()` 只重画、不重建面板，所以跨 refresh 保持；
+     * remount（切语言、换工作区槽位）会新建实例 —— 按面板其它瞬态（弹层开合、视口）
+     * 的惯例重置成展开。它只是一个显示位，不参与选择集 / refs / 绘制的任何判等。
+     */
+    let folded = false;
 
     /** 同一个曲线点（通道 + 下标 + 部位）。选择集与命中测试共用同一判等，避免两处口径漂移。 */
     const sameKey = (a, b) => !!a && !!b && a.layerId === b.layerId && a.chId === b.chId
@@ -256,20 +353,21 @@ export function mount(el, ctx) {
     let popVals = new Map();
 
     function buildPop() {
-        pop.textContent = '';
+        chList.textContent = '';
         popVals = new Map();
         const group = (title, list) => {
             if (!list.length) return;
             const h = document.createElement('div');
             h.className = 'curve-ch-group';
             h.textContent = title;
-            pop.appendChild(h);
-            for (const ch of list) pop.appendChild(chRow(ch));
+            chList.appendChild(h);
+            for (const ch of list) chList.appendChild(chRow(ch));
         };
         group(tr('curve.group.transform'), SCALAR_CHANNELS);
         group(tr('curve.group.warp'), warpChannels());
         syncPopRows();
         syncPopValues(trackOf(activeLayer(docOf())));
+        syncFold();
     }
 
     function chRow(ch) {
@@ -340,7 +438,7 @@ export function mount(el, ctx) {
     // 点别处收起面板。用捕获阶段：画布上的 pointerdown 会立刻改选中，面板得先让路
     const onDocDown = (ev) => {
         if (pop.hidden) return;
-        if (pop.contains(ev.target) || chBtn.contains(ev.target)) return;
+        if (pop.contains(ev.target) || chBtn.contains(ev.target) || foldBtn.contains(ev.target)) return;
         closePop();
     };
     document.addEventListener('pointerdown', onDocDown, true);
@@ -459,6 +557,8 @@ export function mount(el, ctx) {
         chBtn.title = (ch ? ch.label : tr('curve.channelFallback')) +
             (solo ? tr('curve.bar.solo') : '') +
             tr('curve.bar.open');
+        // 折叠/摘要是纯显示态：每帧都跟着 focus/refs 重新取一次文案（切语言也靠 remount）
+        syncFold();
 
         if (!layer) {
             hint.textContent = tr('curve.bar.noObject');
@@ -480,6 +580,36 @@ export function mount(el, ctx) {
             syncPopRows(track);
             syncPopValues(track);
         }
+    }
+
+    /* ── 折叠 chrome（B2）：整张列表 ↔ 「已选 N 条」摘要行 ──
+     * 折叠只切显示，**不碰** focus / refs / 选择集 / 绘制区：绘制区一直只画 focus + refs，
+     * 所以折叠不会让曲线消失、不会丢参考线、也不会清掉选中的关键帧点。 */
+    let foldChrome = null;   // 上次同步过的折叠态：拖动时 paint 每帧都来，别每帧重塞一遍 SVG
+    function syncFold() {
+        if (foldChrome !== folded) {
+            foldChrome = folded;
+            const label = folded ? tr('curve.fold.expand') : tr('curve.fold.collapse');
+            foldBtn.innerHTML = icon(folded ? 'chevron-down' : 'chevron-up');
+            foldBtn.classList.toggle('is-folded', folded);
+            // aria-expanded 跟着「列表现在是否可见」走：展开 = true，折叠 = false
+            foldBtn.setAttribute('aria-expanded', folded ? 'false' : 'true');
+            foldBtn.title = label;
+            foldBtn.setAttribute('aria-label', label);
+            chList.hidden = folded;
+            foldRow.hidden = !folded;
+        }
+        if (!folded) return;
+        const ch = chById(focus);
+        const sum = foldSummary(focus, refs, (id) => {
+            const c = chById(id);
+            return c ? c.label : tr('curve.channelFallback');
+        });
+        foldRow.style.setProperty('--ch', ch ? ch.color : 'var(--accent)');
+        // 只剩聚焦一条时摘要行就是通道名本身；多条时报「已选 N 条」+ 聚焦通道名
+        foldName.textContent = sum.count ? sum.focusName : tr('curve.channelFallback');
+        foldCount.textContent = sum.count > 1 ? sum.text : '';
+        foldRow.title = tr('curve.fold.rowHint');
     }
 
     /* ── 命中 ── */

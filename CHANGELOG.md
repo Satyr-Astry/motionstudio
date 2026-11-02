@@ -1,4 +1,35 @@
-## v0.6.0 — 2026-11-03 · 拆仓：核仓独立，桌面壳迁往 motionstudio-desktop
+## v0.6.1 — 2026-11-03 · 曲线通道折叠 · WebM 透明背景说清楚
+
+拆仓后的第一批「待修清单」：两件都是「能力已经在、体验还差一口气」的收尾。
+
+### 曲线通道折叠（待修清单 B2）
+
+- 通道面板（叫出通道列表的浮层）里新增**折叠**：`.curve-bar` 的 chevron 按钮把整张列表收成一行摘要（色点 + 聚焦通道名 + 「Selected N channels」），点摘要行或再点按钮即可展开。
+- `foldSummary(focusId, refs, nameOf)` 纯函数：focus + refs 去重计数、单条不报数（直接显示通道名）、不修改传入的 Set/数组；`toggleFold(folded)` 只做翻面。
+- 折叠只切显示：**不碰** focus / refs / 选择集 / 绘制区（绘制区始终只画 focus + refs），跨 `refresh()` 保持、remount（切语言/换槽位）重置为展开。
+- 4 条词条 ×2 语言；`.curve-fold` 行高与工具条一致、窄面板单行省略、`[hidden]` 显式收回。
+
+### WebM 透明背景：从「事后发现黑底」到「事前说清楚」（待修清单 A2 的诚实退路）
+
+- 根因不变：Chromium 的 `MediaRecorder`（vp9 / vp8 / webm）**不录 alpha 通道**；真 alpha 要换 WebCodecs，方案里明确「不做」。所以本批不做假承诺，而是把限制放到界面上：
+  - 导出对话框的背景行下方**常驻提示**：透明背景会导出成黑底，需要透明请用 APNG / GIF（切到纯色自动收起）；
+  - 选择透明背景时点「导出 WebM」**第一次只警告**（按钮变成「仍然导出 WebM」），**第二次点击**才真正录制；改任何导出参数都会收回这次确认（确认是对那一组参数的确认）。
+- `needsVideoAlphaConfirm(background)` 纯函数 + 源码守卫，DOM 行为由 `npm run smoke` 兜底。
+
+### 同时校准了账本里四条「其实早就修了」的条目
+
+`docs/待修与优化清单-2026-10.md` 的 D5 / D6 / D7 / D8 标为已消解并补上证据（D6 双向交叉引用注释、D7 `tests/anchor-drop.test.mjs`、D8 `tests/refresh-plan.test.mjs` 的三集合并集断言、D5 README 那句「多选/拖放还在打磨」改成现状）。这是账本滞后问题（D1）的又一次实例：**代码已修、清单没勾**。
+
+### 验证
+
+`npm test` **1693 / 1686 pass / 7 skipped / 0 fail**（120 个测试文件；+9 条新断言）；`npm run check` 五道门全绿（静态 105 模块 0/0/0 · 语法 109/109 · 分层 0 违规 · 文档基线一致 · 本地化 129 条待迁未增加、词典 1464/1464 镜面）；`npm run smoke` 15/15 编辑器、`PROBLEMS []`。另做了一次性 Electron 探针（仓库外，已删）：折叠按钮真实开合、摘要随 refs 变化（单条显示通道名 / 两条显示 Selected 2 channels）、refs 保留、折叠前后绘制区 726×399 不变。
+
+### 需要知道的
+
+- A2 的**真 alpha 仍未实现**（需要 WebCodecs 重写录制链路，属「导出通道方案」里明确不做的一项）；现在是「说清楚 + 明确确认」，不是「支持透明」。
+- B2 的折叠态不落盘（mount 闭包，重挂重置）；通道跨轨拖动仍不支持（README 已如实写）。
+- 拆仓后每个核仓版本都要同步壳仓：本版壳仓 `version` 与 submodule 指针同步到 `0.6.1`。
+
 
 单仓时代结束。本仓从此只放**核**：渲染层（`app/`，静态站点根）、测试、文档、质量门；Electron 桌面壳（`main.js` / `preload.js` / IPC / 打包）迁到新仓 [`motionstudio-desktop`](https://github.com/Satyr-Astry/motionstudio-desktop)，它把本仓以 **git submodule** 挂在 `core/`。两半之间的缝仍然只有一条：`app/shell/ipc.mjs` 的 `bridge()` 读 `window.motionAPI`，通道契约由壳仓的 `test/channels.test.mjs` 与核仓的 `tests/ipc-contract.test.mjs` 各守一半。
 

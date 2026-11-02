@@ -8,6 +8,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { snapFrame } from '../app/editors/timeline-geo.mjs';
+// B2 通道折叠的纯函数：curve.mjs 在 Node 里可直接 import（mount 之外的模块顶层零 DOM）
+import { foldSummary, toggleFold } from '../app/editors/curve.mjs';
+import { t } from '../app/i18n/index.mjs';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 const src = read('../app/editors/curve.mjs');
@@ -63,4 +66,86 @@ test('curve.mjs 接线：吸附与磁铁都从 timeline-geo 导入，不重复�
     assert.match(src, /import \{ snapForDrag \} from '\.\/timeline-geo\.mjs';/);
     assert.ok(!/function snapFrame/.test(src), '不许在 curve.mjs 里另写一份吸帧实现');
     assert.ok(!/function magnetOf/.test(src), '磁铁判据也只许有一份');
+});
+
+// ── B2：曲线通道折叠成「已选 N 条」 ─────────────────────────────
+//
+// 折叠是**纯显示态**：数一遍 focus + refs、取一遍名字，不改选择集、不动 refs。
+// 所以 0 / 1 / 多通道由 `foldSummary` 单测钉死，DOM 接线只用源码守卫钉住「别顺手改数据」。
+
+const nameOf = (id) => id.toUpperCase();
+
+test('折叠摘要：0 条是空摘要，只剩聚焦 1 条时摘要就是通道名', () => {
+    const none = foldSummary(null, [], nameOf);
+    assert.equal(none.count, 0);
+    assert.equal(none.focusName, '');
+    assert.deepEqual(none.refNames, []);
+    assert.deepEqual(none.ids, []);
+    assert.equal(none.text, '', '没有通道就没有可报的数');
+
+    const one = foldSummary('x', [], nameOf);
+    assert.equal(one.count, 1);
+    assert.equal(one.focusName, 'X');
+    assert.deepEqual(one.refNames, []);
+    assert.equal(one.text, 'X', '「已选 1 条」没有信息量，直接显示通道名');
+});
+
+test('折叠摘要：多通道报「已选 N 条」，英文优先（默认 locale = en）', () => {
+    const sum = foldSummary('x', ['y', 'rotate'], nameOf);
+    assert.equal(sum.count, 3);
+    assert.equal(sum.focusName, 'X');
+    assert.deepEqual(sum.refNames, ['Y', 'ROTATE']);
+    assert.equal(sum.text, t('curve.fold.selected', { n: 3 }));
+    assert.equal(sum.text, 'Selected 3 channels');
+});
+
+test('折叠摘要：refs 去重、focus 不重复计数，脏值安静跳过', () => {
+    const dup = foldSummary('x', ['y', 'y', 'rotate'], nameOf);
+    assert.equal(dup.count, 3, '同一个参考通道只算一条');
+    assert.deepEqual(dup.refNames, ['Y', 'ROTATE']);
+
+    // focus 同时出现在 refs 里（比如 Shift+点漏了早退）：它算焦点，不算参考线
+    const overlap = foldSummary('x', new Set(['x', 'y']), nameOf);
+    assert.equal(overlap.count, 2);
+    assert.deepEqual(overlap.refNames, ['Y'], 'focus 不算参考线');
+
+    const junk = foldSummary('x', [null, '', 42, 'y'], nameOf);
+    assert.equal(junk.count, 2, '非字符串 / 空 id 不参与计数');
+    assert.deepEqual(junk.refNames, ['Y']);
+});
+
+test('折叠摘要：只读 —— 不修改传入的 refs 集合（折叠与参考线相互独立）', () => {
+    const refs = new Set(['y']);
+    const sum = foldSummary('x', refs, nameOf);
+    assert.equal(sum.count, 2);
+    assert.deepEqual([...refs], ['y'], '折叠摘要不许增删参考线');
+    // 同一组输入再算一次结果不变（纯函数）
+    assert.deepEqual(foldSummary('x', refs, nameOf), sum);
+});
+
+test('折叠判定：点一下翻面，非真值按当前展开处理', () => {
+    assert.equal(toggleFold(false), true);
+    assert.equal(toggleFold(true), false);
+    assert.equal(toggleFold(undefined), true);
+    assert.equal(toggleFold(null), true);
+});
+
+test('curve.mjs 接线：折叠只切显示，不碰选择集 / refs / 绘制区', () => {
+    const body = src.slice(src.indexOf('/* ── 折叠 chrome'), src.indexOf('/* ── 命中 ── */'));
+    assert.ok(body.length > 0, '找不到折叠 chrome 段');
+    assert.ok(!/setSel\(/.test(body), '折叠不许清选择集');
+    assert.ok(!/refs\.(?:add|delete|clear)/.test(body), '折叠不许增删参考线');
+    assert.ok(!/paintCanvas|writeTrack/.test(body), '折叠不许另写绘制 / 写盘路径');
+    // 图标只复用现有 chevron，语义走 aria
+    assert.match(src, /icon\(folded \? 'chevron-down' : 'chevron-up'\)/);
+    assert.match(src, /setAttribute\('aria-expanded'/);
+    assert.match(src, /'curve\.fold\.collapse'/);
+    assert.match(src, /'curve\.fold\.expand'/);
+    // 列表与摘要行互斥，且两边都显式收回 [hidden]
+    assert.match(src, /chList\.hidden = folded/);
+    assert.match(src, /foldRow\.hidden = !folded/);
+    // 折叠态是 mount 闭包变量：refresh() 里不许重置（重挂才重置）
+    const refresh = src.slice(src.indexOf('refresh() {'), src.indexOf('refresh() {') + 120);
+    assert.ok(!/folded\s*=/.test(refresh), 'refresh() 不许重置折叠态（跨 refresh 要保持）');
+    assert.match(src, /let folded = false;/, '折叠态必须是 mount 闭包变量');
 });

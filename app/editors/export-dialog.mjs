@@ -26,6 +26,20 @@ import { t } from '../i18n/index.mjs';
 
 const LS_KEY = 'ms.export';
 
+/**
+ * 透明背景导出 WebM 需要用户再确认一次（纯判定，node 可测）。
+ *
+ * 为什么要问：Chromium 的 `MediaRecorder`（vp9 / vp8 / webm 三种封装）**不录 alpha 通道**，
+ * 透明画布录出来就是黑底；真 alpha 得换 WebCodecs（`docs/导出通道方案-2026-11-02.md` 明确列为
+ * 「不做」）。所以界面只能做到「说清楚 + 让用户显式确认」，不能假装支持透明，也不能替用户默默导出。
+ *
+ * @param {string} background `'transparent'` / `'solid'`
+ * @returns {boolean} 是否需要二次确认
+ */
+export function needsVideoAlphaConfirm(background) {
+    return background !== 'solid';
+}
+
 /** 读记忆的导出参数：坏 JSON / 越界值一律回落默认，不抛。 */
 export function readExportPrefs(storage) {
     const st = storage || (typeof localStorage !== 'undefined' ? localStorage : null);
@@ -118,6 +132,9 @@ export function openExportDialog(deps) {
         let kind = 'frames';
         let busy = false;
         let canceled = false;
+        // 透明背景 + WebM 的二次确认态：第一次点「导出 WebM」只提醒，第二次才真导出。
+        // 用户改任何导出设置都重置（见 resetVideoConfirm 的调用点），避免「改完背景还按旧确认走」。
+        let videoConfirm = false;
 
         const root = el('div', 'exp-modal');
         root.setAttribute('role', 'dialog');
@@ -264,6 +281,17 @@ export function openExportDialog(deps) {
         bgWrap.appendChild(color);
         row(t('export.field.background'), bgWrap);
 
+        // 透明背景 + WebM = 黑底：这条限制常驻在背景行下面，而不是等用户导出完才发现。
+        // 背景切到 solid 时收起来（那时提示不成立，留着只会噪音）。
+        const alphaNote = el('div', 'exp-alpha-note', t('export.video.alphaNote'));
+        Object.assign(alphaNote.style, {
+            color: '#c8a24a',
+            margin: '-2px 0 6px 72px',
+            font: '11px/1.4 system-ui, sans-serif',
+        });
+        alphaNote.hidden = bg.value === 'solid';
+        box.appendChild(alphaNote);
+
         const fmt = el('select', 'exp-format');
         Object.assign(fmt.style, fieldStyle);
         FORMATS.forEach((f) => {
@@ -332,6 +360,7 @@ export function openExportDialog(deps) {
             extra.trim = merged.trim !== false;
             extra.maxTextureSize = Number(merged.maxTextureSize) || EXPORT_DEFAULTS.maxTextureSize;
             syncQuality();
+            resetVideoConfirm();
         };
 
         const open = el('input', 'exp-open');
@@ -388,6 +417,21 @@ export function openExportDialog(deps) {
         Object.assign(btnGo.style, { background: '#3a6df0', borderColor: '#3a6df0', color: '#fff' });
         box.appendChild(actions);
 
+        /**
+         * 把「仍然导出 WebM」的确认态收回成初始按钮文案。
+         *
+         * 声明成函数而不是 const：`fillPreset` 在按钮创建之前就定义了（点击时才执行），
+         * 它要在结尾调用这里，闭包在调用那一刻解析，顺序不敏感。
+         */
+        function resetVideoConfirm() {
+            if (!videoConfirm) return;
+            videoConfirm = false;
+            btnVideo.textContent = t('export.action.video');
+            btnVideo.setAttribute('aria-label', t('export.action.video'));
+            // 警告句也是这次确认的一部分：参数一改就收回，别让旧警告留在 hint 里误导下一次
+            if (hint.textContent === t('export.video.alphaWarn')) hint.textContent = '';
+        }
+
         const collect = () => ({
             scale: Number(scale.value),
             fps: Number(fps.value),
@@ -432,6 +476,7 @@ export function openExportDialog(deps) {
 
         const run = async (which) => {
             if (busy) return;
+            resetVideoConfirm();
             const opts = normalizeExportOptions(collect(), doc);
             if (which === 'frames' && !opts.count) {
                 hint.textContent = t('export.emptyRange');
@@ -504,6 +549,16 @@ export function openExportDialog(deps) {
         });
         btnVideo.addEventListener('click', () => {
             kind = 'video';
+            const bgValue = bg.value === 'solid' ? 'solid' : 'transparent';
+            // 透明背景 + WebM：第一次点击只把限制说清（按钮改成「仍然导出 WebM」），
+            // 第二次点击才真的开始录制 —— 不阻塞用户，也不替用户默默导出黑底视频。
+            if (needsVideoAlphaConfirm(bgValue) && !videoConfirm) {
+                videoConfirm = true;
+                hint.textContent = t('export.video.alphaWarn');
+                btnVideo.textContent = t('export.action.videoAnyway');
+                btnVideo.setAttribute('aria-label', t('export.action.videoAnyway'));
+                return;
+            }
             run('video');
         });
         btnGif.addEventListener('click', () => {
@@ -517,6 +572,13 @@ export function openExportDialog(deps) {
         btnCancel.addEventListener('click', cancel);
         bg.addEventListener('change', () => {
             color.disabled = bg.value !== 'solid';
+            alphaNote.hidden = bg.value === 'solid';
+            resetVideoConfirm();
+        });
+        // 任何导出设置变化都收回「仍然导出 WebM」的确认态：确认是对**当时那组参数**的确认
+        [scale, fps, from, to, fmt, quality, eng, bg].forEach((node) => {
+            node.addEventListener('change', resetVideoConfirm);
+            node.addEventListener('input', resetVideoConfirm);
         });
         // 点遮罩空白处关闭（点浮层内部不关）
         root.addEventListener('pointerdown', (ev) => {

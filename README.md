@@ -49,7 +49,7 @@ The payoff is direct: paint one drawing at 0.2s and the next at 3s without inser
 
 **Animation**
 - Keyframes: linear / bezier (draggable handles) / hold; `Shift`-drag = free drag that ignores the magnet
-- Curve editor: one channel per animated quantity — position, scale, rotate, skew, opacity, lattice vertices, effect parameters — with a per-channel vertical range
+- Curve editor: one channel per animated quantity — position, scale, rotate, skew, opacity, lattice vertices, effect parameters — with a per-channel vertical range; channels can be multi-selected as reference lines and folded into a compact "N selected" summary
 - Every object carries a **time channel** (offset / scale / hold), so the same keyframes can run at different rhythms
 - Onion skin (N before / after, stepping on *texture change points*, not on equal frame steps)
 - Segmented variable frame rate; the colored strip under the timeline is the fps segmentation
@@ -207,7 +207,7 @@ npm run smoke          # boots app/ in a shell-less window and mounts every edit
 
 `npm run smoke` serves `app/` from a throwaway HTTP server and loads it in an Electron window **with no preload and no nodeIntegration** — i.e. exactly what a browser gets. It then switches a panel through every editor in the registry and flips the language both ways, collecting any console error along the way. It is also the browser-mode acceptance test: `window.motionAPI` must be absent and the web bridge must be in place.
 
-Current baseline: **1684 tests / 1677 pass / 7 skipped / 0 fail** across 120 test files; static check scans 105 modules with 0 leftovers, 0 broken imports and 0 unused imports; syntax check 109/109 (105 app/ modules + 4 root tool scripts); layering check reports 0 cross-layer imports; i18n check reports 129 strings still outside the dictionary and 0 structural gaps; smoke mounts **15/15** editors with 0 console errors. Run `npm test`, `npm run check` and `npm run smoke` before handing work over.
+Current baseline: **1693 tests / 1686 pass / 7 skipped / 0 fail** across 120 test files; static check scans 105 modules with 0 leftovers, 0 broken imports and 0 unused imports; syntax check 109/109 (105 app/ modules + 4 root tool scripts); layering check reports 0 cross-layer imports; i18n check reports 129 strings still outside the dictionary and 0 structural gaps; smoke mounts **15/15** editors with 0 console errors. Run `npm test`, `npm run check` and `npm run smoke` before handing work over.
 
 ## Design principles
 
@@ -220,7 +220,7 @@ Current baseline: **1684 tests / 1677 pass / 7 skipped / 0 fail** across 120 tes
 - Only verified on Windows (Electron) so far.
 - WebM export uses `MediaRecorder` in **real time**: the window must stay in the foreground while recording, and VP9 alpha is not enabled, so transparent backgrounds come out black.
 - GIF has the three limits the format imposes: **transparency is 1-bit** (soft edges become fully opaque or fully clear), **256 colours** (gradients band), and files are much larger than WebM for the same content.
-- Curve-area and texture-library multi-select / drag-drop are still rough; PSB smart objects and text layers are not parsed.
+- Curve channels support multi-select and reference lines (and can be folded into a compact "N selected" summary); dragging channels between tracks is not implemented. The texture library has a drawer where clicking a row places that texture at the playhead. PSB smart objects and text layers are not parsed.
 - Project files inline bitmaps as data URLs, so projects with hundreds of MB of artwork get noticeably slow.
 - Browser mode relies on the web bridge (see [Running it](#running-it)); "pick a folder" has no browser equivalent and exports land in the download folder — use the desktop shell when you need native dialogs and exact paths.
 

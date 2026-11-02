@@ -112,6 +112,11 @@ export default {
         'curve.bar.titleSolo': 'This channel is solo (⤴): only its own keyframes move, the other curves are unaffected. Right-click "Back to shared keyframes" to undo.',
         'curve.bar.titleFollow': 'The first time you drag this curve alone it copies its own keyframes (⤴ solo); after that it only affects itself.',
 
+        'curve.fold.collapse': 'Fold the channel list into "selected N channels"',
+        'curve.fold.expand': 'Expand the full channel list',
+        'curve.fold.rowHint': 'Selected channels · click to expand the full list',
+        'curve.fold.selected': 'Selected {n} channels',
+
         'curve.hint.selectFirst': 'Select keys first',
         'curve.hint.easeApplied': 'Easing {ease}',
         'curve.hint.easeMulti': ' ×{n}',
@@ -250,6 +255,11 @@ export default {
         'curve.bar.titleHelp': '拖点改时间/数值 · 拖柄改曲线 · 右键改缓动 · 双击空白加点 · Delete 删点 · Shift 吸附纹理',
         'curve.bar.titleSolo': '这条通道已独立（⤴）：只动它自己的关键帧，其余曲线不受影响。右键「回到共用关键帧」可撤销。',
         'curve.bar.titleFollow': '第一次单独拖这条曲线时，它会拷贝一份自己的关键帧（⤴ 独立），之后只影响它自己。',
+
+        'curve.fold.collapse': '把通道列表收成「已选 N 条」',
+        'curve.fold.expand': '展开完整通道列表',
+        'curve.fold.rowHint': '已选通道 · 点击展开完整列表',
+        'curve.fold.selected': '已选 {n} 条通道',
 
         'curve.hint.selectFirst': '先选点',
         'curve.hint.easeApplied': '缓动 {ease}',

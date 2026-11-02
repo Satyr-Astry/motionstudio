@@ -1270,6 +1270,53 @@ input.lyr-rename {
 
 .curve-ch-row.is-focus .curve-ch-val { color: var(--ink); }
 
+/* ── B2 通道折叠：整张列表 ↔ 「已选 N 条」摘要行 ─────────────────
+   折叠按钮紧贴通道入口（--h-btn 方盒，不把 26px 工具条撑高）；摘要行与工具条同高
+   （--h-bar），文案单行省略 —— 178px 的窄浮层也不溢出。列表与摘要互斥显示，
+   两者都显式收回 [hidden]：`.curve-fold` 是 button / 未来若给列表加 display，
+   UA 的 `[hidden] { display:none }` 都会被作者样式盖掉（同 `.curve-pop[hidden]` 的先例）。 */
+.curve-fold-btn {
+    flex: 0 0 auto; color: var(--ink-faint); background: transparent;
+    border: 1px solid transparent; border-radius: var(--r-1); cursor: pointer;
+}
+
+.curve-fold-btn:hover { color: var(--ink); border-color: var(--line-2); }
+
+/* 折叠中：图标朝下 = 点它能展开；给一点强调色，收着的时候一眼能看出来 */
+.curve-fold-btn.is-folded { color: var(--accent); }
+
+.curve-fold {
+    display: flex; align-items: center; gap: 5px; width: 100%;
+    height: var(--h-bar); padding: 0 5px; box-sizing: border-box;
+    font-size: 11px; text-align: left; color: var(--ink-dim);
+    background: transparent; border: 0; border-radius: var(--r-1); cursor: pointer;
+    overflow: hidden; white-space: nowrap;
+}
+
+.curve-fold:hover { background: var(--surface); color: var(--ink); }
+
+.curve-fold[hidden] { display: none; }
+.curve-ch-list[hidden] { display: none; }
+
+.curve-fold-dot {
+    flex: 0 0 auto; width: 5px; height: 5px; border-radius: 50%;
+    background: var(--ch, var(--accent));
+}
+
+/* 聚焦通道名永远在场（折叠态仍能看出在编辑哪条曲线） */
+.curve-fold-name {
+    flex: 0 1 auto; min-width: 0; color: var(--ink);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 「已选 N 条」计数；单条时为空，空的时候不画分隔点 */
+.curve-fold-count {
+    flex: 1 1 auto; min-width: 0; color: var(--ink-faint); font-size: 10px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.curve-fold-count:not(:empty)::before { content: '· '; color: var(--ink-faint); }
+
 .curve-hint {
     margin-left: auto; font-size: 10px; color: var(--ink-faint);
     white-space: nowrap; overflow: hidden;

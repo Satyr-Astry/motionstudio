@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
     EXPORT_DEFAULTS,
@@ -15,6 +16,9 @@ import {
     uniqueDirName,
     chunkPlan,
 } from '../app/core/export-options.mjs';
+
+/** 导出对话框源码：DOM 行为跑不了 node，但「有没有接线」能读源码钉住（同仓库其它面板的写法）。 */
+const DIALOG_SRC = readFileSync(new URL('../app/editors/export-dialog.mjs', import.meta.url), 'utf8');
 
 const DOC = { width: 900, height: 640, fps: 12, duration: 2 };
 
@@ -154,3 +158,30 @@ test('chunkPlan：每 16 帧一片，末片按余数', () => {
         { startIndex: 4, count: 1 },
     ]);
 });
+
+/* ─────────── 透明背景 + WebM：诚实提示（待修清单 A2 的退路） ─────────── */
+
+test('needsVideoAlphaConfirm：只有纯色背景不需要二次确认', async () => {
+    const { needsVideoAlphaConfirm } = await import('../app/editors/export-dialog.mjs');
+    assert.equal(needsVideoAlphaConfirm('solid'), false, '纯色背景不会有 alpha 问题');
+    assert.equal(needsVideoAlphaConfirm('transparent'), true, '透明背景要提醒');
+    // 坏值/缺省按透明处理：宁可多问一句，也不默默导出黑底
+    assert.equal(needsVideoAlphaConfirm(''), true);
+    assert.equal(needsVideoAlphaConfirm(null), true);
+    assert.equal(needsVideoAlphaConfirm(undefined), true);
+});
+
+test('透明背景 + WebM：常驻提示与「两次点击」确认都接上了（源码守卫）', () => {
+    // 常驻提示：背景行下方一行说明，纯色时收起
+    assert.match(DIALOG_SRC, /t\('export\.video\.alphaNote'\)/, '缺常驻提示词条');
+    assert.match(DIALOG_SRC, /alphaNote\.hidden = bg\.value === 'solid'/, '纯色背景时提示必须收起');
+    // 二次确认：第一次点只警告 + 改按钮文案，第二次才 run('video')
+    assert.match(DIALOG_SRC, /needsVideoAlphaConfirm\(bgValue\) && !videoConfirm/);
+    assert.match(DIALOG_SRC, /t\('export\.video\.alphaWarn'\)/);
+    assert.match(DIALOG_SRC, /t\('export\.action\.videoAnyway'\)/);
+    assert.match(DIALOG_SRC, /return;/, '第一次点击必须提前返回，不能开始录制');
+    // 参数一改确认态就收回（确认是对那一组参数的确认）
+    assert.match(DIALOG_SRC, /\[scale, fps, from, to, fmt, quality, eng, bg\]\.forEach/, '设置变化要重置确认态');
+    assert.match(DIALOG_SRC, /resetVideoConfirm\(\);\s*const opts = normalizeExportOptions/, '真正开始导出前也要收回确认态');
+});
+
