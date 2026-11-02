@@ -11,6 +11,7 @@
 import { normalizeLattice, createLattice } from '../core/lattice.mjs';
 import { T_EPS } from './timeline-geo.mjs';
 import { docDuration } from '../core/cel.mjs';
+import { t } from '../i18n/index.mjs';
 import {
     moveKey, setKeyState, setKeyEase, autoTangents as coreAutoTangents,
     TRACK_FIELDS, channelOf, promoteChannel, setChannelKey, setChannelKeyEase, moveChannelKey,
@@ -26,18 +27,39 @@ export const HIT_PX = 8;
 export const SAMPLES = 360;
 
 const CORNERS = ['tl', 'tr', 'br', 'bl'];
-const CORNER_LABEL = { tl: '左上', tr: '右上', br: '右下', bl: '左下' };
+/**
+ * 四角的显示名。值是访问器：读的时候才去词典取（`curve.corner.*`），
+ * 常量表只建一次，切语言不用重建 —— 与 `SCALAR_CHANNELS` 同一套做法。
+ */
+const CORNER_LABEL = {
+    get tl() { return t('curve.corner.tl'); },
+    get tr() { return t('curve.corner.tr'); },
+    get br() { return t('curve.corner.br'); },
+    get bl() { return t('curve.corner.bl'); },
+};
+
+/**
+ * 一条标量通道：id / 标签 / 短名 / 颜色 / 从 state 取值。
+ * `label` 是访问器 —— 与播放方式表同理，显示名现取，落盘的通道名只有 `id`。
+ */
+const channel = (id, short, color, get) => ({
+    id,
+    get label() { return t('curve.channel.' + id); },
+    short,
+    color,
+    get,
+});
 
 /** 标量通道（固定 8 条）：id / 标签 / 短名 / 颜色 / 从 state 取值。 */
 export const SCALAR_CHANNELS = [
-    { id: 'x', label: '位置 X', short: 'X', color: '#e0556b', get: (s) => s.x },
-    { id: 'y', label: '位置 Y', short: 'Y', color: '#59a86a', get: (s) => s.y },
-    { id: 'scaleX', label: '缩放 X', short: 'SX', color: '#4a7dff', get: (s) => s.scaleX },
-    { id: 'scaleY', label: '缩放 Y', short: 'SY', color: '#8a6ce0', get: (s) => s.scaleY },
-    { id: 'rotate', label: '旋转', short: 'R', color: '#d08a3a', get: (s) => s.rotate },
-    { id: 'skewX', label: '斜切 X', short: 'KX', color: '#3aa8a0', get: (s) => s.skewX },
-    { id: 'skewY', label: '斜切 Y', short: 'KY', color: '#a0559a', get: (s) => s.skewY },
-    { id: 'opacity', label: '不透明度', short: 'A', color: '#9aa1ac', get: (s) => s.opacity },
+    channel('x', 'X', '#e0556b', (s) => s.x),
+    channel('y', 'Y', '#59a86a', (s) => s.y),
+    channel('scaleX', 'SX', '#4a7dff', (s) => s.scaleX),
+    channel('scaleY', 'SY', '#8a6ce0', (s) => s.scaleY),
+    channel('rotate', 'R', '#d08a3a', (s) => s.rotate),
+    channel('skewX', 'KX', '#3aa8a0', (s) => s.skewX),
+    channel('skewY', 'KY', '#a0559a', (s) => s.skewY),
+    channel('opacity', 'A', '#9aa1ac', (s) => s.opacity),
 ];
 
 /**
@@ -54,7 +76,8 @@ export function buildWarpChannels(cols, rows) {
             for (const axis of ['x', 'y']) {
                 out.push({
                     id: 'warp.' + idx + '.' + axis,
-                    label: '网格 ' + c + ',' + r + ' ' + axis.toUpperCase() + (isCorner ? '（角）' : ''),
+                    label: t('curve.warp.label', { c, r, axis: axis.toUpperCase() })
+                        + (isCorner ? t('curve.warp.corner') : ''),
                     short: c + ',' + r + axis,
                     color: axis === 'x' ? '#5b8ad6' : '#6fa87a',
                     get: (s) => {
@@ -96,7 +119,15 @@ export function chById(id) {
     return null;
 }
 
-export const EASE_LABEL = { linear: '线性', bezier: '贝塞尔', hold: '保持' };
+/**
+ * 缓动显示名。与 `CORNER_LABEL`/`SCALAR_CHANNELS` 一样是访问器：读的时候才取词，
+ * 切语言不用重建这张表。**左边三个键是落盘的缓动名，不许翻译**。
+ */
+export const EASE_LABEL = {
+    get linear() { return t('curve.ease.linear'); },
+    get bezier() { return t('curve.ease.bezier'); },
+    get hold() { return t('curve.ease.hold'); },
+};
 
 export function chValue(state, chId) {
     const ch = chById(chId);

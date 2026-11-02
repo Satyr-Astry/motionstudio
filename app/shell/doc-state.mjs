@@ -38,13 +38,13 @@ import { cycleIds } from '../core/timegraph.mjs';
 import { cleanPrefs } from '../core/prefs.mjs';
 import { filterStringAt } from '../paint/effects.mjs';
 import { createEngine, TOOLS } from '../paint/engine.mjs';
-import { ONION_DEFAULTS } from '../paint/onion.mjs';
 import { WS_IDS, WS_TABS } from './chrome.mjs';
 import * as store from './project-store.mjs';
 // 播放刷新分级：纯决策放在 refresh-plan.mjs（node 里可直测），这里只负责执行
 import { planRefresh, celSignature } from './refresh-plan.mjs';
 // 播放推进：累计秒 → 显示时刻的映射（四种方式）与速度档位，纯逻辑在 core/playback.mjs
 import { playbackAt, LOOP_REVERSE, clampSpeed, formatSpeed } from '../core/playback.mjs';
+import { t } from '../i18n/index.mjs';
 // 存档身份（原先在 project-io，会和本模块形成 import 环；下沉到这里，
 // project-io 改为单向从这里取）。字段含义见 project-io 顶部注释。
 const project = { id: '', name: '', file: '', dirty: false };
@@ -83,8 +83,18 @@ const DEFAULT_FPS = 12;
 // 新文档的默认长度（秒）。12 帧 × 1/12s = 1 秒，与旧版「12 帧」的观感一致。
 const DEFAULT_FRAMES = 12;
 const NOTE_MS = 1600;
+// 失败消息要留到能读完：一句话里既有「没存下来」又有补救动作，1.6 秒读不完。
+// 不改成常驻：常驻会把顶栏当成日志栏用，用户第二次就不会再读它了。
+const NOTE_ERROR_MS = 6000;
 const TOOL_KEYS = { v: 'select', b: 'brush', e: 'eraser', g: 'bucket', i: 'picker', h: 'pan' };
-const NOTE_TEXT = { paint: '已绘制', color: '已取色', undo: '撤销', redo: '重做', cel: '新建纹理' };
+// 值改成词条键而不是成品文案：这里只是「哪条消息」，译文在取用点由 t() 决定
+const NOTE_TEXT = {
+    paint: 'shell.note.paint',
+    color: 'shell.note.color',
+    undo: 'shell.note.undo',
+    redo: 'shell.note.redo',
+    cel: 'shell.note.newCel',
+};
 const FALLBACK_EDITOR = 'timeline';
 
 /* ─────────────────────────── 状态 ─────────────────────────── */
@@ -106,12 +116,17 @@ const state = {
     views: Object.create(null),
     activeTree: null,
     engine: null,
+    // P2-C 步 1：权重叠加态。纯外壳态（不进文档、不进撤销、不落盘）。
+    // layerId 记的是「正在编辑哪个蒙皮对象」：用户为了换目标骨会去点骨骼，
+    // 那一刻 selection.id 是骨骼而不是被蒙皮对象，没有它顶点就会当场消失。
+    weight: { active: false, layerId: null, boneId: null, vertex: null, radius: 0.25, strength: 1 },
 };
 
 const shell = { topbar: null, statusbar: null, host: null };
 const docListeners = new Set();
 
-const notice = { text: '', at: 0 };
+// kind 决定两件事：停留多久、能不能被下一条普通消息顶掉（见 flash）
+const notice = { text: '', at: 0, ms: NOTE_MS, kind: 'info' };
 let noteTimer = 0;
 let refreshRaf = 0;
 let playRaf = 0;
@@ -172,7 +187,7 @@ const engine = createEngine({
         if (!obj || !obj.id) return;
         // 引擎自建纹理时的回填：位图那一步已经由笔触命令覆盖，
         // 这里再压一条文档命令会让一次落笔变成两步撤销，所以是 silent（但合并进上一步的像素命令）。
-        setDoc((d) => patchObject(d, obj.id, () => obj), { label: '新建纹理', silent: true });
+        setDoc((d) => patchObject(d, obj.id, () => obj), { label: t('shell.note.newCel'), silent: true });
     },
     // 效果器：把对象的 effects 数组转成 canvas filter 字符串（见 paint/effects.mjs）
         isPlaying: () => state.playing,
@@ -185,7 +200,7 @@ const engine = createEngine({
         return filterStringAt(layer.effects, typeof t === 'number' ? t : state.time);
     },
     onNotify(reason) {
-        if (NOTE_TEXT[reason]) flash(NOTE_TEXT[reason]);
+        if (NOTE_TEXT[reason]) flash(t(NOTE_TEXT[reason]));
         scheduleRefresh();
         updateChrome();
         engine.scheduleRender();
@@ -292,7 +307,12 @@ function sameAnchor(a, b) {
     return a.x === b.x && a.y === b.y;
 }
 
-/** 单个对象：像素相关字段全等才算「没变」（cels / transform / effects 按引用比）。 */
+/**
+ * 单个对象：像素相关字段全等才算「没变」（cels / transform / effects / skin 按引用比）。
+ *
+ * skin 必须比：权重只改 skin.pts、其余字段全等，漏了它 commitDoc 会判「像素没变」而
+ * 不排渲染 —— 表现是「涂了没反应」，看着像命中判定坏了，实际是这里把重绘吞了。
+ */
 function sameObjectPixels(a, b) {
     if (a === b) return true;
     if (!a || !b) return false;
@@ -307,7 +327,8 @@ function sameObjectPixels(a, b) {
         sameAnchor(a.anchor, b.anchor) &&
         a.cels === b.cels &&
         a.transform === b.transform &&
-        a.effects === b.effects
+        a.effects === b.effects &&
+        a.skin === b.skin
     );
 }
 
@@ -346,7 +367,7 @@ function warnCycle(doc) {
     }
     if (cycleWarned) return;
     cycleWarned = true;
-    flash('文档里有循环的父子关系（' + bad.length + ' 个对象），它们不会被绘制');
+    flash(t('shell.doc.cycle', { n: bad.length }), 'error');
 }
 
 function commitDoc(next) {
@@ -377,7 +398,7 @@ function setDoc(updater, opts) {
         console.error('[shell] setDoc 的 updater 抛异常：', err);
         // 以前这里只进控制台：用户看到的是「点了没反应」，而控制台没人看。
         // 文档保持不变（下面 return prev），但必须让人知道这次操作没生效。
-        flash('这次修改没有生效（内部出错），文档保持原样');
+        flash(t('shell.doc.updaterFailed'), 'error');
         return prev;
     }
     if (!next || typeof next !== 'object' || next === prev) return prev;
@@ -393,7 +414,7 @@ function setDoc(updater, opts) {
     if (applyingHistory || (opt && opt.silent)) return next;
     if (!engine || typeof engine.pushCommand !== 'function') return next;
 
-    const label = (opt && opt.label) || '编辑';
+    const label = (opt && opt.label) || t('shell.doc.editLabel');
     // 显式 coalesce 时用较宽的时间窗；没写时按「手势」合并：
     // 拖滑块 / 连续打字的 setDoc 会在几十毫秒内连发，350ms 内合并成一步，
     // 否则一次拖动就能把撤销栈灌满（旧实现完全没进栈，所以没人发现这个问题）。
@@ -558,7 +579,10 @@ function setDuration(sec) {
     const next = Math.max(min, Math.min(DURATION_MAX, Math.round(wanted * 1000) / 1000));
     if (Math.abs(next - (Number(doc.duration) || 0)) > 1e-9) setDoc((d) => ({ ...d, duration: next }));
     if (wanted < min - 1e-9) {
-        flash('总时长最短 ' + next.toFixed(2) + ' s' + (content > 0 ? '（内容到 ' + content.toFixed(2) + ' s）' : ''));
+        // 两种整句：带「内容到」的版本解释为什么不能再短，不拼半句
+        flash(content > 0
+            ? t('shell.doc.minDurationContent', { min: next.toFixed(2), content: content.toFixed(2) })
+            : t('shell.doc.minDuration', { min: next.toFixed(2) }));
     }
     setTimeClamped(state.time);
     return next;
@@ -582,7 +606,7 @@ function activeKeyTimes() {
 function goToKey(dir) {
     const times = activeKeyTimes();
     if (!times.length) {
-        flash('当前对象还没有关键帧');
+        flash(t('shell.doc.noKeyframe'));
         return state.time;
     }
     const now = state.time;
@@ -595,7 +619,7 @@ function goToKey(dir) {
                 break;
             }
         }
-        if (target == null) flash('已经是第一个关键帧');
+        if (target == null) flash(t('shell.doc.firstKeyframe'));
     } else {
         for (const t of times) {
             if (t > now + eps) {
@@ -603,7 +627,7 @@ function goToKey(dir) {
                 break;
             }
         }
-        if (target == null) flash('已经是最后一个关键帧');
+        if (target == null) flash(t('shell.doc.lastKeyframe'));
     }
     return target == null ? state.time : setTimeClamped(target);
 }
@@ -806,16 +830,38 @@ function refreshPanels(withFocus, full) {
     updateChrome();
 }
 
-function flash(msg) {
+/** 当前这条提示还在不在寿命里（nowMs 走 performance.now，测试里也能直接读）。 */
+function noteAlive() {
+    return !!notice.text && nowMs() - notice.at < notice.ms;
+}
+
+/**
+ * 顶栏临时提示。第二个参数可以是 `'error'`，也可以是 `{kind, ms}`。
+ *
+ * 两条规矩来自「错误被下一条消息盖住」的实测：
+ * - **错误停留更久**（NOTE_ERROR_MS）：失败消息里带着补救动作，1.6 秒读不完等于没说；
+ * - **错误不被普通消息顶掉**：画一笔、取个色都会 flash，如果它们能覆盖错误，
+ *   用户看到的最后一句就是「已取色」，而真正没存下来的那件事再也不会被提起。
+ *   反方向允许：新错误可以盖旧错误，用户关心的是最新那条。
+ */
+function flash(msg, opts) {
+    const kind = opts === 'error' ? 'error' : opts && opts.kind === 'error' ? 'error' : 'info';
+    const ms = opts && Number(opts.ms) > 0 ? Number(opts.ms) : kind === 'error' ? NOTE_ERROR_MS : NOTE_MS;
+    if (kind !== 'error' && notice.kind === 'error' && noteAlive()) return notice;
     notice.text = String(msg == null ? '' : msg);
     notice.at = nowMs();
+    notice.ms = ms;
+    notice.kind = kind;
     updateChrome();
     // 消息过期后把顶栏提示还原成工具信息
     if (noteTimer) clearTimeout(noteTimer);
     noteTimer = setTimeout(() => {
         noteTimer = 0;
         updateChrome();
-    }, NOTE_MS + 40);
+    }, ms + 40);
+    // node 里跑测试时别让这个定时器把进程吊住 6 秒（与自动保存拍子同一处理）
+    if (noteTimer && typeof noteTimer.unref === 'function') noteTimer.unref();
+    return notice;
 }
 
 /**
@@ -825,7 +871,7 @@ function flash(msg) {
  * 却没人会看第二遍。画笔参数与工具名改在状态栏里显示（见 brushText）。
  */
 function hintText() {
-    if (notice.text && nowMs() - notice.at < NOTE_MS) return notice.text;
+    if (noteAlive()) return notice.text;
     return '';
 }
 
@@ -845,7 +891,7 @@ function updateChrome() {
     if (!shell.statusbar) return;
     const doc = state.doc;
     if (!doc) {
-        shell.statusbar.setLeft('就绪');
+        shell.statusbar.setLeft(t('shell.status.ready'));
         shell.statusbar.setRight('');
         return;
     }
@@ -857,22 +903,36 @@ function updateChrome() {
     const fps = fpsNow();
     const frame = Math.round(state.time * fps);
     const frames = Math.max(1, Math.round(total * fps));
+    const size = doc.width + '×' + doc.height;
+    const fpsText = Math.round(fps);
+    // 单复数在这一层选词条，不在词典里拼 `{n} objects` —— 英文里「1 objects」是显眼的错，
+    // 中文那条也要能独立写成「1 个对象」而不是被数字模板绑死。
+    const objectsText = objs.length === 1
+        ? t('shell.status.oneObject')
+        : t('shell.status.nObjects', { n: objs.length });
+    // 两条整句而不是「拼一半再接画笔状态」：画笔那段只在画板里有意义
     shell.statusbar.setLeft(
-        doc.width + '×' + doc.height + ' · ' + objs.length + ' 对象 · ' + Math.round(fps) + ' fps' +
-        (state.workspace === 'draw' ? ' · ' + brushText() : '')
+        state.workspace === 'draw'
+            ? t('shell.status.leftDraw', { size: size, objects: objectsText, fps: fpsText, brush: brushText() })
+            : t('shell.status.left', { size: size, objects: objectsText, fps: fpsText })
     );
     // 右侧永远是常驻信息，临时消息走顶栏 hint，避免把时间盖掉。
     // 开头带一个分隔号：状态栏是左右两段拼一行，少了它就成了「12 fpst 2.50 s」。
+    const who = sel ? t('shell.status.selected', { name: sel.name }) : obj ? obj.name : t('shell.status.noObject');
     shell.statusbar.setRight(
-        '· t ' + state.time.toFixed(2) + ' s · 帧 ' + frame + '/' + frames +
-        ' · ' + (sel ? '已选 ' + sel.name : obj ? obj.name : '无对象') +
-        ' · ' + workspaceTitle()
+        t('shell.status.right', {
+            time: state.time.toFixed(2),
+            frame: frame,
+            frames: frames,
+            who: who,
+            ws: workspaceTitle(),
+        })
     );
 }
 
 function workspaceTitle() {
-    const t = WS_TABS.find((x) => x.id === state.workspace);
-    return t ? t.title : String(state.workspace);
+    const tab = WS_TABS.find((x) => x.id === state.workspace);
+    return tab ? tab.title : String(state.workspace);
 }
 
 function onTransport(act) {
@@ -891,7 +951,7 @@ function onTransport(act) {
  */
 function applyDoc(doc, meta) {
     if (!doc || !objectsOf(doc).length) {
-        flash('项目数据不可用');
+        flash(t('shell.doc.noProjectData'), 'error');
         return false;
     }
     if (state.playing) {
@@ -999,6 +1059,8 @@ const PREF_DEFAULTS = Object.freeze({
     objectH: DEFAULT_H,
     bg: 'checker',
     playSpeed: 1,
+    // 界面语言。缺省英文（英文优先，见 README），真实值由 `core/prefs.mjs` 归一。
+    locale: 'en',
 });
 
 let prefSnap = Object.freeze(cleanPrefs(null, PREF_DEFAULTS));
@@ -1042,7 +1104,7 @@ export function setPlaySpeed(v) {
     if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
         window.dispatchEvent(new CustomEvent('ms:prefs', { detail: prefSnap }));
     }
-    flash('播放速度 ' + formatSpeed(speed));
+    flash(t('shell.speed.changed', { speed: formatSpeed(speed) }));
     return speed;
 }
 

@@ -16,7 +16,7 @@ import { makeObject } from '../app/core/doc-model.mjs';
 import { ICON_NAMES } from '../app/core/icons.mjs';
 import {
     ACTION_HINTS,
-    EMPTY_TEXTURE_TEXT,
+    EMPTY_TEXTURE_KEY,
     TEXTURE_ACTIONS,
     TEXTURE_ALIGN,
     TEXTURE_SIZE_MAX,
@@ -47,22 +47,24 @@ test('TEXTURE_ACTIONS：四个动作、顺序固定（新建 / 独特化 / 删�
     );
     for (const a of TEXTURE_ACTIONS) {
         assert.ok(ICON_NAMES.includes(a.icon), 'ICON_NAMES 里没有 ' + a.icon);
-        assert.equal(typeof a.title, 'string');
-        assert.ok(a.title.length >= 2, a.id + ' 的标题太短');
+        // 标题现在是词条键：原文在 props 分片里，源码不再留中文（取词在渲染处）
+        assert.equal(typeof a.titleKey, 'string');
+        assert.ok(a.titleKey.startsWith('props.tex.action.'), a.id + ' 的词条键不对：' + a.titleKey);
     }
 });
 
-test('TEXTURE_ACTIONS：每个动作都有悬停说明，且没有画格字样（术语是「纹理」）', () => {
+test('TEXTURE_ACTIONS：每个动作都有悬停说明（词条键），术语统一走「纹理」', () => {
     for (const a of TEXTURE_ACTIONS) {
         assert.ok(ACTION_HINTS[a.id], a.id + ' 缺 ACTION_HINTS');
-        assert.ok(!/画格|画格库/.test(ACTION_HINTS[a.id]), a.id + ' 的说明里出现了「画格」');
-        assert.ok(!/画格/.test(a.title), a.id + ' 的标题里出现了「画格」');
+        assert.ok(ACTION_HINTS[a.id].startsWith('props.tex.hint.'), a.id + ' 的说明词条键不对');
+        // 「不许出现画格」这条约束现在落在词典里（见 tests/i18n-parts-props.test.mjs）
+        assert.ok(!/画格/.test(a.titleKey), a.id + ' 的键里出现了「画格」');
     }
 });
 
 test('TEXTURE_ALIGN：三档，值名与 shell 的 alignOffset 一致（nw / c / se）', () => {
     assert.deepEqual(TEXTURE_ALIGN.map(([v]) => v), ['nw', 'c', 'se']);
-    assert.deepEqual(TEXTURE_ALIGN.map(([, t]) => t), ['左上', '居中', '右下']);
+    assert.deepEqual(TEXTURE_ALIGN.map(([, t]) => t), ['props.tex.align.nw', 'props.tex.align.c', 'props.tex.align.se']);
 });
 
 test('TEXTURE_SIZE_MAX：与 shell 裁尺寸的上限一致（4096）', () => {
@@ -74,7 +76,8 @@ test('textureSummary：没有对象 → 空态文案，且不带任何数字', (
     assert.equal(s.empty, true);
     assert.equal(s.count, 0);
     assert.equal(s.index, -1);
-    assert.equal(s.text, EMPTY_TEXTURE_TEXT);
+    assert.equal(s.key, EMPTY_TEXTURE_KEY);
+    assert.deepEqual(s.vars, {});
 });
 
 test('textureSummary：对象没有纹理（空画格）→ 仍是空态', () => {
@@ -82,7 +85,7 @@ test('textureSummary：对象没有纹理（空画格）→ 仍是空态', () =>
     const s = textureSummary(obj, 0);
     assert.equal(s.empty, true);
     assert.equal(s.count, 0);
-    assert.equal(s.text, EMPTY_TEXTURE_TEXT);
+    assert.equal(s.key, EMPTY_TEXTURE_KEY);
 });
 
 test('textureSummary：多张纹理 + 多次曝光 → 「共 N 张 · 当前第 k 张 · 曝光 M 处」', () => {
@@ -99,9 +102,11 @@ test('textureSummary：多张纹理 + 多次曝光 → 「共 N 张 · 当前第
     assert.equal(s.count, 2, '张数按资产去重');
     assert.equal(s.exposures, 3, '曝光次数按时刻计');
     assert.equal(s.index, 0);
-    assert.equal(s.text, '共 2 张 · 当前第 1 张 · 曝光 3 处');
+    assert.equal(s.key, 'props.tex.summary.count');
+    assert.deepEqual(s.vars, { count: 2, k: 1, exposures: 3 });
     // 2s 命中第二张
-    assert.equal(textureSummary(obj, 2).text, '共 2 张 · 当前第 2 张 · 曝光 3 处');
+    assert.equal(textureSummary(obj, 2).key, 'props.tex.summary.count');
+    assert.deepEqual(textureSummary(obj, 2).vars, { count: 2, k: 2, exposures: 3 });
     assert.equal(textureSummary(obj, 2).index, 1);
 });
 
@@ -110,10 +115,13 @@ test('textureSummary：落在所有曝光之前 → 明说「当前时刻没有�
     const s = textureSummary(obj, 0);
     assert.equal(s.count, 1);
     assert.equal(s.index, -1, '这一刻没有命中，就不该报第几张');
-    assert.equal(s.text, '共 1 张 · 曝光 1 处 · 当前时刻没有曝光');
-    assert.ok(!/第 0 张/.test(s.text), s.text);
+    assert.equal(s.key, 'props.tex.summary.noExposure');
+    assert.deepEqual(s.vars, { count: 1, exposures: 1 });
+    assert.ok(!('k' in s.vars), '这一刻没有命中，词条里就不该有第几张');
     // 到 5s 就正常了
-    assert.equal(textureSummary(obj, 5).text, '共 1 张 · 当前第 1 张 · 曝光 1 处');
+    const late = textureSummary(obj, 5);
+    assert.equal(late.key, 'props.tex.summary.count');
+    assert.deepEqual(late.vars, { count: 1, k: 1, exposures: 1 });
 });
 
 test('parseTextureSize：取整、认 1 与 4096，越界/空/非数字一律 null', () => {
@@ -154,16 +162,16 @@ test('trimPayload：只带 mode，不带宽高（包围盒由 shell 从像素算
 });
 
 test('actionBlocked：没有对象时先报对象；新建纹理永不被拦', () => {
-    assert.equal(actionBlocked('new', { hasObj: false, count: 0 }), '还没有可编辑的对象');
+    assert.equal(actionBlocked('new', { hasObj: false, count: 0 }), 'props.tex.block.noObject');
     assert.equal(actionBlocked('new', { hasObj: true, count: 0 }), '', '没纹理也能新建');
     assert.equal(actionBlocked('new', { hasObj: true, count: 3 }), '');
 });
 
 test('actionBlocked：无纹理时独特化/删除/裁到内容各给一条原因', () => {
     const s = { hasObj: true, count: 0 };
-    assert.equal(actionBlocked('unique', s), '当前时刻没有可独特化的纹理');
-    assert.equal(actionBlocked('delete', s), '至少要保留一张纹理');
-    assert.equal(actionBlocked('trim', s), '当前时刻还没有纹理：先点「新建纹理」新建一张');
+    assert.equal(actionBlocked('unique', s), 'props.tex.block.unique');
+    assert.equal(actionBlocked('delete', s), 'props.tex.block.delete');
+    assert.equal(actionBlocked('trim', s), 'props.tex.block.trim');
     // 有纹理时全部放行
     const ok = { hasObj: true, count: 2 };
     for (const id of ['new', 'unique', 'delete', 'trim']) {

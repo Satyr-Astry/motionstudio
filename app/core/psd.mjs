@@ -33,7 +33,16 @@
  *      图层矩形沿用文档坐标（可能为负）；像素是直通 alpha，不预乘、不做色彩管理。
  */
 
-export const PSD_FORMAT = { name: 'Photoshop 文档', ext: ['.psd', '.psb'] };
+import { t } from '../i18n/index.mjs';
+
+// name 是给人看的格式名（导出对话框里显示），走词条；ext 是落盘用的扩展名，不动。
+// 写成访问器：setLocale() 只换表、不重建模块常量，普通属性会把首次渲染的语言冻住。
+export const PSD_FORMAT = {
+    get name() {
+        return t('psd.format.name');
+    },
+    ext: ['.psd', '.psb'],
+};
 
 // 单个图层的像素上限：再大就分配不出 RGBA，这里先给中文错误而不是 RangeError。
 const MAX_LAYER_PIXELS = 64 * 1024 * 1024;
@@ -98,7 +107,7 @@ class Reader {
     need(n, what) {
         const left = this.end - this.pos;
         if (!(n >= 0) || n > left) {
-            throw new Error(`PSD 数据越界：读取「${what}」需要 ${n} 字节，仅剩 ${left} 字节`);
+            throw new Error(t('psd.err.outOfRange', { what, n, left }));
         }
     }
 
@@ -198,28 +207,28 @@ function toBytes(buffer) {
     if (buffer && ArrayBuffer.isView(buffer)) {
         return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
     }
-    throw new Error('PSD 解析失败：入参必须是 ArrayBuffer 或 Uint8Array');
+    throw new Error(t('psd.err.badInput'));
 }
 
 // ── Header ────────────────────────────────────────────────────────────────────
 
 function readHeader(r) {
-    const signature = r.ascii(4, '文件签名');
-    if (signature !== '8BPS') throw new Error(`不是 PSD 文件：签名为 "${signature}"，应为 "8BPS"`);
-    const version = r.u16('版本号');
-    if (version !== 1 && version !== 2) throw new Error(`不支持的版本号：${version}（只支持 1=PSD、2=PSB）`);
-    r.skip(6, '预留字段');
-    const channels = r.u16('通道数');
-    const height = r.u32('文档高度');
-    const width = r.u32('文档宽度');
-    const depth = r.u16('位深');
-    const colorMode = r.u16('色彩模式');
-    if (depth !== 8) throw new Error(`不支持的位深：${depth} 位/通道（只支持 8 位）`);
+    const signature = r.ascii(4, t('psd.field.signature'));
+    if (signature !== '8BPS') throw new Error(t('psd.err.badSignature', { signature }));
+    const version = r.u16(t('psd.field.version'));
+    if (version !== 1 && version !== 2) throw new Error(t('psd.err.badVersion', { version }));
+    r.skip(6, t('psd.field.reserved'));
+    const channels = r.u16(t('psd.field.channels'));
+    const height = r.u32(t('psd.field.height'));
+    const width = r.u32(t('psd.field.width'));
+    const depth = r.u16(t('psd.field.depth'));
+    const colorMode = r.u16(t('psd.field.colorMode'));
+    if (depth !== 8) throw new Error(t('psd.err.badDepth', { depth }));
     if (colorMode !== 3 && colorMode !== 1) {
-        throw new Error(`不支持的色彩模式：${colorMode}（只支持 3=RGB、1=灰度）`);
+        throw new Error(t('psd.err.badColorMode', { colorMode }));
     }
     if (width < 1 || height < 1 || width > 300000 || height > 300000) {
-        throw new Error(`文档尺寸非法：${width} × ${height}`);
+        throw new Error(t('psd.err.badSize', { width, height }));
     }
     return { psb: version === 2, channels, width, height, depth, colorMode };
 }
@@ -228,15 +237,17 @@ function readHeader(r) {
 
 async function readLayerSection(section, head) {
     if (section.left < (head.psb ? 8 : 4)) return [];
-    const infoLen = head.psb ? section.u64('图层信息长度') : section.u32('图层信息长度');
+    const infoLen = head.psb
+        ? section.u64(t('psd.field.layerInfoLen'))
+        : section.u32(t('psd.field.layerInfoLen'));
     if (infoLen === 0) return [];
-    const info = section.sub(infoLen, '图层信息');
+    const info = section.sub(infoLen, t('psd.field.layerInfo'));
 
-    const countRaw = head.psb ? info.i64('图层数') : info.i16('图层数');
+    const countRaw = head.psb ? info.i64(t('psd.field.layerCount')) : info.i16(t('psd.field.layerCount'));
     const count = Math.abs(countRaw);
-    if (!Number.isFinite(count)) throw new Error(`PSD 数据异常：图层数为 ${countRaw}`);
+    if (!Number.isFinite(count)) throw new Error(t('psd.err.badLayerCount', { count: countRaw }));
     if (count * MIN_LAYER_RECORD > info.left) {
-        throw new Error(`PSD 数据越界：声明 ${count} 个图层，图层信息段却只有 ${info.left} 字节`);
+        throw new Error(t('psd.err.layerCountMismatch', { count, left: info.left }));
     }
 
     const records = [];
@@ -250,7 +261,7 @@ async function readLayerSection(section, head) {
             pending.push({
                 rec,
                 id: ch.id,
-                body: ch.length > 0 ? info.bytes(ch.length, '图层通道数据') : EMPTY,
+                body: ch.length > 0 ? info.bytes(ch.length, t('psd.field.layerChannelData')) : EMPTY,
             });
         }
     }
@@ -262,28 +273,30 @@ async function readLayerSection(section, head) {
 }
 
 function readLayerRecord(r, head) {
-    const top = r.i32('图层矩形 top');
-    const left = r.i32('图层矩形 left');
-    const bottom = r.i32('图层矩形 bottom');
-    const right = r.i32('图层矩形 right');
+    const top = r.i32(t('psd.field.rectTop'));
+    const left = r.i32(t('psd.field.rectLeft'));
+    const bottom = r.i32(t('psd.field.rectBottom'));
+    const right = r.i32(t('psd.field.rectRight'));
     const width = Math.max(0, right - left);
     const height = Math.max(0, bottom - top);
 
-    const channelCount = r.u16('图层通道数');
+    const channelCount = r.u16(t('psd.field.channelCount'));
     const channels = [];
     for (let i = 0; i < channelCount; i += 1) {
-        const id = r.i16('通道 id');
-        const length = head.psb ? r.u64('通道数据长度') : r.u32('通道数据长度');
+        const id = r.i16(t('psd.field.channelId'));
+        const length = head.psb
+            ? r.u64(t('psd.field.channelDataLen'))
+            : r.u32(t('psd.field.channelDataLen'));
         channels.push({ id, length });
     }
 
-    r.skip(4, '混合模式签名'); // 固定 '8BIM'，长度固定，读掉即可
-    const blendKey = r.ascii(4, '混合模式码');
-    const opacity = r.u8('不透明度');
-    r.skip(1, '剪切标记');
-    const flags = r.u8('图层标志');
-    r.skip(1, '填充字节');
-    const extraLen = r.u32('图层附加数据长度');
+    r.skip(4, t('psd.field.blendSignature')); // 固定 '8BIM'，长度固定，读掉即可
+    const blendKey = r.ascii(4, t('psd.field.blendKey'));
+    const opacity = r.u8(t('psd.field.opacity'));
+    r.skip(1, t('psd.field.clipping'));
+    const flags = r.u8(t('psd.field.flags'));
+    r.skip(1, t('psd.field.fill'));
+    const extraLen = r.u32(t('psd.field.extraDataLen'));
 
     const rec = {
         name: '',
@@ -300,7 +313,7 @@ function readLayerRecord(r, head) {
     };
     readExtraData(r, extraLen, head, rec);
     if (rec.width * rec.height > MAX_LAYER_PIXELS) {
-        throw new Error(`图层「${rec.name}」尺寸过大：${rec.width} × ${rec.height}`);
+        throw new Error(t('psd.err.layerTooLarge', { name: rec.name, width: rec.width, height: rec.height }));
     }
     return rec;
 }
@@ -309,36 +322,36 @@ function readLayerRecord(r, head) {
 function readExtraData(r, extraLen, head, rec) {
     if (extraLen <= 0) return;
     const end = Math.min(r.pos + extraLen, r.end);
-    skipBlock(r, '图层蒙版数据');
-    skipBlock(r, '混合范围');
+    skipBlock(r, t('psd.field.maskData'), t('psd.field.maskDataLen'));
+    skipBlock(r, t('psd.field.blendRanges'), t('psd.field.blendRangesLen'));
 
     if (r.pos < end) {
-        const nameLen = r.u8('图层名字节数');
-        if (nameLen > 0) rec.name = latin1(r.bytes(nameLen, '图层名'));
+        const nameLen = r.u8(t('psd.field.nameLen'));
+        if (nameLen > 0) rec.name = latin1(r.bytes(nameLen, t('psd.field.name')));
         const used = 1 + nameLen;
         const pad = (4 - (used % 4)) % 4;
-        if (pad > 0 && r.pos + pad <= end) r.skip(pad, '图层名对齐填充');
+        if (pad > 0 && r.pos + pad <= end) r.skip(pad, t('psd.field.namePad'));
     }
 
     const minBlock = head.psb ? 16 : 12;
     while (end - r.pos >= minBlock) {
         const at = r.pos;
-        const signature = r.ascii(4, '附加块签名');
+        const signature = r.ascii(4, t('psd.field.blockSignature'));
         if (signature !== '8BIM' && signature !== '8B64') {
             r.pos = end; // 块边界已错位：放弃剩余附加数据，不让它污染后面的图层
             break;
         }
-        const key = r.ascii(4, '附加块标识');
-        const len = head.psb ? r.u64('附加块长度') : r.u32('附加块长度');
+        const key = r.ascii(4, t('psd.field.blockKey'));
+        const len = head.psb ? r.u64(t('psd.field.blockLen')) : r.u32(t('psd.field.blockLen'));
         if (len > r.end - r.pos) {
             r.pos = end;
             break;
         }
-        const block = r.sub(len, `附加块 ${key}`);
+        const block = r.sub(len, t('psd.field.extraBlock', { key }));
         if (key === 'luni') readUnicodeName(block, rec);
-        else if (key === 'lsct' || key === 'lsdk') rec.divider = block.u32('分组类型');
+        else if (key === 'lsct' || key === 'lsdk') rec.divider = block.u32(t('psd.field.dividerType'));
         // 少数写出器不把奇数长度补齐算进长度字段；下一个块能对齐才补 1 字节。
-        if ((len & 1) !== 0 && r.pos < end) r.skip(1, '附加块对齐');
+        if ((len & 1) !== 0 && r.pos < end) r.skip(1, t('psd.field.blockPad'));
         if (r.pos <= at) {
             r.pos = end;
             break;
@@ -347,17 +360,19 @@ function readExtraData(r, extraLen, head, rec) {
     r.pos = end;
 }
 
-function skipBlock(r, what) {
-    const len = r.u32(`${what}长度`);
+// 长度字段的前缀词「…长度」在中文里是构词，不是两句拼起来的句子：各给一条整句词条，
+// 由译文自己决定怎么组（英文写作 "Mask data length"，中文写作「图层蒙版数据长度」）。
+function skipBlock(r, what, whatLen) {
+    const len = r.u32(whatLen);
     if (len > 0) r.skip(len, what);
 }
 
 /** 'luni'：4 字节字符数（UTF-16 码元）+ UTF-16BE 字符。空串时保留 pascal 名。 */
 function readUnicodeName(block, rec) {
     if (block.left < 4) return;
-    const chars = block.u32('Unicode 图层名字符数');
+    const chars = block.u32(t('psd.field.unicodeNameLen'));
     if (chars <= 0 || chars * 2 > block.left) return;
-    const text = utf16be(block.bytes(chars * 2, 'Unicode 图层名'));
+    const text = utf16be(block.bytes(chars * 2, t('psd.field.unicodeName')));
     if (text) rec.name = text;
 }
 
@@ -413,7 +428,7 @@ async function decodeChannel(body, rec, head) {
     if (size === 0 || body.length < 2) return out;
 
     const r = new Reader(body);
-    const compression = r.u16('通道压缩方式');
+    const compression = r.u16(t('psd.field.compression'));
     if (compression === 0) {
         const copy = Math.min(size, r.left);
         out.set(body.subarray(r.pos, r.pos + copy));
@@ -436,12 +451,12 @@ function decodePackBits(r, rowBytes, height, psb) {
     const out = new Uint8Array(rowBytes * height);
     const rows = new Array(height);
     for (let y = 0; y < height; y += 1) {
-        rows[y] = psb ? r.u32('RLE 行字节数') : r.u16('RLE 行字节数');
+        rows[y] = psb ? r.u32(t('psd.field.rleRowLen')) : r.u16(t('psd.field.rleRowLen'));
     }
     for (let y = 0; y < height; y += 1) {
         const count = Math.min(rows[y], r.left);
         if (count === 0) continue;
-        unpackRow(r.bytes(count, 'RLE 行数据'), out, y * rowBytes, rowBytes);
+        unpackRow(r.bytes(count, t('psd.field.rleRowData')), out, y * rowBytes, rowBytes);
     }
     return out;
 }
@@ -578,11 +593,13 @@ export async function parsePsd(buffer) {
     const r = new Reader(bytes);
     const head = readHeader(r);
 
-    r.skip(r.u32('色彩模式数据长度'), '色彩模式数据');
-    r.skip(r.u32('图像资源长度'), '图像资源');
+    r.skip(r.u32(t('psd.field.colorModeDataLen')), t('psd.field.colorModeData'));
+    r.skip(r.u32(t('psd.field.imageResourcesLen')), t('psd.field.imageResources'));
 
-    const sectionLen = head.psb ? r.u64('图层与蒙版段长度') : r.u32('图层与蒙版段长度');
-    const section = r.sub(sectionLen, '图层与蒙版段');
+    const sectionLen = head.psb
+        ? r.u64(t('psd.field.layerMaskLen'))
+        : r.u32(t('psd.field.layerMaskLen'));
+    const section = r.sub(sectionLen, t('psd.field.layerMask'));
     const layers = await readLayerSection(section, head);
 
     return {

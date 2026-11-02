@@ -67,11 +67,15 @@ test('formatSpeed：整数不带小数点，其余最多两位', () => {
 });
 
 test('modeInfo：未知值按循环处理（旧存档只有 cycle / pingpong / none）', () => {
-    assert.equal(modeInfo('pingpong').label, '来回');
-    assert.equal(modeInfo('reverse').label, '反向循环');
-    assert.equal(modeInfo('none').label, '单次');
-    assert.equal(modeInfo('').label, '循环');
-    assert.equal(modeInfo(undefined).label, '循环');
+    // 显示名随界面语言变（词条在 app/i18n/parts/panels.mjs 的 playback.mode.*），
+    // 这里只钉住返回的是哪一条 —— 文案本身由 tests/i18n-parts-panels.test.mjs 分语言验。
+    assert.equal(modeInfo('pingpong').id, LOOP_PINGPONG);
+    assert.equal(modeInfo('reverse').id, LOOP_REVERSE);
+    assert.equal(modeInfo('none').id, LOOP_NONE);
+    assert.equal(modeInfo('').id, LOOP_CYCLE);
+    assert.equal(modeInfo(undefined).id, LOOP_CYCLE);
+    assert.equal(modeInfo(null).id, LOOP_CYCLE, '缺字段的老存档不能崩');
+    assert.equal(modeInfo('不是播放方式').id, LOOP_CYCLE, '坏值按循环处理');
 });
 
 test('playbackAt · 循环：acc 折叠进 [0,total)', () => {

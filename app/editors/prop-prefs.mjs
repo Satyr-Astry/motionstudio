@@ -24,6 +24,7 @@ import { makeGroup, makeRow, makeNum, makeSeg } from './prop-kit.mjs';
 import { SHORTCUT_GROUPS, LEGEND_ITEMS } from './help.mjs';
 import { icon } from '../core/icons.mjs';
 import { engine, setPrefs } from '../shell/doc-state.mjs';
+import { t, normalizeLocale, getLocale } from '../i18n/index.mjs';
 
 const KEY = 'ms.prefs';
 
@@ -36,10 +37,19 @@ const DEFAULTS = {
     sizeW: 900,
     sizeH: 640,
     bg: 'checker',
+    locale: 'en',
 };
 
+/**
+ * 选项表：`[落盘值, 标签]`。
+ * 标签是字符串时原样显示（'30s' / '320×320' / 'English' 这类两种语言一样）；
+ * 是函数时在**建面板那一刻**才取词 —— 模块加载时就求值的常量表直接调 t() 会把语言钉死
+ * 在第一次 import 的那一刻，之后外壳重挂面板也翻不过来。
+ */
+const optList = (table) => table.map(([val, label]) => [val, typeof label === 'function' ? label() : label]);
+
 const SAVE_OPTS = [
-    ['0', '关'],
+    ['0', () => t('pref.save.off')],
     ['30', '30s'],
     ['60', '1min'],
     ['300', '5min'],
@@ -59,13 +69,22 @@ const SIZE_OPTS = [
     ['320', '320×320'],
     ['640', '640×480'],
     ['900', '900×640'],
-    ['custom', '自定义'],
+    ['custom', () => t('pref.edit.custom')],
 ];
 const SIZE_PRESETS = { 320: [320, 320], 640: [640, 480], 900: [900, 640] };
 const BG_OPTS = [
-    ['checker', '棋盘格'],
-    ['dark', '纯深灰'],
-    ['white', '纯白'],
+    ['checker', () => t('pref.look.bgChecker')],
+    ['dark', () => t('pref.look.bgDark')],
+    ['white', () => t('pref.look.bgWhite')],
+];
+/**
+ * 语言选项。值必须与 `app/i18n/index.mjs` 的 `LOCALES` 一致（`_check-i18n.mjs` 会对齐）；
+ * 标签用**各自语言的自称**，不翻译 —— 一个只会英文的人切到中文界面时，仍然得认得
+ * 「简体中文」这四个字才能切回来。自称本来就住在基础表的 `locale.*` 里，这里只引用。
+ */
+const LANG_OPTS = [
+    ['en', () => t('locale.en')],
+    ['zh-Hans', () => t('locale.zhHans')],
 ];
 /**
  * 视口底色：两档纯色 + 一档棋盘格，三档都是可直接喂 `background` 简写的值。
@@ -111,6 +130,9 @@ function readPrefs() {
         sizeW: clampRound(o.objectW != null ? o.objectW : o.sizeW, 16, 4096, DEFAULTS.sizeW),
         sizeH: clampRound(o.objectH != null ? o.objectH : o.sizeH, 16, 4096, DEFAULTS.sizeH),
         bg: hasVal(BG_OPTS, o.bg) ? String(o.bg) : DEFAULTS.bg,
+        // 语言：先用归一函数认别名（'zh-CN'/'cn' 之类手改值）；盘上没有值但运行时已经
+        // 生效了某种语言时，显示实际生效的那个，避免「面板说英文、界面是中文」
+        locale: normalizeLocale(o.locale !== undefined ? o.locale : getLocale()),
     };
 }
 
@@ -128,7 +150,7 @@ function makeHelpRow(item) {
     name.appendChild(document.createTextNode(item.name));
     const keys = document.createElement('kbd');
     keys.className = 'pref-help-keys';
-    keys.textContent = item.keys && String(item.keys).trim() ? item.keys : '鼠标';
+    keys.textContent = item.keys && String(item.keys).trim() ? item.keys : t('pref.legend.mouse');
     row.append(name, keys);
     return row;
 }
@@ -146,7 +168,7 @@ function makeLegendRow(item) {
     name.append(mark, document.createTextNode(item.name));
     const keys = document.createElement('kbd');
     keys.className = 'pref-help-keys';
-    keys.textContent = item.kind === 'cel' ? '离散' : '插值';
+    keys.textContent = item.kind === 'cel' ? t('pref.legend.cel') : t('pref.legend.key');
     row.append(name, keys);
     return row;
 }
@@ -157,42 +179,60 @@ export function mount(el, ctx) {
 
     /* ─────────────────── 自动保存 ─────────────────── */
 
-    const saveBody = makeGroup(el, '自动保存', 'pref-save');
+    const saveBody = makeGroup(el, t('pref.save.group'), 'pref-save');
     groups.push(saveBody);
-    const saveBtns = makeSeg(saveBody, '间隔', SAVE_OPTS, String(prefs.autoSave));
-    addNote(saveBody, '未命名的项目不自动保存（绝不弹名字或路径对话框）。');
+    const saveBtns = makeSeg(saveBody, t('pref.save.interval'), optList(SAVE_OPTS), String(prefs.autoSave));
+    addNote(saveBody, t('pref.save.note'));
 
     /* ─────────────────── 撤销 ─────────────────── */
 
-    const undoBody = makeGroup(el, '撤销', 'pref-undo');
+    const undoBody = makeGroup(el, t('pref.undo.group'), 'pref-undo');
     groups.push(undoBody);
-    const undoBtns = makeSeg(undoBody, '步数上限', UNDO_OPTS, String(prefs.undoLimit));
-    addNote(undoBody, '引擎当前固定 120 步，值已存盘；接上 setHistoryLimit 后即生效。');
+    const undoBtns = makeSeg(undoBody, t('pref.undo.limit'), optList(UNDO_OPTS), String(prefs.undoLimit));
+    addNote(undoBody, t('pref.undo.note'));
 
     /* ─────────────────── 编辑 ─────────────────── */
 
-    const editBody = makeGroup(el, '编辑', 'pref-edit');
+    const editBody = makeGroup(el, t('pref.edit.group'), 'pref-edit');
     groups.push(editBody);
-    const gridBtns = makeSeg(editBody, '吸附网格', GRID_OPTS, String(prefs.snapGrid));
-    addNote(editBody, '时间轴拖动时的吸附步长，timeline 侧读 ms.prefs.snapGrid 后生效。');
+    const gridBtns = makeSeg(editBody, t('pref.edit.snap'), optList(GRID_OPTS), String(prefs.snapGrid));
+    addNote(editBody, t('pref.edit.snapNote'));
 
-    const sizeBtns = makeSeg(editBody, '新对象尺寸', SIZE_OPTS, prefs.sizePreset);
-    const wInput = makeNum(editBody, '自定义宽', { min: 16, max: 4096, step: 1, value: prefs.sizeW, key: 'pref-w' });
-    const hInput = makeNum(editBody, '自定义高', { min: 16, max: 4096, step: 1, value: prefs.sizeH, key: 'pref-h' });
-    addNote(editBody, '新建对象的位图尺寸，等对象创建处读 prefObjectSize() 后生效。');
+    const sizeBtns = makeSeg(editBody, t('pref.edit.size'), optList(SIZE_OPTS), prefs.sizePreset);
+    const wInput = makeNum(editBody, t('pref.edit.width'), { min: 16, max: 4096, step: 1, value: prefs.sizeW, key: 'pref-w' });
+    const hInput = makeNum(editBody, t('pref.edit.height'), { min: 16, max: 4096, step: 1, value: prefs.sizeH, key: 'pref-h' });
+    addNote(editBody, t('pref.edit.sizeNote'));
 
     /* ─────────────────── 外观 ─────────────────── */
 
-    const lookBody = makeGroup(el, '外观', 'pref-look');
+    const lookBody = makeGroup(el, t('pref.look.group'), 'pref-look');
     groups.push(lookBody);
-    const bgBtns = makeSeg(lookBody, '画布背景', BG_OPTS, prefs.bg);
+    const bgBtns = makeSeg(lookBody, t('pref.look.bg'), optList(BG_OPTS), prefs.bg);
     // 色板只是给选中的那格上个色，真正的底色由 --pref-cv-bg 驱动 .cv-host
     for (const [val, btn] of bgBtns) {
         if (!BG_SWATCH[val]) continue;
         btn.classList.add('pref-swatch');
         btn.style.setProperty('--pref-swatch', BG_SWATCH[val]);
     }
-    addNote(lookBody, '三档都改画布视口底色；画板内部的透明棋盘由引擎绘制，改它要动 paint/engine.mjs。');
+    addNote(lookBody, t('pref.look.bgNote'));
+
+    /* ─────────────────── 语言 ─────────────────── */
+
+    // 放在最前面两段之后、快捷键之前：它是「界面长什么样」的元设置，不属于任何一类编辑行为。
+    // 切换后要重挂所有面板 —— 面板在自己 mount() 里把文案写进 DOM，refresh() 只刷数据，
+    // 所以换语言必须由外壳重挂（app.mjs 的 ctx.setLocale 会调 view-host.remountAll()）。
+    const langBody = makeGroup(el, t('pref.language'), 'pref-lang');
+    groups.push(langBody);
+    const langBtns = makeSeg(langBody, t('pref.language.row'), optList(LANG_OPTS), prefs.locale);
+    langBtns.forEach((btn, val) => {
+        btn.addEventListener('click', () => {
+            if (prefs.locale === val) return;
+            prefs.locale = val;
+            commit();
+            if (ctx && typeof ctx.setLocale === 'function') ctx.setLocale(val);
+        });
+    });
+    addNote(langBody, t('pref.language.hint'));
 
     /* ─────────────────── 快捷键 / 图例（唯一权威表） ─────────────────── */
 
@@ -202,12 +242,12 @@ export function mount(el, ctx) {
         for (const item of group.items) body.appendChild(makeHelpRow(item));
     }
 
-    const legendBody = makeGroup(el, '图例', 'help-legend');
+    const legendBody = makeGroup(el, t('pref.legend.group'), 'help-legend');
     groups.push(legendBody);
     for (const item of LEGEND_ITEMS) legendBody.appendChild(makeLegendRow(item));
     addNote(
         legendBody,
-        '纹理是离散的（到点换图），关键帧是插值的（中间有过渡）。这张表与时间轴「?」浮层读同一份数据（editors/help.mjs），改一处即两处同步。'
+        t('pref.legend.note')
     );
 
     /* ─────────────────── 写入 ─────────────────── */
@@ -307,6 +347,7 @@ export function mount(el, ctx) {
             objectW: prefs.sizeW,
             objectH: prefs.sizeH,
             bg: prefs.bg,
+            locale: prefs.locale,
         });
         // 引擎若将来提供这个口子，改一次就立刻生效；没有则保持静默（不弹错）
         if (engine && typeof engine.setHistoryLimit === 'function') {
@@ -328,6 +369,7 @@ export function mount(el, ctx) {
         for (const [val, btn] of undoBtns) btn.classList.toggle('is-on', String(prefs.undoLimit) === val);
         for (const [val, btn] of gridBtns) btn.classList.toggle('is-on', String(prefs.snapGrid) === val);
         for (const [val, btn] of bgBtns) btn.classList.toggle('is-on', prefs.bg === val);
+        for (const [val, btn] of langBtns) btn.classList.toggle('is-on', prefs.locale === val);
         for (const [val, btn] of sizeBtns) btn.classList.toggle('is-on', prefs.sizePreset === val);
         const custom = prefs.sizePreset === 'custom';
         wInput.disabled = !custom;

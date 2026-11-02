@@ -39,7 +39,8 @@ test('六件工具与五个纹理动作都不再用单字符字形当图标', ()
 });
 
 test('六件工具的图标名互不相同且都是图标（不是文字）', () => {
-    const defs = [...toolbar.matchAll(/\{ id: '(\w+)', icon: '([a-z][a-z0-9-]*)', name: '([^']+)', key: '(\w+)' \}/g)];
+    // 词条化之后显示名不再是字面量：`nameKey` 指进词条表，`id` 才是落盘值。
+    const defs = [...toolbar.matchAll(/\{ id: '(\w+)', icon: '([a-z][a-z0-9-]*)', nameKey: '([^']+)', key: '(\w+)' \}/g)];
     assert.equal(defs.length, 6, '工具表应恰好 6 件');
     const icons = defs.map((d) => d[2]);
     assert.equal(new Set(icons).size, 6, `六个工具图标名重复了: ${icons.join(',')}`);
@@ -49,11 +50,11 @@ test('六件工具的图标名互不相同且都是图标（不是文字）', ()
     }
 });
 
-test('带字动作保留中文标签，图标在前', () => {
-    // 图标 + 中文（＋ 号由 plus 图标承担，文字只剩「纹理」）
-    assert.match(board, /\['new-tex', 'plus', '纹理'/);
-    assert.match(board, /\['unique', 'sparkle', '独特化'/);
-    assert.match(board, /\['fit', 'fit', '适配'/);
+test('带字动作保留文字标签（文案在词条表），图标在前', () => {
+    // 图标 + 文字（＋ 号由 plus 图标承担，文字只剩「纹理」）—— 文字已进词条表，这里只钉住键名
+    assert.match(board, /\['new-tex', 'plus', 'board\.act\.newTex\.label'/);
+    assert.match(board, /\['unique', 'sparkle', 'board\.act\.unique\.label'/);
+    assert.match(board, /\['fit', 'fit', 'board\.act\.fit\.label'/);
     // 图标在前、文字在后的拼装方式
     assert.match(board, /icon\(iconName\) \+ \(text \? `<span>/);
 });
@@ -126,18 +127,24 @@ test('纯图标按钮都带 aria-label（title 之外的第二道可访问性）
     // .bd-act 用 title 当 aria（‹ › 是纯图标，没有可读文字）
     assert.match(board, /btn\.setAttribute\('aria-label', title\)/);
     // 笔刷 chip 是「图标 + 两字短名」，窄屏收成纯图标时全靠这条 aria
-    assert.match(board, /btn\.setAttribute\('aria-label', b\.name \+ '（快捷键 '/);
+    // 文案（含快捷键括注）整句在词条表里，源码只传占位符
+    assert.match(board, /const brushTitle = t\('board\.brush\.title', \{ name: b\.name, key: i \+ 1 \}\);/);
+    assert.match(board, /btn\.setAttribute\('aria-label', brushTitle\)/);
 });
 
 test('笔刷 chip 用两字短名 + 图标，不再用单字', () => {
     // 单字（像/圆/软/铅/晕/散/擦）不构成词，7 支笔等于没有名字 —— 见计划 §0。
-    const block = board.match(/const BRUSH_SHORT = \{([\s\S]*?)\};/);
-    assert.ok(block, 'board.mjs 里找不到 BRUSH_SHORT');
-    const names = [...block[1].matchAll(/:\s*'([^']+)'/g)].map((m) => m[1]);
-    assert.equal(names.length, 7, `BRUSH_SHORT 应有 7 支笔，实际 ${names.length}`);
-    for (const n of names) {
-        assert.equal([...n].length, 2, `笔刷短名「${n}」不是两字（三字会撑破一行，单字读不懂）`);
+    // 短名已迁进词条表（`board.brush.short.*`）：源码只留 id → 键的对应，
+    // 词条值仍是两字（长度由 tests/i18n-parts-board.test.mjs 查表守）。
+    const block = board.match(/const BRUSH_SHORT_KEY = \{([\s\S]*?)\};/);
+    assert.ok(block, 'board.mjs 里找不到 BRUSH_SHORT_KEY');
+    const keys = [...block[1].matchAll(/:\s*'([^']+)'/g)].map((m) => m[1]);
+    assert.equal(keys.length, 7, `BRUSH_SHORT_KEY 应有 7 支笔，实际 ${keys.length}`);
+    for (const k of keys) {
+        assert.match(k, /^board\.brush\.short\.[a-z]+$/, `笔刷短名键不合规: ${k}`);
     }
+    // 短名要靠读时求值才能跟着语言切换，不许在模块顶层算成常量字符串
+    assert.match(board, /function brushShortName\(b\) \{[\s\S]*?t\(key\)[\s\S]*?\}/);
     // 每支笔都必须配一枚图标名，并且都在 icons.mjs 里（缺了 icon() 会静默回退默认图标）
     const icons = board.match(/const BRUSH_ICON = \{([\s\S]*?)\};/);
     assert.ok(icons, 'board.mjs 里找不到 BRUSH_ICON');
@@ -175,8 +182,11 @@ test('窄窗口不靠 display:none 藏字（这是「文字不显示完全」的
 });
 
 test('工具表按钮的 title / aria-label 同时带名称与快捷键', () => {
-    assert.match(toolbar, /b\.title = `\$\{t\.name\} \(\$\{t\.key\}\)`/);
-    assert.match(toolbar, /b\.setAttribute\('aria-label', `\$\{t\.name\} \(\$\{t\.key\}\)`\)/);
+    // 词条化之后名称与快捷键合成为一句 `tool.label`（'{name} ({key})'），两个属性共用同一个 label。
+    // 断言意图不变：title 与 aria-label 都必须带「名字 (快捷键)」。
+    assert.match(toolbar, /const label = t\('tool\.label', \{ name: t\(def\.nameKey\), key: def\.key \}\);/);
+    assert.match(toolbar, /b\.title = label;/);
+    assert.match(toolbar, /b\.setAttribute\('aria-label', label\);/);
 });
 
 // ── task-30：纹理尺寸控件（裁到内容 / 宽×高 / 应用 / 对齐） ──────────────────
@@ -201,7 +211,7 @@ test('尺寸控件两个按钮都有 title + aria-label，且命令未接线时�
     // 「点了没反应」是本轮投诉的同类问题：命令缺失时必须禁用 + title 说明
     assert.match(board, /cropBtn\.disabled = !!why/);
     assert.match(board, /applySizeBtn\.disabled = !!why/);
-    assert.match(board, /尺寸命令尚未接线/, '命令缺失时没有写明原因');
+    assert.match(board, /board\.size\.notWired/, '命令缺失时没有写明原因');
     assert.match(board, /typeof c\.resizeTexture === 'function'/, '守卫没有检测命令是否接线');
 });
 
@@ -215,7 +225,11 @@ test('尺寸输入不许在 input 事件里直接改文档：只有应用按钮 
     assert.ok(!/size[WH]\.addEventListener\('input'/.test(board), '尺寸框上挂了 input 监听——会在打字中途改文档');
     // 不许用隐藏修饰键切语义（Alt/Shift 那套已在 keepPlace 上被否掉）：
     // 对齐必须是显式三档，而不是「按住某键 = 另一种对齐」
-    assert.match(board, /\['nw', '左上'\], \['c', '居中'\], \['se', '右下'\]/, '对齐三档没有显式列出');
+    assert.match(
+        board,
+        /\['nw', 'board\.align\.nw'\], \['c', 'board\.align\.c'\], \['se', 'board\.align\.se'\]/,
+        '对齐三档没有显式列出',
+    );
     assert.ok(!/alignSel\.dataset|alignKeyDown/.test(board), '对齐不该藏在键盘修饰里');
 });
 

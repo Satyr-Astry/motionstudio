@@ -11,6 +11,12 @@
  * 本模块是纯数据：不碰 DOM、不 import 任何 shell 模块、不改入参。
  * 位图（surface）由调用方提供（HTMLCanvasElement / OffscreenCanvas 都行，
  * 只需要 width / height 两个数值字段），这样 Node 里也能测。
+ *
+ * 现状（2026-10-26 实测）：第 3 条的「提交」目前**没有生产入口** ——
+ * app/ 内没有任何模块 import 本模块或 shell/object-factory.mjs，只有
+ * tests/board.test.mjs 覆盖。app/editors/board.mjs 是另一个东西：它是
+ * 「编辑当前对象、当前时刻那张纹理」的像素编辑器（画布尺寸、笔刷、调色板），
+ * 不产出对象。这里保留纯数据层与工厂，等真要做「画板 → 对象」再接界面。
  */
 
 /** 新画板默认尺寸。与文档默认画布一致，省得每次改。 */

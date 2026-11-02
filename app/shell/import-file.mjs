@@ -30,6 +30,7 @@ import { parsePsd } from '../core/psd.mjs';
 import { createDoc, makeObject } from '../core/doc-model.mjs';
 import { normalizeDrawOrder } from '../core/draw-order.mjs';
 import { createKey } from '../core/transform.mjs';
+import { t } from '../i18n/index.mjs';
 import * as ipc from './ipc.mjs';
 
 /** 扩展名 → 分派类型。主进程 ms:import-file 的 filters 必须与这里一一对应。 */
@@ -115,6 +116,14 @@ export function extOf(name) {
 /** 扩展名 → 'psd' | 'image' | ''（空 = 不支持）。 */
 export function kindOf(name) {
     return KIND_BY_EXT[extOf(name)] || '';
+}
+
+/**
+ * 「不支持的文件类型」里那截扩展名。
+ * 没有扩展名时给一句可读的话而不是留空 —— 空着看起来像界面漏了字。
+ */
+function unsupportedExt(ext) {
+    return ext ? '.' + ext : t('shell.import.err.noExt');
 }
 
 /**
@@ -482,7 +491,7 @@ function trimBitmap(bitmap, opts) {
  * @param {{dx:number,dy:number}|null} [trim] 位图被裁掉的左上留白（null = 没裁）
  */
 function psdObject(layer, image, parent, report, trim) {
-    const name = String(layer.name == null ? '' : layer.name).trim() || '图层';
+    const name = String(layer.name == null ? '' : layer.name).trim() || t('shell.import.layerName');
     if (parent) report.grouped += 1;
     // 裁剪偏移只加到原点：位图左上角现在是「内容左上角」，世界坐标必须跟着补 dx/dy，
     // 否则对象会整块往左上滑 dx/dy。注入的 makeImage 返回裸位图时 trim 为 null → 补 0。
@@ -516,7 +525,7 @@ function psdObject(layer, image, parent, report, trim) {
  * 空组（没有任何可导入的子对象）不会走到这里——没有内容就不该占一个面板项。
  */
 function groupObject(node, parent) {
-    const name = String(node.name == null ? '' : node.name).trim() || '组';
+    const name = String(node.name == null ? '' : node.name).trim() || t('shell.import.groupName');
     return makeObject({
         name,
         // 组不可见 → 整棵子树不渲染，这条也写进子对象（见 psdObject）
@@ -560,7 +569,7 @@ function scanGroupTree(bytes) {
     let end = bytes.byteLength;
 
     const need = (n) => {
-        if (!(n >= 0) || n > end - pos) throw new Error('组扫描越界');
+        if (!(n >= 0) || n > end - pos) throw new Error(t('shell.import.err.groupScan'));
     };
     const u8 = () => { need(1); const v = view.getUint8(pos); pos += 1; return v; };
     const u16 = () => { need(2); const v = view.getUint16(pos); pos += 2; return v; };
@@ -670,7 +679,7 @@ function scanGroupTree(bytes) {
             i16(); // 通道 id
             skip(psb ? 8 : 4); // 通道数据长度
         }
-        if (text(4) !== '8BIM') throw new Error('图层记录签名错误');
+        if (text(4) !== '8BIM') throw new Error(t('shell.import.err.layerSignature'));
         const blend = text(4);
         const opacity = u8();
         u8(); // 剪切标记
@@ -846,14 +855,14 @@ function importTargetDoc(base, objects, opts) {
 export async function psdToObjects(buffer, opts) {
     const o = opts || {};
     const bytes = toBytes(buffer);
-    if (!bytes || !bytes.byteLength) return { ok: false, error: '没有读到 PSD 内容' };
+    if (!bytes || !bytes.byteLength) return { ok: false, error: t('shell.import.err.noPsd') };
 
     let parsed;
     try {
         parsed = await parsePsd(bytes);
     } catch (err) {
         // parsePsd 对 16/32 位、CMYK 抛的是中文原因：原样透出比一句「导入失败」有用
-        return { ok: false, error: String((err && err.message) || err) || 'PSD 解析失败' };
+        return { ok: false, error: String((err && err.message) || err) || t('shell.import.err.psdParse') };
     }
 
     const makeImage = typeof o.makeImage === 'function' ? o.makeImage : psdLayerImage;
@@ -881,7 +890,7 @@ export async function psdToObjects(buffer, opts) {
     const built = trusted
         ? await buildObjects(tree, layers, makeImage, report)
         : await flatObjects(layers, makeImage, report);
-    if (!built.length) return { ok: false, error: 'PSD 里没有可导入的图层（全部隐藏或为空）', report };
+    if (!built.length) return { ok: false, error: t('shell.import.err.noLayers'), report };
 
     // doc.objects[0] 才是视觉最上层（composite.mjs 倒序遍历绘制）：
     // order:'array' 要的是结构自底向上，整表反转即可，组与子对象一起翻。
@@ -914,11 +923,11 @@ export async function psdToObjects(buffer, opts) {
 export async function imageToObject(buffer, opts) {
     const o = opts || {};
     const bytes = toBytes(buffer);
-    if (!bytes || !bytes.byteLength) return { ok: false, error: '没有读到图片内容' };
+    if (!bytes || !bytes.byteLength) return { ok: false, error: t('shell.import.err.noImage') };
 
     const name = String(o.name || '');
     const decoded = await decodeBitmap(bytes, name, o.decode);
-    if (!decoded) return { ok: false, error: '图片解码失败（扩展名和真实格式可能不符）' };
+    if (!decoded) return { ok: false, error: t('shell.import.err.imageDecode') };
 
     const w = Math.max(1, intOr(decoded.width, 0));
     const h = Math.max(1, intOr(decoded.height, 0));
@@ -939,7 +948,7 @@ export async function imageToObject(buffer, opts) {
     const y = cy + dy;
 
     const obj = makeObject({
-        name: stripExt(name) || '导入的图片',
+        name: stripExt(name) || t('shell.import.defaultImageName'),
         visible: true,
         opacity: 1,
         kind: 'image',
@@ -978,7 +987,7 @@ export async function importBuffer(payload, opts) {
     const kind = kindOf(name);
     if (!kind) {
         const ext = extOf(name);
-        return { ok: false, error: '不支持的文件类型：' + (ext ? '.' + ext : '（没有扩展名）') };
+        return { ok: false, error: t('shell.import.err.unsupportedType', { ext: unsupportedExt(ext) }) };
     }
     const shared = { ...o, name };
     if (kind === 'psd') return psdToObjects(payload && payload.data, shared);
@@ -1000,16 +1009,16 @@ export async function pickAndImport(opts) {
         res = null;
     }
     // 没有 preload 桥（纯浏览器打开 index.html）：给一句可读的原因
-    if (!res) return { ok: false, error: '导入需要桌面版（浏览器里没有文件对话框）' };
+    if (!res) return { ok: false, error: t('shell.import.err.needsDesktop') };
     if (res.ok === false) {
         const canceled = res.canceled === true;
-        return { ok: false, canceled, error: canceled ? '' : String(res.error || '打开文件失败') };
+        return { ok: false, canceled, error: canceled ? '' : String(res.error || t('shell.import.err.openFailed')) };
     }
     const name = String(res.name || res.path || '');
     const kind = kindOf(name);
     if (!kind) {
         const ext = extOf(name);
-        return { ok: false, error: '不支持的文件类型：' + (ext ? '.' + ext : '（没有扩展名）') };
+        return { ok: false, error: t('shell.import.err.unsupportedType', { ext: unsupportedExt(ext) }) };
     }
     return importBuffer({ name, path: res.path || '', data: res.data }, {
         doc: o.doc,

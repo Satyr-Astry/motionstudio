@@ -13,6 +13,7 @@
 
 import { celIndexAt, docDuration, objectsOf } from '../core/doc-model.mjs';
 import { normalizeSegments } from '../core/timebase.mjs';
+import { t } from '../i18n/index.mjs';
 
 /* ─────────────────────────── 常量 ─────────────────────────── */
 
@@ -44,13 +45,19 @@ export const CUR_EPS_PX = 3;
 
 export const DEFAULT_FPS = 12;
 
-export const EASES = [
-    ['linear', '线性'],
-    ['bezier', '贝塞尔'],
-    ['hold', '保持'],
-];
+// 缓动 id 是落盘值（doc 里的 ease 字段就是这几个字符串），显示名走词条现取。
+export const EASE_IDS = Object.freeze(['linear', 'bezier', 'hold']);
+const EASE_KEYS = {
+    linear: 'timeline.ease.linear',
+    bezier: 'timeline.ease.bezier',
+    hold: 'timeline.ease.hold',
+};
 
-export const EASE_TEXT = { linear: '线性', bezier: '贝塞尔', hold: '保持' };
+/** 缓动 id → 当前语言的显示名（每次调用现取，切语言立即跟着变）。 */
+export function easeText(id) {
+    const key = EASE_KEYS[id];
+    return key ? t(key) : String(id == null ? '' : id);
+}
 
 export const clampNum = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 export const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
@@ -251,16 +258,16 @@ export function keyGroups(keys) {
 
 /* ─────────────────────── 关键帧值的可读摘要（title 里给人看） ─────────────────────── */
 
-/** 通道显示名（只用于文案，顺序与 transform 的 TRACK_FIELDS 一致）。 */
+/** 通道顺序 + 词条键 + 单位（显示名在 keySummary 里现取：同一份常量，切语言即生效）。 */
 const STATE_LABELS = [
-    ['x', '位移 X'],
-    ['y', '位移 Y'],
-    ['scaleX', '缩放 X'],
-    ['scaleY', '缩放 Y'],
-    ['rotate', '旋转', '°'],
-    ['skewX', '斜切 X', '°'],
-    ['skewY', '斜切 Y', '°'],
-    ['opacity', '不透明度'],
+    ['x', 'timeline.state.x'],
+    ['y', 'timeline.state.y'],
+    ['scaleX', 'timeline.state.scaleX'],
+    ['scaleY', 'timeline.state.scaleY'],
+    ['rotate', 'timeline.state.rotate', '°'],
+    ['skewX', 'timeline.state.skewX', '°'],
+    ['skewY', 'timeline.state.skewY', '°'],
+    ['opacity', 'timeline.state.opacity'],
 ];
 const STATE_DEFAULTS = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotate: 0, skewX: 0, skewY: 0, opacity: 1 };
 
@@ -271,13 +278,13 @@ const STATE_DEFAULTS = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotate: 0, skewX: 0, 
 export function keySummary(state, max = 3) {
     const s = state && typeof state === 'object' ? state : {};
     const parts = [];
-    for (const [field, label, unit] of STATE_LABELS) {
+    for (const [field, labelKey, unit] of STATE_LABELS) {
         const v = Number(s[field]);
         if (!Number.isFinite(v) || Math.abs(v - STATE_DEFAULTS[field]) < 1e-6) continue;
-        parts.push(label + '=' + Math.round(v * 1000) / 1000 + (unit || ''));
+        parts.push(t(labelKey) + '=' + Math.round(v * 1000) / 1000 + (unit || ''));
         if (parts.length >= max) break;
     }
-    return parts.length ? parts.join(' · ') : '与默认值相同';
+    return parts.length ? parts.join(' · ') : t('timeline.summary.same');
 }
 
 /** 段帧率条的数据：每段 { index, at, fps, end }，最后一段的 end = 总时长。 */

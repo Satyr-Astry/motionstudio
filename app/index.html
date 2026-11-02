@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'" />
@@ -22,6 +22,13 @@
     <header id="topbar"></header>
     <main id="ws-host"></main>
     <footer id="statusbar"></footer>
+    <!--
+        浏览器桥：没有 window.motionAPI（纯网页部署）时，用下载 + 文件选择框
+        补齐 saveProject/loadProject/importFile/exportFrames/exportSheet/saveBinary。
+        必须排在 app.mjs 之前：同文档多个 module 按顺序求值，装好桥再启动。
+        桌面壳里检测到 window.motionAPI 就什么都不做。
+    -->
+    <script type="module" src="./shell/bridge-web.mjs"></script>
     <script type="module" src="./shell/app.mjs"></script>
 </body>
 </html>

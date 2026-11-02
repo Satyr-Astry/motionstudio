@@ -37,7 +37,7 @@
 |---|---|---|
 | transport | `first ⏮ / prev ‹ / play ▶ / next › / last ⏭` | 播放头按 **1/fps 帧**走（`ctx.stepFrames`），首末帧夹在 `[0, docDuration]` |
 | time | `input.tline-now` / `input.tline-total` | 当前时刻与总时长；Enter 提交、Esc 回滚、失焦提交（`bindField`） |
-| cel | `prevcel 上一格 / nextcel 下一格 / addcel 加纹理 / delcel 删纹理` | 按**纹理切换点**跳，不是按帧 |
+| tex | `addcel 再曝光 / delcel 删曝光` | 曝光是**离散**的：某一段时刻显示哪张纹理，不插值。跳纹理切换点不在这里（`Shift+,` / `Shift+.` 与命令面板，外壳的 `goPrevCel/goNextCel`） |
 | key | `addkey ◆` | 在当前时刻给活动对象打关键帧（值取 `stateAt`，画面不跳） |
 | zoom | `zoomout − / zoomin ＋ / .tline-zoom` | 水平缩放，锚点在播放头 |
 
@@ -94,7 +94,7 @@
 - 单元测试：`npm test`（= `node --test tests/*.test.mjs`）→ **tests 517 / pass 515 / fail 0 / skipped 2**。
 - 真机（CDP 9334）：
   - 顶栏九个动作：`new,save,open,import,export,undo,redo,animate,draw,free`（不含播放）。
-  - 时间轴十二个 act：`first,prev,play,next,last,prevcel,nextcel,addcel,delcel,addkey,zoomout,zoomin`；`.tline-now` / `.tline-total` 是 `INPUT`。
+  - 时间轴十三个 act：`first,prev,play,next,last,play-speed,play-mode,addcel,delcel,addkey,snap,zoomout,zoomin`；`.tline-now` / `.tline-total` 是 `INPUT`。
   - 绘图工作区区域：`toolbar / layers / palette / canvas`，`.cv-host` 恒为 1，`engine.tool === 'brush'`。
   - 对象面板的纹理栈行数随 `obj.cels` 变化，`.lyr-cel.is-cur` 跟随播放头。
   - `window.__errs` 为空。
@@ -138,14 +138,14 @@
 - 对象形状新增**可选**字段 `drawings: [{image}]`：只为容纳「当前没被任何时刻用到」的纹理。老文档没有这个字段，靠 `drawingsOf` 从 cels 里推导，行为不变。
 - 存档（`app/shell/project-store.mjs`）：`elements[i].drawings = [{ref,w,h}]`，与 cels 共用同一套 `assets` 去重（同一个位图只会存一次）；读盘时按 `ref` 复用同一个位图实例。`makeObject` 必须保留 `drawings`，否则往返会把未使用的纹理丢掉。
 - 外壳：`ctx.drawingsOf/currentDrawingId/placeDrawing/makeUniqueCel/removeDrawing`；命令面板有「切换纹理：上一张/下一张」「纹理独特化」。
-- 时间轴表现：`.tline-cel` 的方块按纹理分配色相（内联 `--cel-hue`，第 n 张是 `n*47°`），同一张纹理在所有曝光时刻同色；`title` 里写「纹理 #n（共 m 处用到这张）」。
+- 时间轴表现：没有单独的纹理块行（见 12.3），换图靠关键帧菱形上的 `.has-drawing` 小方块标记；同一张纹理在所有曝光时刻由同一颗 `key.drawing` 指向，改它全部一起变。
 
 ### 12.1 库与曝光是两层
 
 - **新建纹理（库）**：`ctx.newDrawing(objId, { clone })` → `doc-model.addDrawing` 只往 `obj.drawings` 里加一张图，**不动 cels**，所以时间轴上不会出现新方块。
 - **放到时间轴（曝光）**：点库里的行 → `ctx.placeDrawing(objId, t, drawingId)`（有曝光就换图、没有就建格）。
-- **加曝光**：`ctx.addExposure(objId, t)` —— 用 `findFreeCelTime` 找下一个空帧（注意它返回 `{ at, moved }`，不是数字），把当前纹理再曝光一次，**不新建图**。时间轴工具条的「加曝光」和右键「在此加曝光」都走它。
-- **改曝光时刻**：在时间轴拖纹理块（`moveCel`）；**删曝光**：按 delcel / 双击纹理块；**删纹理**：库里的「删」= `removeDrawing`（图与所有曝光一起消失）。
+- **加曝光**：`ctx.addExposure(objId, t)` —— 用 `findFreeCelTime` 找下一个空帧（注意它返回 `{ at, moved }`，不是数字），把当前纹理再曝光一次，**不新建图**。时间轴工具条的「再曝光」走它；右键菜单是另一条路（`addCel → addCelAt`，会新建或克隆一张纹理，见 `editors/timeline-keys.mjs`）。
+- **改曝光时刻**：拖那颗带纹理的关键帧（`moveCel` 那条轴就是关键帧轴）；**删曝光**：工具条「删曝光」（`removeCelAt`，只摘掉 `drawing`，关键帧与其变换留着，画面回落到上一张）；**删纹理**：库里的「删」= `removeDrawing`（图与所有曝光一起消失）。
 
 ### 12.2 纹理挂在关键帧上（v8 最终形态）
 
@@ -158,7 +158,7 @@
 ### 12.3 时间轴只有一行（v8 定稿）
 
 - .tline-row 的泳道里只有关键帧菱形：.tline-kf（可带 .has-drawing / .is-blank 小点标记这一帧换图或空白）、.tline-kf.is-ch（通道关键帧）、播放头。
-- 纹理块那行（.tline-cel）已删除：纹理挂在关键帧上，改纹理时刻＝拖关键帧，删纹理＝删关键帧或去掉它的 drawing 字段。
+- 纹理块那行（.tline-cel）已删除：纹理挂在关键帧上。换图时刻＝拖那颗带 `.has-drawing` 的关键帧；**删这次曝光**＝`removeCelAt` 只摘掉 `drawing`、关键帧与变换留着（画面回落到上一张）；**删整张纹理**＝库里的 `removeDrawing`，图与所有曝光一起消失。这两件事不同，工具条只给前者。
 - 菱形 left 钳到 0（Math.max(0, x - KF_SIZE/2)），0 秒那颗不会被泳道左边界切掉。
 
 ### 12.4 纹理画布（绘图工作区）

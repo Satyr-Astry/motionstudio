@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { deflateRawSync, deflateSync } from 'node:zlib';
 
 import { PSD_FORMAT, parsePsd } from '../app/core/psd.mjs';
+import { DEFAULT_LOCALE, setLocale, t } from '../app/i18n/index.mjs';
 
 // ── 字节小工具 ────────────────────────────────────────────────────────────────
 
@@ -223,13 +224,53 @@ function baseSample(spec = {}) {
 }
 
 const rgba = (layer) => Array.from(layer.rgba);
+
+// 错误串从 P2-F 起住在 app/i18n/parts/projects.mjs。断言不再抄源码里的中文，
+// 而是按「键 + 变量」取期望值 —— 但不是无脑比 t(k)：那样缺词时两边都是键名，
+// 测试会假绿。所以每条都额外过一遍 i18nText 的三重检查，并在 en / zh-Hans 各跑一遍。
 const CHINESE = /[\u4e00-\u9fa5]/;
+const PLACEHOLDER = /\{\w+\}/g;
+
+function i18nText(key, vars) {
+    const out = t(key, vars);
+    assert.ok(out && out !== key, `词条 ${key} 没落进词典（取到的是键名本身）`);
+    assert.equal(PLACEHOLDER.test(out), false, `词条 ${key} 还有没替换的占位符：${out}`);
+    PLACEHOLDER.lastIndex = 0;
+    assert.equal(t(key, vars), out, `词条 ${key} 取值不稳定`);
+    return out;
+}
+
+/** 占位符个数不定时（越界错误里的 what 由解析器给）：钉住模板骨架，数字/字段必须已代入。 */
+function i18nSkeleton(key) {
+    const raw = t(key);
+    assert.ok(raw && raw !== key, `词条 ${key} 没落进词典（取到的是键名本身）`);
+    const parts = raw.split(PLACEHOLDER).filter((s) => s.length > 0);
+    PLACEHOLDER.lastIndex = 0;
+    assert.ok(parts.length >= 2, `词条 ${key} 没有占位符，骨架断言无从谈起`);
+    return parts;
+}
+
+async function withLocale(id, fn) {
+    setLocale(id);
+    try {
+        await fn();
+    } finally {
+        setLocale(DEFAULT_LOCALE);
+    }
+}
 
 // ── 用例 ──────────────────────────────────────────────────────────────────────
 
-test('PSD_FORMAT 声明扩展名与中文名', () => {
-    assert.equal(PSD_FORMAT.name, 'Photoshop 文档');
+test('PSD_FORMAT 声明扩展名与跟随界面语言的格式名', async () => {
     assert.deepEqual(PSD_FORMAT.ext, ['.psd', '.psb']);
+    // 格式名是给人看的，必须跟着语言走（模块级常量写成访问器的理由，见 docs/本地化.md §5）。
+    await withLocale('en', () => {
+        assert.equal(PSD_FORMAT.name, i18nText('psd.format.name'));
+        assert.equal(CHINESE.test(PSD_FORMAT.name), false, '英文表里出现中文');
+    });
+    await withLocale('zh-Hans', () => {
+        assert.equal(PSD_FORMAT.name, 'Photoshop 文档');
+    });
 });
 
 test('8 位 RGB + raw 通道：头部、图层名、可见性、opacity、像素', async () => {
@@ -335,34 +376,41 @@ test('嵌套组：parentName 取直接父组，真实 PSD 的 lsct 类型 3 也�
     assert.deepEqual(bounded.layers.map((l) => l.parentName), ['组A', null]);
 });
 
-test('非法输入：签名错 / 16 位 / CMYK / 截断都抛中文错误', async () => {
+test('非法输入：签名错 / 16 位 / CMYK / 截断都抛词条化错误（中英各跑一遍）', async () => {
     const badSignature = Buffer.from(baseSample());
     badSignature[0] = 0x39; // '9BPS'
-    await assert.rejects(() => parsePsd(badSignature), (err) => {
-        assert.equal(err instanceof Error, true);
-        assert.match(err.message, CHINESE);
-        assert.match(err.message, /签名/);
-        assert.match(err.message, /9BPS/);
-        return true;
-    });
-
-    await assert.rejects(() => parsePsd(baseSample({ depth: 16 })), (err) => {
-        assert.match(err.message, CHINESE);
-        assert.match(err.message, /16/);
-        return true;
-    });
-
-    await assert.rejects(() => parsePsd(baseSample({ colorMode: 4 })), (err) => {
-        assert.match(err.message, CHINESE);
-        assert.match(err.message, /色彩模式/);
-        return true;
-    });
-
-    await assert.rejects(() => parsePsd(baseSample().subarray(0, 30)), (err) => {
-        assert.match(err.message, CHINESE);
-        assert.match(err.message, /越界/);
-        return true;
-    });
+    const exact = [
+        { sample: () => badSignature, key: 'psd.err.badSignature', vars: { signature: '9BPS' } },
+        { sample: () => baseSample({ depth: 16 }), key: 'psd.err.badDepth', vars: { depth: 16 } },
+        { sample: () => baseSample({ colorMode: 4 }), key: 'psd.err.badColorMode', vars: { colorMode: 4 } },
+    ];
+    for (const id of ['en', 'zh-Hans']) {
+        await withLocale(id, async () => {
+            for (const item of exact) {
+                const want = i18nText(item.key, item.vars);
+                await assert.rejects(() => parsePsd(item.sample()), (err) => {
+                    assert.equal(err instanceof Error, true);
+                    assert.equal(err.message, want, `${id} / ${item.key} 的文案与词典不一致`);
+                    if (id === 'zh-Hans') assert.match(err.message, CHINESE);
+                    return true;
+                });
+            }
+            // 截断：哪一段先不够读由解析器决定，所以只钉模板骨架 + 占位符已代入。
+            const skeleton = i18nSkeleton('psd.err.outOfRange');
+            assert.equal(skeleton.length, 4, '越界句应当是三个占位符切出的四段固定文字');
+            await assert.rejects(() => parsePsd(baseSample().subarray(0, 30)), (err) => {
+                assert.equal(/\{\w+\}/.test(err.message), false, `仍有未替换的占位符：${err.message}`);
+                let at = -1;
+                for (const part of skeleton) {
+                    const idx = err.message.indexOf(part, at + 1);
+                    assert.ok(idx > at, `${id} 的越界句缺少片段「${part}」：${err.message}`);
+                    at = idx;
+                }
+                assert.match(err.message, /\d/, '越界句里的字节数没代进去');
+                return true;
+            });
+        });
+    }
 });
 
 test('zip（压缩方式 2）与 zip+预测（3）解出同样的像素', async () => {
@@ -468,5 +516,8 @@ test('入参接受 Uint8Array / ArrayBuffer 两种形态', async () => {
     const fromBuffer = await parsePsd(plain);
     assert.deepEqual(rgba(fromBytes.layers[0]), PIXELS);
     assert.deepEqual(rgba(fromBuffer.layers[0]), PIXELS);
-    await assert.rejects(() => parsePsd('8BPS'), (err) => CHINESE.test(err.message));
+    await assert.rejects(() => parsePsd('8BPS'), (err) => {
+        assert.equal(err.message, i18nText('psd.err.badInput'));
+        return true;
+    });
 });

@@ -77,7 +77,8 @@ export function tintAt(buf, bufCtx, doc, t, cfg, dir) {
 
     const img = bufCtx.getImageData(0, 0, W, H);
     const px = img.data;
-    const tint = cfg.mode !== 'fade';
+    // 归一化后 mode 只可能是 tint / dim（'fade' 是 v8 前的老值，已在 core/cel.mjs 并入 dim）
+    const tint = cfg.mode !== 'dim' && cfg.mode !== 'fade';
     const rgb = dir < 0 ? hexToRgb(cfg.past) : hexToRgb(cfg.next);
     for (let i = 0; i < px.length; i += 4) {
         if (px[i + 3] < 8) continue;

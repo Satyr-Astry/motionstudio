@@ -31,24 +31,101 @@
 
 import { addImageElement, imageElementFromFile } from '../shell/project-store.mjs';
 import { icon } from '../core/icons.mjs';
+import { t } from '../i18n/index.mjs';
+
+// 下面两张表是模块级常量，用户看得见的字段一律写成访问器：setLocale() 只换表、
+// 不重建常量，写成普通属性会把首次渲染时的语言冻在里面（docs/本地化.md §5）。
+// `act` / `icon` / `danger` / `sepBefore` 是行为与样式用的，不随语言变。
 
 /** 卡片上的次级动作。顺序即渲染顺序；`danger` 的那条走 `--danger`。 */
 export const CARD_ACTIONS = [
-    { act: 'rename', label: '重命名', icon: 'pencil', title: '修改项目名称（双击卡片也可以）' },
-    { act: 'export', label: '存为文件', icon: 'save', title: '另存为 .msp 项目文件（旧版 .json 也行）' },
-    { act: 'delete', label: '删除', icon: 'trash', danger: true, title: '从项目库删除（8 秒内可撤销）' },
+    {
+        act: 'rename',
+        icon: 'pencil',
+        get label() {
+            return t('projects.card.rename');
+        },
+        get title() {
+            return t('projects.card.rename.hint');
+        },
+    },
+    {
+        act: 'export',
+        icon: 'save',
+        get label() {
+            return t('projects.card.export');
+        },
+        get title() {
+            return t('projects.card.export.hint');
+        },
+    },
+    {
+        act: 'delete',
+        icon: 'trash',
+        danger: true,
+        get label() {
+            return t('projects.card.delete');
+        },
+        get title() {
+            return t('projects.card.delete.hint');
+        },
+    },
 ];
 
 /** `…` 菜单项。`sepBefore` 之后是「不属于项目库」的那一项，用分隔线标出层级差。 */
 export const MENU_ITEMS = [
-    { act: 'import', label: '导入项目文件', icon: 'folder-open', title: '从 .msp 或 .json 项目文件导入到库并打开' },
-    { act: 'sheet', label: '导出精灵图', icon: 'grid', title: '把整段动画排成一张精灵图（PNG + 坐标 JSON）' },
-    { act: 'refresh', label: '刷新', icon: 'rotate-ccw', title: '重新读取项目库' },
-    { act: 'image', label: '导入图片到当前文档', icon: 'image-plus', sepBefore: true, title: '把一张图片作为对象插入当前文档（PNG / JPG / WebP）' },
+    {
+        act: 'import',
+        icon: 'folder-open',
+        get label() {
+            return t('projects.menu.import');
+        },
+        get title() {
+            return t('projects.menu.import.hint');
+        },
+    },
+    {
+        act: 'sheet',
+        icon: 'grid',
+        get label() {
+            return t('projects.menu.sheet');
+        },
+        get title() {
+            return t('projects.menu.sheet.hint');
+        },
+    },
+    {
+        act: 'refresh',
+        icon: 'rotate-ccw',
+        get label() {
+            return t('projects.menu.refresh');
+        },
+        get title() {
+            return t('projects.menu.refresh.hint');
+        },
+    },
+    {
+        act: 'image',
+        icon: 'image-plus',
+        sepBefore: true,
+        get label() {
+            return t('projects.menu.image');
+        },
+        get title() {
+            return t('projects.menu.image.hint');
+        },
+    },
 ];
 
-/** 搜索有库但无匹配时的文案：不能退回空态 CTA（那会让用户以为库是空的）。 */
-export const NO_RESULT_TEXT = '没有匹配的项目';
+/**
+ * 搜索有库但无匹配时的文案：不能退回空态 CTA（那会让用户以为库是空的）。
+ *
+ * 写成函数而不是模块级字符串 —— `setLocale()` 不重建模块常量，字符串会把
+ * 首次渲染的语言冻住，切到中文后仍然是英文这一句。
+ */
+export function noResultText() {
+    return t('projects.noResult');
+}
 
 /** 搜索过滤：按名字子串匹配，忽略大小写与首尾空白。纯函数，Node 可直接测。 */
 export function filterRows(rows, query) {
@@ -63,8 +140,46 @@ export function countLabel(total, matched, query) {
     const n = Number(total) || 0;
     if (!n) return '';
     const q = String(query == null ? '' : query).trim();
-    if (!q) return '共 ' + n + ' 个';
-    return '匹配 ' + (Number(matched) || 0) + ' / ' + n;
+    if (!q) return t('projects.count.all', { n });
+    return t('projects.count.matched', { matched: Number(matched) || 0, n });
+}
+
+/**
+ * 把外壳接口的返回值归一成「真成了 / 用户取消 / 没成」。
+ *
+ * 三种来源都要吃得下：
+ * - boolean —— open/create/rename/remove 这些老接口回 true|false；
+ * - `{ok:true,…}` / `{ok:false,canceled?,error?}` —— exportFile / exportSpritesheet 这类
+ *   要说明「写去了哪、为什么没写成」的接口；
+ * - `null` / `undefined` —— **接口没跑起来**（桥不在、面板拿不到注入）。
+ *
+ * 为什么不能继续用 `ok !== false`：这条判据把 null 当成功。桥不在、主进程没响应时
+ * 界面照样弹「已存为文件」，磁盘上却什么都没有 —— 这就是「没做却说成功」。
+ * 纯函数，Node 可直接测。
+ *
+ * @returns {{ok:boolean, canceled:boolean, error:string, out:*}}
+ */
+export function actVerdict(out) {
+    const bare = { ok: false, canceled: false, error: '', out: out };
+    if (out === true) return Object.assign(bare, { ok: true });
+    if (out === false) return Object.assign(bare, { error: t('projects.verdict.incomplete') });
+    if (out == null) return Object.assign(bare, { error: t('projects.verdict.noAnswer') });
+    if (typeof out === 'object') {
+        if (out.ok === false) {
+            const canceled = !!out.canceled;
+            const why = String(out.error || '');
+            return Object.assign(bare, {
+                canceled: canceled,
+                error: canceled
+                    ? (why || t('projects.verdict.canceled'))
+                    : (why || t('projects.verdict.incomplete')),
+            });
+        }
+        // ok:true，或没写 ok 字段但确实回了对象：按成功处理，错误留空
+        return Object.assign(bare, { ok: true });
+    }
+    // 其它标量（'done' / 1 / …）：有返回就当成了，但不当成「有凭据」
+    return Object.assign(bare, { ok: true });
 }
 
 
@@ -73,7 +188,7 @@ function norm(rec, i) {
     const r = rec || {};
     return {
         id: String(r.id || 'rec-' + i),
-        name: String(r.name || '未命名项目'),
+        name: String(r.name || t('projects.untitled')),
         savedAt: Number(r.savedAt) || 0,
         width: Number(r.width) || 0,
         height: Number(r.height) || 0,
@@ -97,7 +212,7 @@ function fmtTime(ts) {
     const now = new Date();
     const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
     const hm = pad2(d.getHours()) + ':' + pad2(d.getMinutes());
-    return sameDay ? '今天 ' + hm : pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + hm;
+    return sameDay ? t('projects.time.today', { hm }) : pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + hm;
 }
 
 function fmtBytes(n) {
@@ -145,6 +260,14 @@ function button(act, text, title, iconName, extraClass) {
 /** 轻提示：面板内部的灰色一行，不抢状态栏。 */
 const HINT_MS = 2400;
 
+/**
+ * 失败提示停留时长。
+ *
+ * 失败文案里带「为什么 + 怎么补救」，2400ms 不够读完；同时失败不能被下一条
+ * 普通提示立刻顶掉（见 `say` 的去重规则），否则用户只看到一个结果、看不到原因。
+ */
+const HINT_ERROR_MS = 7000;
+
 /** FileReader → dataURL（失败给空串，调用方统一按「读不到」处理）。 */
 function readAsDataURL(file) {
     return new Promise((resolve) => {
@@ -178,16 +301,16 @@ export function mount(host, ctx) {
     // ── head：一个主行动 + 搜索 + `…` 菜单 ──────────────────────────────
     const head = mk('div', 'prj-top');
     head.setAttribute('role', 'toolbar');
-    head.setAttribute('aria-label', '项目库操作');
+    head.setAttribute('aria-label', t('projects.head.aria'));
 
-    const btnNew = button('new', '新建项目', '用默认尺寸新建一个项目（当前有未保存改动时会先询问）', 'plus', 'prj-primary');
+    const btnNew = button('new', t('projects.new'), t('projects.new.hint'), 'plus', 'prj-primary');
 
     const search = mk('label', 'prj-search');
     const searchIco = icoNode('search');
     const searchInput = mk('input', 'prj-search-input');
     searchInput.type = 'search';
-    searchInput.placeholder = '搜索项目';
-    searchInput.setAttribute('aria-label', '按名称搜索项目');
+    searchInput.placeholder = t('projects.search.placeholder');
+    searchInput.setAttribute('aria-label', t('projects.search.aria'));
     if (searchIco) search.appendChild(searchIco);
     search.appendChild(searchInput);
 
@@ -195,14 +318,14 @@ export function mount(host, ctx) {
     count.setAttribute('aria-live', 'polite');
     const grow = mk('span', 'prj-gap');
 
-    const btnMore = button('more', null, '更多操作', 'more-horizontal', 'prj-more');
+    const btnMore = button('more', null, t('projects.more'), 'more-horizontal', 'prj-more');
     btnMore.setAttribute('aria-haspopup', 'menu');
     btnMore.setAttribute('aria-expanded', 'false');
 
     const menu = mk('div', 'prj-menu');
     menu.hidden = true;
     menu.setAttribute('role', 'menu');
-    menu.setAttribute('aria-label', '更多操作');
+    menu.setAttribute('aria-label', t('projects.more'));
     for (const it of MENU_ITEMS) {
         if (it.sepBefore) menu.appendChild(mk('div', 'prj-mi-sep'));
         const mi = mk('button', 'prj-mi', null);
@@ -236,8 +359,8 @@ export function mount(host, ctx) {
     hint.setAttribute('role', 'status');
     hint.setAttribute('aria-live', 'polite');
     const list = mk('div', 'prj-grid');
-    const empty = mk('div', 'prj-empty', '还没有已保存的项目');
-    const noresult = mk('div', 'prj-noresult', NO_RESULT_TEXT);
+    const empty = mk('div', 'prj-empty', t('projects.empty'));
+    const noresult = mk('div', 'prj-noresult', noResultText());
 
     panel.appendChild(head);
     panel.appendChild(hint);
@@ -251,6 +374,7 @@ export function mount(host, ctx) {
     let importing = false;
     let hintText = '';
     let hintAt = 0;
+    let hintKind = ''; // '' | 'info' | 'error'：只有错误提示享受「不被顶掉」的特权
     let renaming = null; // { id, value }
     let off = null;
     let live = true;
@@ -270,36 +394,52 @@ export function mount(host, ctx) {
         return !menu.hidden;
     }
 
-    function say(text) {
+    /**
+     * 面板内的轻提示。
+     *
+     * @param {string} text
+     * @param {'info'|'error'} [kind] error 停留更久，且不会被紧随其后的普通提示顶掉
+     */
+    function say(text, kind) {
+        const level = kind === 'error' ? 'error' : 'info';
+        // 失败原因不能被「已刷新」这类普通提示盖掉：面板里只有一个 hint 位，
+        // 盖掉就等于用户看不到为什么没成。
+        if (level !== 'error' && hintKind === 'error' && Date.now() - hintAt < HINT_ERROR_MS - 20) return undefined;
+        const ms = level === 'error' ? HINT_ERROR_MS : HINT_MS;
         hintText = String(text || '');
         hintAt = Date.now();
+        hintKind = level;
         hint.textContent = hintText;
+        hint.setAttribute('role', level === 'error' ? 'alert' : 'status');
         hint.classList.toggle('is-on', !!hintText);
+        hint.classList.toggle('is-error', level === 'error');
         const timer = setTimeout(() => {
             if (!live) return;
-            if (Date.now() - hintAt < HINT_MS - 20) return;
+            if (Date.now() - hintAt < ms - 20) return;
             hint.textContent = '';
+            hintKind = '';
             hint.classList.remove('is-on');
-        }, HINT_MS);
+            hint.classList.remove('is-error');
+        }, ms);
         return timer;
     }
 
     if (!api) {
-        panel.setAttribute('aria-label', '项目库（接口未就绪）');
-        panel.appendChild(mk('div', 'prj-off', '外壳没有注入 ctx.project，项目库暂不可用。'));
+        panel.setAttribute('aria-label', t('projects.offline.aria'));
+        panel.appendChild(mk('div', 'prj-off', t('projects.offline.text')));
         host.appendChild(panel);
         return { refresh() {}, destroy() {} };
     }
 
     function metaLine(r) {
         const parts = [];
-        if (r.cels) parts.push(r.cels + ' 纹理');
+        if (r.cels) parts.push(t('projects.meta.cels', { n: r.cels }));
         if (r.width && r.height) parts.push(r.width + '×' + r.height);
         // v2 起 doc.layers 语义是「对象」，展示口径跟着改（记录字段名仍叫 layers）
-        if (r.layers) parts.push(r.layers + ' 对象');
+        if (r.layers) parts.push(t('projects.meta.layers', { n: r.layers }));
         const size = fmtBytes(r.bytes);
         if (size) parts.push(size);
-        return parts.join(' · ') || '空项目';
+        return parts.join(' · ') || t('projects.meta.empty');
     }
 
     function card(r) {
@@ -308,9 +448,9 @@ export function mount(host, ctx) {
         item.tabIndex = 0;
         if (r.id === currentId) item.classList.add('is-current');
         if (renaming && renaming.id === r.id) item.classList.add('is-renaming');
-        const when = r.savedAt ? fmtTime(r.savedAt) : '尚未保存';
-        item.title = r.name + '（保存于 ' + when + '）· 点击卡片载入';
-        item.setAttribute('aria-label', r.name + '，保存于 ' + when + '，点击载入');
+        const when = r.savedAt ? fmtTime(r.savedAt) : t('projects.card.unsaved');
+        item.title = t('projects.card.title', { name: r.name, when: when });
+        item.setAttribute('aria-label', t('projects.card.aria', { name: r.name, when: when }));
 
         const thumb = mk('div', 'prj-thumb');
         if (r.thumb) {
@@ -320,7 +460,7 @@ export function mount(host, ctx) {
             img.alt = r.name;
             thumb.appendChild(img);
         } else {
-            thumb.appendChild(mk('span', 'prj-thumb-empty', '无纹理'));
+            thumb.appendChild(mk('span', 'prj-thumb-empty', t('projects.thumb.empty')));
         }
 
         const meta = mk('div', 'prj-meta');
@@ -329,7 +469,7 @@ export function mount(host, ctx) {
             const input = mk('input', 'prj-rename');
             input.type = 'text';
             input.value = renaming.value;
-            input.setAttribute('aria-label', '项目名称');
+            input.setAttribute('aria-label', t('projects.rename.aria'));
             input.style.width = '100%';
             input.style.minWidth = '80px';
             nameRow.appendChild(input);
@@ -338,16 +478,16 @@ export function mount(host, ctx) {
         } else {
             const name = mk('div', 'prj-name', r.name);
             nameRow.appendChild(name);
-            if (r.id === currentId) nameRow.appendChild(mk('span', 'prj-badge', '当前'));
+            if (r.id === currentId) nameRow.appendChild(mk('span', 'prj-badge', t('projects.card.badge')));
             meta.appendChild(nameRow);
         }
         meta.appendChild(mk('div', 'prj-sub', metaLine(r)));
-        meta.appendChild(mk('div', 'prj-time', '保存于 ' + when));
+        meta.appendChild(mk('div', 'prj-time', t('projects.card.time', { when: when })));
 
         const actions = mk('div', 'prj-actions');
         if (renaming && renaming.id === r.id) {
-            actions.appendChild(button('rename-ok', '确定', '确认新名称（Enter）'));
-            actions.appendChild(button('rename-cancel', '取消', '放弃修改（Esc）'));
+            actions.appendChild(button('rename-ok', t('projects.rename.ok'), t('projects.rename.ok.hint')));
+            actions.appendChild(button('rename-cancel', t('projects.rename.cancel'), t('projects.rename.cancel.hint')));
         } else {
             for (const a of CARD_ACTIONS) {
                 actions.appendChild(button(a.act, a.label, a.title, a.icon, a.danger ? 'prj-del' : ''));
@@ -393,32 +533,52 @@ export function mount(host, ctx) {
             currentId = cur && cur.id ? String(cur.id) : '';
             paint();
         } catch (err) {
-            say('读取项目库失败：' + ((err && err.message) || err));
+            say(t('projects.err.read', { msg: (err && err.message) || err }));
         }
     }
 
-    /** 统一跑一个异步动作：防重入、失败提示、结束后刷新列表。 */
+    /**
+     * 统一跑一个异步动作：防重入、按结果说话、结束后刷新列表。
+     *
+     * 判据用 `actVerdict`，不再用 `ok !== false` —— 后者把「接口没跑起来」（null）
+     * 当成功，于是「存为文件」「导出精灵图」在桥不在时也会弹「已…」。
+     *
+     * @param {() => (boolean|object|null|Promise<any>)} fn
+     * @param {string} [okText] 成功文案；不给就不说话（调用方自己按返回值补）
+     * @returns {Promise<{ok:boolean,canceled:boolean,error:string,out:*}>}
+     */
     async function run(fn, okText) {
+        const idle = { ok: false, canceled: false, error: t('projects.busy'), out: null };
         if (busy) {
             // 不许静默：点被挡掉和点了没反应是两件事，用户必须能分辨
-            say('正在处理上一个操作，请稍候…');
-            return;
+            say(idle.error);
+            return idle;
         }
         busy = true;
         panel.classList.add('is-busy');
         panel.setAttribute('aria-busy', 'true');
+        let verdict = idle;
         try {
-            const ok = await fn();
-            if (ok !== false && okText) say(okText);
-            if (ok === false) say('操作未完成');
+            verdict = actVerdict(await fn());
+            if (verdict.ok) {
+                if (okText) say(okText);
+            } else if (verdict.canceled) {
+                say(verdict.error || t('projects.verdict.canceled'));
+            } else {
+                say(verdict.error || t('projects.verdict.incomplete'), 'error');
+            }
         } catch (err) {
-            say('操作失败：' + ((err && err.message) || err));
+            const msg = (err && err.message) || err;
+            // 把抛出去的原因也放进返回值：调用方拿到的不该只是「没成」
+            verdict = actVerdict({ ok: false, error: t('projects.err.action', { msg: msg }) });
+            say(verdict.error, 'error');
         } finally {
             busy = false;
             panel.classList.remove('is-busy');
             panel.removeAttribute('aria-busy');
             if (live) await reload();
         }
+        return verdict;
     }
 
     function findRow(id) {
@@ -429,12 +589,12 @@ export function mount(host, ctx) {
     async function importPictures(files) {
         if (importing || !live) return;
         if (typeof ctx.doc !== 'function' || typeof ctx.setDoc !== 'function') {
-            say('外壳没有提供文档接口，无法插入图片');
+            say(t('projects.import.noDocApi'));
             return;
         }
         const list_ = imageFiles(files);
         if (!list_.length) {
-            say('不是图片文件');
+            say(t('projects.import.notImage'));
             return;
         }
         importing = true;
@@ -471,10 +631,11 @@ export function mount(host, ctx) {
                     /* 外壳接口细节差异，不影响已经插进去的对象 */
                 }
             }
-            if (ok) say('已导入 ' + ok + ' 张图片' + (fail ? '，' + fail + ' 张失败' : ''));
-            else say('导入图片失败：读不出像素');
+            // 「成功 N 张 + 失败 M 张」是一句话里的两个数，不拼句：两条整句各自带走自己的数
+            if (ok) say(fail ? t('projects.import.doneSome', { ok: ok, fail: fail }) : t('projects.import.done', { ok: ok }));
+            else say(t('projects.import.noPixels'));
         } catch (err) {
-            say('导入图片失败：' + ((err && err.message) || err));
+            say(t('projects.import.failed', { msg: (err && err.message) || err }));
         } finally {
             importing = false;
             panel.classList.remove('is-busy');
@@ -498,7 +659,7 @@ export function mount(host, ctx) {
             paint();
             return;
         }
-        run(() => api.rename(id, next), '已重命名为 ' + next);
+        run(() => api.rename(id, next), t('projects.rename.done', { name: next }));
     }
 
     async function onAct(act, id, item) {
@@ -508,36 +669,42 @@ export function mount(host, ctx) {
             return;
         }
         if (act === 'new') {
-            await run(() => api.create(), '已新建项目');
+            await run(() => api.create(), t('projects.create.done'));
             return;
         }
         if (act === 'image') {
             if (typeof fileInput.click === 'function') fileInput.click();
-            else say('这个环境不支持选择文件');
+            else say(t('projects.importFile.noPicker'));
             return;
         }
         if (act === 'import') {
-            await run(() => api.importFile(), '已导入项目');
+            await run(() => api.importFile(), t('projects.importFile.done'));
             return;
         }
         if (act === 'sheet') {
             // 精灵图：主进程落盘 PNG + 每帧坐标 JSON
             const fn = (ctx && ctx.exportSpritesheet) || (api && api.exportSpritesheet);
-            if (fn) {
-                await run(() => fn({}), '已导出精灵图');
-            } else {
-                say('当前版本不支持导出精灵图');
+            if (!fn) {
+                say(t('projects.sheet.missing'), 'error');
+                return;
             }
+            // 不传 okText：成功文案要带帧数和目录，那是返回值里才有的东西
+            const v = await run(() => fn({}));
+            if (!v.ok) return; // 失败/取消的原因 run 已经说过一遍，别叠话
+            const n = Number(v.out && v.out.count) || 0;
+            const dir = (v.out && v.out.dir) || '';
+            if (n > 0) say(dir ? t('projects.sheet.doneDir', { n: n, dir: dir }) : t('projects.sheet.done', { n: n }));
+            else say(t('projects.sheet.empty'), 'error');
             return;
         }
         if (act === 'refresh') {
             await reload();
-            say('已刷新');
+            say(t('projects.msg.refreshed'));
             return;
         }
         if (!row) return;
         if (act === 'open') {
-            await run(() => api.open(row.id), '已载入 ' + row.name);
+            await run(() => api.open(row.id), t('projects.open.done', { name: row.name }));
             return;
         }
         if (act === 'rename') {
@@ -555,11 +722,14 @@ export function mount(host, ctx) {
             return;
         }
         if (act === 'export') {
-            await run(() => api.exportFile(row.id), '已存为文件：' + row.name);
+            // 「存为文件」必须拿到路径才算成：外壳回成功却没给路径时不能弹「已存为文件」
+            const v = await run(() => api.exportFile(row.id));
+            if (v.ok && v.out && v.out.file) say(t('projects.save.done', { file: v.out.file }));
+            else if (v.ok) say(t('projects.save.noPath'), 'error');
             return;
         }
         if (act === 'delete') {
-            await run(() => api.remove(row.id), '已删除 ' + row.name);
+            await run(() => api.remove(row.id), t('projects.remove.done', { name: row.name }));
             if (currentId === row.id) currentId = '';
             return;
         }
@@ -567,8 +737,9 @@ export function mount(host, ctx) {
     }
 
     function onClick(e) {
-        const t = e.target;
-        const btn = t && typeof t.closest === 'function' ? t.closest('[data-act]') : null;
+        // 变量名不叫 `t`：那会遮蔽 i18n 的 `t()`，同函数里后加的文案就取不到词条
+        const target = e.target;
+        const btn = target && typeof target.closest === 'function' ? target.closest('[data-act]') : null;
         if (btn) {
             e.preventDefault();
             const item = btn.closest('.prj-card');
@@ -579,16 +750,16 @@ export function mount(host, ctx) {
             return;
         }
         // 点到菜单与 `…` 之外就收起（菜单没有全屏遮罩，靠这一条收口）
-        if (menuOpen() && t && typeof t.closest === 'function' && !t.closest('.prj-menu') && !t.closest('.prj-more')) {
+        if (menuOpen() && target && typeof target.closest === 'function' && !target.closest('.prj-menu') && !target.closest('.prj-more')) {
             setMenu(false);
         }
-        const picked = t && typeof t.closest === 'function' ? t.closest('.prj-card') : null;
+        const picked = target && typeof target.closest === 'function' ? target.closest('.prj-card') : null;
         if (!picked) return;
         if (renaming) return;
         const row = findRow(picked.dataset.id);
         if (!row) return;
         // 点卡片任意处 = 载入（A 方案：守卫只活在 project-io 的 beforeSwitch 一处）
-        run(() => api.open(row.id), '已载入 ' + row.name);
+        run(() => api.open(row.id), t('projects.open.done', { name: row.name }));
     }
 
     function onKey(e) {
@@ -603,10 +774,10 @@ export function mount(host, ctx) {
         if (!renaming) {
             // 卡片可聚焦：Enter/空格等同于点卡片（键盘也能载入）
             if (e.key === 'Enter' || e.key === ' ') {
-                const t = e.target;
-                if (t && t.classList && t.classList.contains('prj-card') && t.dataset.id) {
+                const target = e.target;
+                if (target && target.classList && target.classList.contains('prj-card') && target.dataset.id) {
                     e.preventDefault();
-                    onAct('open', t.dataset.id, t);
+                    onAct('open', target.dataset.id, target);
                 }
             }
             return;

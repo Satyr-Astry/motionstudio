@@ -9,6 +9,7 @@
 // 本模块是纯函数集合：零 DOM、零副作用、不改入参、任何非法输入都不抛异常。
 
 import { drawOrderOf, normalizeDrawOrder } from './draw-order.mjs';
+import { t } from '../i18n/index.mjs';
 
 // 这里刻意不 import doc-model 的 objectsOf：doc-model 反过来要用本模块的
 // normalizeTime / isIdentityTime，互相 import 会成环，导致整个 shell 的绑定
@@ -512,25 +513,36 @@ export function detachChildren(doc, id) {
     return Array.isArray(doc.objects) ? { ...doc, objects: layers } : { ...doc, layers };
 }
 
+// 每段是一整句词条（`time.*`），不在代码里拼「状态词 + 数值 + 单位」：
+// 语序不同的语言需要自己决定数字放哪儿，拆开拼一定读不通。段落之间用中性分隔符连接。
+const TIME_EASE_KEYS = { in: 'time.ease.in', out: 'time.ease.out', inout: 'time.ease.inout' };
+const TIME_MODE_KEYS = { loop: 'time.loop', pingpong: 'time.pingpong', clamp: 'time.clamp' };
+const TIME_PART_SEP = ' · ';
+
 /** 给 UI 用的一句话摘要。 */
 export function describeTime(time) {
-    const t = normalizeTime(time);
-    if (isIdentityTime(t)) return '无时间变换';
-    if (t.hold) return '冻结在 ' + t.holdAt.toFixed(2) + 's';
-    if (t.scale === 0) return '冻结在 ' + t.holdAt.toFixed(2) + 's';
+    const st = normalizeTime(time);
+    if (isIdentityTime(st)) return t('time.none');
+    if (st.hold || st.scale === 0) return t('time.frozen', { sec: st.holdAt.toFixed(2) });
     const parts = [];
-    if (t.offset !== 0) parts.push((t.offset > 0 ? '延后 ' : '提前 ') + Math.abs(t.offset).toFixed(2) + 's');
-    if (t.scale !== 1) parts.push('×' + (Math.round(t.scale * 100) / 100));
-    if (t.ease !== 'linear') {
-        const easeLabel = { in: '渐快', out: '渐慢', inout: '先慢后快再慢' }[t.ease] || t.ease;
-        parts.push('缓动 ' + easeLabel);
+    if (st.offset !== 0) {
+        const word = st.offset > 0 ? 'time.delay' : 'time.advance';
+        parts.push(t(word, { sec: Math.abs(st.offset).toFixed(2) }));
     }
-    if (t.mode !== 'none') {
-        const label = { loop: '循环', pingpong: '往返', clamp: '夹取' }[t.mode] || t.mode;
-        const span = t.to > t.from ? t.from.toFixed(2) + '–' + t.to.toFixed(2) + 's' : '全片';
-        parts.push(label + ' ' + span);
+    if (st.scale !== 1) parts.push(t('time.speed', { factor: Math.round(st.scale * 100) / 100 }));
+    if (st.ease !== 'linear') {
+        const easeKey = TIME_EASE_KEYS[st.ease];
+        parts.push(easeKey ? t(easeKey) : 'ease ' + st.ease);
     }
-    return parts.length ? parts.join(' · ') : '无时间变换';
+    if (st.mode !== 'none') {
+        const modeKey = TIME_MODE_KEYS[st.mode];
+        if (modeKey) {
+            parts.push(st.to > st.from
+                ? t(modeKey + '.range', { from: st.from.toFixed(2), to: st.to.toFixed(2) })
+                : t(modeKey + '.whole'));
+        }
+    }
+    return parts.length ? parts.join(TIME_PART_SEP) : t('time.none');
 }
 
 /** 轨道全部关键帧时间在时间通道作用后的采样点（给曲线编辑器用）。 */

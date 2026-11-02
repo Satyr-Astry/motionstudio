@@ -26,8 +26,22 @@ import {
 } from '../app/core/icons.mjs';
 // 帮助表是「唯一权威数据源」，这里直接 import 断言它的形状与图标名
 import { LEGEND_ITEMS, SHORTCUT_GROUPS } from '../app/editors/help.mjs';
+import { DEFAULT_LOCALE, setLocale, t } from '../app/i18n/index.mjs';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+
+/**
+ * 帮助表的文案是词条化的，默认语言是英文。下面「E 键的语义分裂」钉的是**中文界面的措辞**
+ * （「橡皮」「取色器」），那是产品语义而非本地化细节 —— 显式切到 zh-Hans 跑，跑完复位。
+ */
+function inZh(fn) {
+    try {
+        setLocale('zh-Hans');
+        return fn();
+    } finally {
+        setLocale(DEFAULT_LOCALE);
+    }
+}
 
 // 四个使用点 + 一个间接来源
 const USERS = {
@@ -244,8 +258,10 @@ test('阶段二使用点：时间轴 / 曲线 / 区域头的图标名都真实�
     const tl = read('../app/editors/timeline-paint.mjs');
     const tlSpec = [...tl.matchAll(/icon:\s*'([a-z-]+)'/g)].map((m) => m[1]);
     const tlCall = [...tl.matchAll(/\bicon\('([a-z-]+)'/g)].map((m) => m[1]);
-    // 13（v8 走带 5 + 纹理 5 + 关键帧/磁铁/缩放等） + 2（v10 预览播放的速度与方式）
-    assert.equal(tlSpec.length, 15, '时间轴工具条一共 15 个按钮，实际登记 ' + tlSpec.length);
+    // 实测 13 处（按文件顺序）：走带 5（step-back/chevron-left/play/chevron-right/step-forward）
+    // + 预览播放 2（gauge/loop） + 曝光 2（plus/trash） + 关键帧 2（diamond/magnet） + 缩放 2（minus/plus）。
+    // 上格/下格两个按钮删掉后这里的条数从 15 降到 13。
+    assert.equal(tlSpec.length, 13, '时间轴工具条一共 13 个按钮，实际登记 ' + tlSpec.length);
     for (const name of tlSpec.concat(tlCall)) {
         assert.ok(hasIcon(name), '时间轴用了不存在的图标：' + name);
     }
@@ -355,21 +371,39 @@ test('段条高度 12：给 10px 字留上下各 1px 呼吸', () => {
 
 test('曲线预设：图标 + 单字，title 用全称', () => {
     const curve = read('../app/editors/curve.mjs');
-    for (const word of ['线性', '进入', '退出', '双向', '回弹']) {
-        assert.ok(curve.includes("'" + word + "'"), '曲线预设缺全称：' + word);
+    // 单字 / 全称 / title 都在词条表里（P2-C 起）—— 源码里只剩键，所以这里断两层：
+    // ① 源码必须真的按键取词（防哪天又被写死回去）；② 词条本身逐字仍是原文。
+    for (const part of ['glyph', 'label']) {
+        assert.match(curve, new RegExp("'curve\\.preset\\.' \\+ key \\+ '\\." + part + "'"), '曲线预设的 ' + part + ' 要走词典');
     }
-    assert.ok(curve.includes('自由：'), '「自」按钮的 title 要以「自由」开头');
-    // 六个按钮仍是单字（Lead 拍板：不加宽到两字，保住 38px 的排版红利）
-    for (const glyph of ["'线'", "'入'", "'出'", "'双'", "'冲'"]) {
-        assert.ok(curve.includes(glyph), '曲线按钮要保留单字：' + glyph);
-    }
-    assert.ok(curve.includes('<span>自</span>'), '「自」按钮是 innerHTML 拼的，文字必须在 span 里');
+    assert.match(curve, /'curve\.preset\.hint\.linear'/, '线性 title 要走词典');
+    assert.match(curve, /'curve\.preset\.hint\.bezier'/, '贝塞尔 title 要走词典');
+
+    const words = { linear: ['线', '线性'], in: ['入', '进入'], out: ['出', '退出'], inout: ['双', '双向'], back: ['冲', '回弹'] };
+    inZh(() => {
+        for (const [key, [glyph, label]] of Object.entries(words)) {
+            assert.equal(t('curve.preset.' + key + '.glyph'), glyph, '曲线按钮要保留单字：' + key);
+            assert.equal(t('curve.preset.' + key + '.label'), label, '曲线预设缺全称：' + key);
+        }
+        assert.ok(t('curve.preset.auto.hint').startsWith('自由：'), '「自」按钮的 title 要以「自由」开头');
+        assert.equal(t('curve.preset.auto.glyph'), '自', '「自」按钮是单字');
+    });
+    // 「自」按钮是 innerHTML 拼的，文字必须在 span 里
+    assert.match(curve, /'<span>' \+ tr\('curve\.preset\.auto\.glyph'\) \+ '<\/span>'/, '「自」按钮的文字必须在 span 里');
 });
 
 test('关键帧菱形有兜底 title（paint 之前也不能空悬停）', () => {
     const tl = read('../app/editors/timeline-paint.mjs');
-    assert.match(tl, /b\.title = '关键帧：变换在这里有一条关键帧/, 'makeKfNode 必须给兜底 title');
-    assert.match(tl, /setAttribute\('aria-label', '关键帧'\)/, 'makeKfNode 必须给 aria-label');
+    // 文案已词条化（v8 第三十一批）：这里断「取的是哪两条键」，不再断中文原文 ——
+    // 断原文会让你一改文案就红，断键名才守得住「兜底 title 不许省掉」这个真正的不变量。
+    assert.match(tl, /b\.title = t\('timeline\.kf\.title'\)/, 'makeKfNode 必须给兜底 title');
+    assert.match(tl, /setAttribute\('aria-label', t\('timeline\.kf\.aria'\)\)/, 'makeKfNode 必须给 aria-label');
+    // 键真能取到词（缺词时 t() 会退回键名，界面就会悬停出一个 timeline.kf.title）
+    assert.notEqual(t('timeline.kf.title'), 'timeline.kf.title');
+    inZh(() => {
+        assert.equal(t('timeline.kf.aria'), '关键帧');
+        assert.ok(t('timeline.kf.title').startsWith('关键帧：'), 'title 要以「关键帧」开头');
+    });
 });
 
 test('帮助表：同一组内不许出现两条相同的键位', () => {
@@ -392,17 +426,20 @@ test('帮助表：同一组内不许出现两条相同的键位', () => {
 test('E 键的语义分裂：编排是橡皮，画板是取色器', () => {
     // W2 交付时指出的既有缺陷。两个语境各自成立（编排跟 Photoshop 惯例、画板跟 Klecks 的 eyedropper），
     // 错的是以前把它们写在同一条「画板」组里。这条测试钉住「拆开且各自正确」。
-    const canvas = SHORTCUT_GROUPS.find((g) => g.id === 'canvas');
-    const board = SHORTCUT_GROUPS.find((g) => g.id === 'board');
-    assert.ok(canvas, '缺少「编排画布」组');
-    assert.ok(board, '缺少「画板工作区」组');
-    assert.equal(canvas.items.find((i) => i.keys === 'E').name, '橡皮', '编排画布的 E 必须是橡皮');
-    assert.match(board.items.find((i) => i.keys === 'E').name, /取色器/, '画板工作区的 E 必须是取色器');
-    // 共性键可以两组都有（同一行为、两处可用），但必须是不同语境各自的一行
-    for (const shared of ['[ / ]', '0']) {
-        assert.ok(canvas.items.some((i) => i.keys === shared), '编排缺共性键：' + shared);
-        assert.ok(board.items.some((i) => i.keys === shared), '画板缺共性键：' + shared);
-    }
+    // 文案已词条化，默认语言是英文，所以显式切 zh-Hans 比对措辞。
+    inZh(() => {
+        const canvas = SHORTCUT_GROUPS.find((g) => g.id === 'canvas');
+        const board = SHORTCUT_GROUPS.find((g) => g.id === 'board');
+        assert.ok(canvas, '缺少「编排画布」组');
+        assert.ok(board, '缺少「画板工作区」组');
+        assert.equal(canvas.items.find((i) => i.keys === 'E').name, '橡皮', '编排画布的 E 必须是橡皮');
+        assert.match(board.items.find((i) => i.keys === 'E').name, /取色器/, '画板工作区的 E 必须是取色器');
+        // 共性键可以两组都有（同一行为、两处可用），但必须是不同语境各自的一行
+        for (const shared of ['[ / ]', '0']) {
+            assert.ok(canvas.items.some((i) => i.keys === shared), '编排缺共性键：' + shared);
+            assert.ok(board.items.some((i) => i.keys === shared), '画板缺共性键：' + shared);
+        }
+    });
 });
 
 // ── task-24：12 枚新图标 + 三档 stroke 视觉归一 ──────────────────────────

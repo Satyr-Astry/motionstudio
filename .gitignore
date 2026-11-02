@@ -11,5 +11,8 @@ patch-*.mjs
 app/__test.psd
 *.tmp
 
+# 接手工作笔记（跨会话交接用，不进仓库）
+lead-work-notes.md
+
 dist/
 

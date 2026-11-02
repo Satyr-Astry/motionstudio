@@ -4,15 +4,16 @@
 // 所有外壳调用都走主文件注入的 deps（has / call / notify），本文件不直接摸 ctx。
 
 import { docDuration, objectById, patchObject } from '../core/doc-model.mjs';
+import { t } from '../i18n/index.mjs';
 import { clickIntent } from '../core/selection.mjs';
 import { addKey, moveKey, removeKey, setKeyEase, stateAt } from '../core/transform.mjs';
 import { findConflict, hideTip, showTip } from './drag-tip.mjs';
 import {
-    EASES,
-    EASE_TEXT,
+    EASE_IDS,
     SNAP_GRID,
     T_EPS,
     clampNum,
+    easeText,
     fmt2,
     kfLeft,
     keyGroups,
@@ -266,14 +267,14 @@ export function createKeys(deps) {
     /** A：选中当前对象的全部关键帧（同刻多通道按一颗算）。 */
     function selectAll() {
         const layerId = deps.activeId();
-        if (!layerId) { deps.notify('先选一个对象'); return; }
+        if (!layerId) { deps.notify(t('timeline.needLayer')); return; }
         const times = allTimes(layerId);
-        if (!times.length) { deps.notify('这个对象还没有关键帧'); return; }
+        if (!times.length) { deps.notify(t('timeline.keys.none')); return; }
         selKeys = times.map((t) => ({ layerId, t }));
         selAnchor = { layerId, t: times[0] };
         emitSel();
         deps.paint();
-        deps.notify('已选中 ' + times.length + ' 颗关键帧');
+        deps.notify(t('timeline.keys.selected', { n: times.length }));
     }
 
     /** Ctrl+I：反选 —— 当前对象上还没被选中的那些。 */
@@ -288,7 +289,7 @@ export function createKeys(deps) {
         selAnchor = next.length ? { layerId, t: next[0] } : null;
         emitSel();
         deps.paint();
-        deps.notify(next.length ? '已选中 ' + next.length + ' 颗关键帧' : '已经全选，没有可反选的');
+        deps.notify(next.length ? t('timeline.keys.selected', { n: next.length }) : t('timeline.keys.allSelected'));
     }
 
     /**
@@ -304,7 +305,7 @@ export function createKeys(deps) {
         if (e.altKey && !e.ctrlKey && !e.metaKey && (k === 'a' || k === 'A')) {
             e.preventDefault();
             clearSelection();
-            deps.notify('已取消选择');
+            deps.notify(t('timeline.keys.deselected'));
             return;
         }
         if ((e.ctrlKey || e.metaKey) && (k === 'i' || k === 'I')) {
@@ -408,21 +409,21 @@ export function createKeys(deps) {
         ]);
         deps.keepTime(keep);
         if (added > 0 || existed) setSingle(layerId, at);
-        if (existed) deps.notify('该时刻已有关键帧（已选中）');
-        else if (added > 0) deps.notify('在 ' + fmt2(at) + ' s 打上关键帧');
+        if (existed) deps.notify(t('timeline.keys.existsAt'));
+        else if (added > 0) deps.notify(t('timeline.keys.added', { t: fmt2(at) }));
         deps.paint();
         return added;
     }
 
     /** 复制时间 t 处的关键帧组（多通道一起走），粘贴时整组还原。 */
-    function copyKeyAt(layerId, t) {
+    function copyKeyAt(layerId, at) {
         const doc = deps.docNow();
         const obj = doc ? objectById(doc, layerId) : null;
         if (!obj) return 0;
         const track = trackOf(obj);
-        const g = keyGroups(track.keys).find((x) => Math.abs(x.t - t) <= T_EPS);
+        const g = keyGroups(track.keys).find((x) => Math.abs(x.t - at) <= T_EPS);
         if (!g) {
-            deps.notify('这里没有关键帧可复制');
+            deps.notify(t('timeline.copy.none'));
             return 0;
         }
         // addKey 内部会 normState 深拷贝（含 warp），所以这里浅拷贝够用
@@ -431,17 +432,17 @@ export function createKeys(deps) {
             t: g.t,
             keys: g.idx.map((i) => ({ state: { ...track.keys[i].state }, ease: track.keys[i].ease })),
         };
-        deps.notify('已复制 ' + fmt2(g.t) + ' s 的关键帧（' + clip.keys.length + ' 个通道）');
+        deps.notify(t('timeline.copy.done', { t: fmt2(g.t), n: clip.keys.length }));
         return clip.keys.length;
     }
 
     /** 把复制下来的关键帧整组写到时间 t；落在已有键上视为覆盖。 */
-    function pasteKeyAt(layerId, t) {
+    function pasteKeyAt(layerId, when) {
         const doc = deps.docNow();
-        const raw = Number(t);
+        const raw = Number(when);
         if (!doc || !layerId || !Number.isFinite(raw)) return 0;
         if (!clip || !clip.keys.length) {
-            deps.notify('先在一个关键帧上右键「复制关键帧」');
+            deps.notify(t('timeline.paste.tip'));
             return 0;
         }
         if (!deps.has('setDoc')) {
@@ -467,7 +468,7 @@ export function createKeys(deps) {
         ]);
         deps.keepTime(keep);
         if (written > 0) setSingle(layerId, at);
-        deps.notify('已在 ' + fmt2(at) + ' s 粘贴关键帧');
+        deps.notify(t('timeline.paste.done', { t: fmt2(at) }));
         deps.paint();
         return written;
     }
@@ -542,11 +543,11 @@ export function createKeys(deps) {
         return r.hit;
     }
 
-    function deleteKeyAt(layerId, t) {
-        const removed = deleteKeys([{ layerId, t }]);
+    function deleteKeyAt(layerId, at) {
+        const removed = deleteKeys([{ layerId, t: at }]);
         // 拼错的那颗已经从文档里没了，集合里留着也没意义
-        if (removed) selKeys = selKeys.filter((k) => !(k.layerId === layerId && Math.abs(k.t - t) <= T_EPS));
-        if (removed) deps.notify('已删除关键帧 t = ' + fmt2(t) + ' s');
+        if (removed) selKeys = selKeys.filter((k) => !(k.layerId === layerId && Math.abs(k.t - at) <= T_EPS));
+        if (removed) deps.notify(t('timeline.del.single', { t: fmt2(at) }));
         return removed;
     }
 
@@ -559,8 +560,8 @@ export function createKeys(deps) {
         selKeys = [];
         selAnchor = null;
         // 集合里留着已不存在的时间（别处改过文档）时别静默失败，否则用户以为按键没生效
-        if (!removed) deps.notify('选中的关键帧已不在文档里，可能已被别处改动');
-        else deps.notify('已删除 ' + removed + ' 颗关键帧');
+        if (!removed) deps.notify(t('timeline.keys.gone'));
+        else deps.notify(t('timeline.del.count', { n: removed }));
         deps.paint();
         return removed;
     }
@@ -602,7 +603,7 @@ export function createKeys(deps) {
             // Del 就会落到「删纹理 / 删对象」上——一个只想看曲线的人会丢掉整个对象。
             // 所以接管这一刻但什么都不删，把人指到曲线区。
             if (channelClick) {
-                deps.notify('通道关键帧不在这里删 · ' + channelClick.ch + ' · 到曲线区编辑');
+                deps.notify(t('timeline.channelKey.hereDelete', { ch: channelClick.ch }));
                 channelClick = null;
                 detail.count = 0;
                 detail.handled = true;
@@ -638,9 +639,9 @@ export function createKeys(deps) {
         return r.hit;
     }
 
-    function applyEaseAt(layerId, t, ease) {
-        const hit = applyEaseKeys([{ layerId, t }], ease);
-        if (hit) deps.notify('关键帧缓动：' + (EASE_TEXT[ease] || ease));
+    function applyEaseAt(layerId, at, ease) {
+        const hit = applyEaseKeys([{ layerId, t: at }], ease);
+        if (hit) deps.notify(t('timeline.ease.set', { ease: easeText(ease) }));
         return hit;
     }
 
@@ -649,11 +650,11 @@ export function createKeys(deps) {
         if (!pairs.length) return 0;
         const hit = applyEaseKeys(pairs, ease);
         if (hit) {
-            deps.notify(
-                (hit > 1 ? hit + ' 处关键帧缓动：' : '关键帧缓动：') + (EASE_TEXT[ease] || ease)
-            );
+            deps.notify(hit > 1
+                ? t('timeline.ease.setMany', { n: hit, ease: easeText(ease) })
+                : t('timeline.ease.set', { ease: easeText(ease) }));
         } else {
-            deps.notify('选中的关键帧已不在文档里，可能已被别处改动');
+            deps.notify(t('timeline.keys.gone'));
         }
         deps.paint();
         return hit;
@@ -697,11 +698,11 @@ export function createKeys(deps) {
             if (!n || !n.style) continue;
             const left = d.snapshot && d.snapshot.get(n);
             if (typeof left === 'string') n.style.left = left;
-            n.title = '关键帧 ' + fmt2(it.t0) + ' s · 松手后生效';
+            n.title = t('timeline.drag.keyTitle', { t: fmt2(it.t0) });
             if (n.classList) n.classList.remove('is-blocked', 'is-merge-target');
         }
         deps.keepTime(d.keep);
-        deps.notify('已取消移动');
+        deps.notify(t('timeline.drag.cancelled'));
         deps.paint();
     }
 
@@ -826,7 +827,7 @@ export function createKeys(deps) {
             if (!n || !n.style) continue;
             const nt = it.t0 + dt;
             n.style.left = kfLeft(doc, nt, deps.zoomOf()).toFixed(2) + 'px';
-            n.title = '关键帧 ' + fmt2(nt) + ' s · 松手后生效';
+            n.title = t('timeline.drag.keyTitle', { t: fmt2(nt) });
         }
 
         // 拖动中的读数与冲突预警：挪到哪儿、吸到了什么、会不会撞上别人，都在过程中说清楚
@@ -913,16 +914,14 @@ export function createKeys(deps) {
         const dt = Number(d.dt) || 0;
         if (d.moved && Math.abs(dt) > T_EPS) {
             const r = moveKeys(d.sel, dt);
-            if (r.merged) deps.notify('两个关键帧落到同一时间，保留被拖动的那个');
+            if (r.merged) deps.notify(t('timeline.drag.merged'));
             if (r.moved) {
                 // 集合跟着走：刚搬过的那批仍然选着，方便接着微调或删除
                 selKeys = d.sel.map((k) => ({ layerId: k.layerId, t: k.t + dt }));
                 selAnchor = { layerId: d.layerId, t: d.t0 + dt };
-                deps.notify(
-                    r.moved > 1
-                        ? '已移动 ' + r.moved + ' 处关键帧'
-                        : '关键帧移到 t = ' + (d.t0 + dt).toFixed(3) + ' s'
-                );
+                deps.notify(r.moved > 1
+                    ? t('timeline.drag.moved', { n: r.moved })
+                    : t('timeline.drag.movedOne', { t: (d.t0 + dt).toFixed(3) }));
             }
         }
         deps.keepTime(d.keep);
@@ -1017,7 +1016,7 @@ export function createKeys(deps) {
         if (!m) return;
         if (m.el && m.el.parentNode && typeof m.el.parentNode.removeChild === 'function') m.el.parentNode.removeChild(m.el);
         if (!m.moved) return;
-        deps.notify(selKeys.length ? '已框选 ' + selKeys.length + ' 个关键帧' : '框选范围内没有关键帧');
+        deps.notify(selKeys.length ? t('timeline.marquee.done', { n: selKeys.length }) : t('timeline.marquee.empty'));
         deps.paint();
     }
 
@@ -1054,16 +1053,16 @@ export function createKeys(deps) {
     /* ── 右键菜单 ── */
 
     /** 关键帧上右键：保留三档缓动，补上复制 / 粘贴 / 删除（删除原本只有双击与 Delete 键）。 */
-    function contextMenu(x, y, layerId, t) {
+    function contextMenu(x, y, layerId, at) {
         // 右键落在选中集合里 → 菜单对整个集合生效；落在别处 → 先把选择改成这一颗
-        if (isSelected(layerId, t)) promote(layerId, t);
-        else setSingle(layerId, t);
+        if (isSelected(layerId, at)) promote(layerId, at);
+        else setSingle(layerId, at);
         const many = selKeys.length > 1;
-        const items = EASES.map(([ease, text]) => ({ label: text, run: () => applyEaseSelection(ease) }));
-        items.push({ label: '复制关键帧', run: () => copyKeyAt(layerId, t) });
-        items.push({ label: '粘贴到此处', disabled: !clip, run: () => pasteKeyAt(layerId, t) });
+        const items = EASE_IDS.map((ease) => ({ label: easeText(ease), run: () => applyEaseSelection(ease) }));
+        items.push({ label: t('timeline.menu.copy'), run: () => copyKeyAt(layerId, at) });
+        items.push({ label: t('timeline.menu.paste'), disabled: !clip, run: () => pasteKeyAt(layerId, at) });
         items.push({
-            label: many ? '删除选中的 ' + selKeys.length + ' 个关键帧' : '删除关键帧',
+            label: many ? t('timeline.menu.deleteMany', { n: selKeys.length }) : t('timeline.menu.delete'),
             danger: true,
             run: () => deleteSelection(),
         });
@@ -1075,16 +1074,16 @@ export function createKeys(deps) {
      * 泳道空白处右键：这是「在时间轴上直接新增关键帧」的第二个入口。
      * 「在此加纹理」顺带当了纹理的教学入口 —— 纹理的语义就是「从这一刻起换图」。
      */
-    function laneMenu(x, y, layerId, t) {
+    function laneMenu(x, y, layerId, at) {
         // 在空白处开菜单等于「换个位置操作」，旧选择跟着作废，否则 Delete 还会删远处那批
         selKeys = [];
         selAnchor = null;
         const addCel =
             typeof deps.addCel === 'function' ? deps.addCel : () => deps.notWired('addCelAt');
         deps.menu.open(x, y, [
-            { label: '在此打关键帧', run: () => addKeyAt(layerId, t) },
-            { label: '粘贴关键帧到此处', disabled: !clip, run: () => pasteKeyAt(layerId, t) },
-            { label: '在此加纹理（从此刻起换图）', run: () => addCel(layerId, t) },
+            { label: t('timeline.menu.addKey'), run: () => addKeyAt(layerId, at) },
+            { label: t('timeline.menu.pasteKey'), disabled: !clip, run: () => pasteKeyAt(layerId, at) },
+            { label: t('timeline.menu.addTex'), run: () => addCel(layerId, at) },
         ]);
     }
 
@@ -1100,13 +1099,13 @@ export function createKeys(deps) {
 
     function onPasteEvent(e) {
         if (!clip) {
-            deps.notify('先复制一个关键帧（Ctrl+C）');
+            deps.notify(t('timeline.copy.first'));
             return;
         }
         const detail = e && e.detail ? e.detail : null;
         const layerId = (detail && detail.layerId) || deps.activeId();
         if (!layerId) {
-            deps.notify('先选一个对象');
+            deps.notify(t('timeline.needLayer'));
             return;
         }
         const t = detail && Number.isFinite(Number(detail.t)) ? Number(detail.t) : deps.timeNow();

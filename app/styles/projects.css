@@ -33,15 +33,6 @@
     color: var(--ink);
 }
 
-.ms-modal .prj-head {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--line);
-}
-
-.ms-modal .prj-title { display: none; }
 .ms-modal .prj-empty { display: none; }
 .ms-modal .prj-count { color: var(--ink-dim); }
 .ms-modal .prj-gap { flex: 1 1 auto; }
@@ -68,17 +59,6 @@
 
 /* 提示行没内容时不占高度（否则每次 say() 之后布局都会跳一下）。 */
 .ms-modal .prj-hint:empty { display: none; }
-
-.ms-modal .prj-list {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow: auto;
-    padding: 12px;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 10px;
-    align-content: start;
-}
 
 .ms-modal .prj-card {
     display: grid;

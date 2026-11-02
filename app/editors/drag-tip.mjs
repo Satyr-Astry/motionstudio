@@ -15,13 +15,16 @@
  * 纯函数（formatTip / snapText / frameOf / findConflict）不碰 DOM，Node 里可直接测。
  */
 
+// 本模块到处有「时刻」这个局部变量 t，导入别名 tr，别让两个 t 打架。
+import { t as tr } from '../i18n/index.mjs';
+
 const PAD = 4;
 
 /** 吸附三态 → 文案。'frame' 吸整帧、'grid' 吸 0.1 s 网格、其余一律「自由」。 */
 export function snapText(snapped) {
-    if (snapped === 'frame') return '吸附:帧';
-    if (snapped === 'grid') return '吸附:网格';
-    return '自由';
+    if (snapped === 'frame') return tr('dragtip.snap.frame');
+    if (snapped === 'grid') return tr('dragtip.snap.grid');
+    return tr('dragtip.snap.free');
 }
 
 /** 秒 → 帧号（0 起算）。fps 非法时返回 null，别把 NaN 印到脸上。 */
@@ -44,9 +47,9 @@ export function formatTip(opts) {
     if (Number.isFinite(t) && t >= 0) {
         parts.push('t = ' + t.toFixed(3) + ' s');
         const fr = frameOf(t, o.fps);
-        if (fr != null) parts.push('第 ' + fr + ' 帧');
+        if (fr != null) parts.push(tr('dragtip.frame', { n: fr }));
         const total = Number(o.duration);
-        if (Number.isFinite(total) && t > total + 1e-9) parts.push('超出时长');
+        if (Number.isFinite(total) && t > total + 1e-9) parts.push(tr('dragtip.overDuration'));
     } else {
         parts.push('t = —');
     }
@@ -54,8 +57,8 @@ export function formatTip(opts) {
     if (o.snapped !== undefined) parts.push(snapText(o.snapped));
 
     let suffix = '';
-    if (o.conflict === 'merge') suffix = '会合并到同一时刻';
-    else if (o.conflict === 'blocked') suffix = '该时刻已有关键帧';
+    if (o.conflict === 'merge') suffix = tr('dragtip.conflict.merge');
+    else if (o.conflict === 'blocked') suffix = tr('dragtip.conflict.blocked');
     return { text: parts.join(' · '), suffix };
 }
 

@@ -21,12 +21,15 @@ test('EFFECT_DEFS 含五类效果，id 唯一', () => {
     assert.equal(new Set(ids).size, ids.length);
 });
 
-test('EFFECT_DEFS 每类都有 name 与 params，默认值落在范围内', () => {
+test('EFFECT_DEFS 每类都有词条键与 params，默认值落在范围内', () => {
     for (const def of EFFECT_DEFS) {
-        assert.ok(def.name.length > 0, def.id + ' 缺 name');
+        // 显示名不再是定义里的中文，而是词典键（译文在 app/i18n/parts/effects.mjs）；
+        // 键由 freezeDef 从 id / 参数名派生，这里把形状也钉住，防止有人手抄一份。
+        assert.equal(def.nameKey, 'effect.' + def.id + '.name', def.id + ' 的 nameKey 应由 id 派生');
         assert.ok(def.params.length > 0, def.id + ' 缺 params');
         for (const p of def.params) {
-            assert.ok(p.key && p.label, def.id + ' 参数缺 key/label');
+            assert.ok(p.key, def.id + ' 参数缺 key');
+            assert.equal(p.labelKey, 'effect.' + def.id + '.param.' + p.key, def.id + '.' + p.key + ' 的 labelKey 应由参数名派生');
             assert.ok('def' in p, def.id + '.' + p.key + ' 缺 def');
             if (p.color) {
                 assert.equal(typeof p.def, 'string');

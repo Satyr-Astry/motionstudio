@@ -334,6 +334,74 @@ export function phaserJSON(sheet, opts) {
 }
 
 /**
+ * 同一张图集的 Aseprite 帧表（array 形式）。
+ *
+ * 为什么值得单出一个格式：Aseprite 的 array 帧表是**事实标准**——Aseprite 自己、
+ * TexturePacker、Godot 的 SpriteFrames 导入器、Love2D 的动画库、Unity 的第三方
+ * 导入器都吃它。出了一个模板，就同时打开了这五条路（`own` 只有本程序能读，
+ * `phaser` 只有 Phaser 能读）。
+ *
+ * 与 `phaserJSON` 的三处实质差别（不是改字段名）：
+ * - **`duration` 单位是毫秒**。Aseprite / TexturePacker 全程用毫秒，而本项目内部
+ *   一律用秒（`sheet.frames[].duration`）——这是唯一必须换算的地方，漏了会让
+ *   动画慢 1000 倍。
+ * - 帧名用 `filename` 字符串键（array 形式），不是对象键。
+ * - `meta.frameTags` 给区间标签，Aseprite 里就是「一个 tag 从第 0 帧到最后」。
+ *
+ * @param {object} sheet `buildSpritesheet` / `buildSpritesheets` 的产物
+ * @param {{image?:string, tag?:string}} [opts]
+ * @returns {object|null}
+ */
+export function asepriteJSON(sheet, opts) {
+    if (!sheet || !Array.isArray(sheet.frames)) return null;
+    const o = opts || {};
+    const cellWidth = Math.max(1, sheet.cellWidth || 1);
+    const cellHeight = Math.max(1, sheet.cellHeight || 1);
+    const image = o.image || 'sheet-1.png';
+    const frames = sheet.frames.map((f) => {
+        const sx = f.sx == null ? 0 : f.sx;
+        const sy = f.sy == null ? 0 : f.sy;
+        const sw = f.sw == null ? f.w : f.sw;
+        const sh = f.sh == null ? f.h : f.sh;
+        return {
+            filename: 'frame_' + String(f.index).padStart(4, '0'),
+            // 图集里内容实际占的那块（裁过的话比整格小）
+            frame: { x: f.x + sx, y: f.y + sy, w: sw, h: sh },
+            rotated: false,
+            trimmed: sw < cellWidth || sh < cellHeight,
+            // 内容在原帧坐标系里的位置与原始帧尺寸
+            spriteSourceSize: { x: sx, y: sy, w: sw, h: sh },
+            sourceSize: { w: cellWidth, h: cellHeight },
+            // 秒 → 毫秒；至少 1ms（Aseprite 把 0 当「用缺省」）
+            duration: Math.max(1, Math.round((Number(f.duration) || 0) * 1000)),
+        };
+    });
+    const totalMs = frames.reduce((n, f) => n + f.duration, 0);
+    return {
+        frames: frames,
+        meta: {
+            app: 'MotionStudio',
+            version: SHEET_VERSION,
+            image: image,
+            format: 'RGBA8888',
+            size: { w: sheet.width, h: sheet.height },
+            scale: '1',
+            // 非标准键（Aseprite 忽略未知键）：分张清单，单张时就是一项
+            sheets: (sheet.sheets && sheet.sheets.length
+                ? sheet.sheets.map((s) => ({ file: s.file, width: s.width, height: s.height }))
+                : [{ file: image, width: sheet.width, height: sheet.height }]),
+            frameCount: frames.length,
+            duration: totalMs,
+            frameTags: frames.length
+                ? [{ name: o.tag || 'default', from: 0, to: frames.length - 1, direction: 'forward' }]
+                : [],
+            layers: [{ name: 'Sheet', opacity: 255, blendMode: 'normal' }],
+            sampleRate: round4(sheet.sampleRate),
+        },
+    };
+}
+
+/**
  * 合成精灵图。
  *
  * @param {object} doc

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { writeModeOf, dragKeyTo, occupiedAt } from '../app/editors/curve-geo.mjs';
 import { promoteChannel, createKey, createTrack } from '../app/core/transform.mjs';
 import { magnetOf, snapForDrag } from '../app/editors/timeline-geo.mjs';
+import { DEFAULT_LOCALE, setLocale, t } from '../app/i18n/index.mjs';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 const src = read('../app/editors/curve.mjs');
@@ -121,5 +122,13 @@ test('occupiedAt：浮点抖动按 T_EPS 判定，非法时刻一律不占用', 
 test('curve.mjs 接线：拖到已占用的时刻要跳过并提示，不许静默合并', () => {
     assert.match(src, /occupiedAt\(cur, drag\.chId, t, drag\.index\)/, '拖动分支必须有同刻闸门');
     assert.ok(!/if \(occupiedAt\(trk, drag\.chId/.test(src), '闸门要在写之前，不能靠 updater 里 return 原轨道（那样会白记一条撤销）');
-    assert.match(src, /已经有关键帧了/, '跳过时要给人话提示');
+    // 提示语现在是词条 `curve.notify.occupied`（P2-C）：源码里只该出现键，
+    // 中文措辞去词典里核 —— 只断键会假绿，只断中文会被语言切走。
+    assert.match(src, /'curve\.notify\.occupied'/, '跳过时要给人话提示');
+    try {
+        setLocale('zh-Hans');
+        assert.match(t('curve.notify.occupied'), /已经有关键帧了/, '提示语还是原话');
+    } finally {
+        setLocale(DEFAULT_LOCALE);
+    }
 });

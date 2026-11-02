@@ -26,10 +26,11 @@ import {
     deserialize,
 } from './areas.mjs';
 import { computeRects, resizeAcross, freezeAxis, MIN_AREA } from './layout.mjs';
-import { EDITORS, editorDef, editorTitle } from './registry.mjs';
+import { EDITORS, editorDef, editorTitle, editorLabel, editorHint } from './registry.mjs';
 import { WS_IDS } from './chrome.mjs';
 import { icon } from '../core/icons.mjs';
 import { saveLayout, clearLayout } from './persist.mjs';
+import { t } from '../i18n/index.mjs';
 import * as canvasEditor from '../editors/canvas.mjs';
 import {
     FALLBACK_EDITOR,
@@ -393,15 +394,15 @@ function createSlot(view, areaNodeSrc) {
     const head = el('div', 'area-head');
 
     const grip = el('div', 'area-grip');
-    grip.title = '拖动可与其它区域互换位置';
+    grip.title = t('shell.view.gripTitle');
     head.appendChild(grip);
 
     const sel = el('select', 'area-type');
-    sel.title = '区域类型';
+    sel.title = t('shell.view.typeTitle');
     for (const def of EDITORS) {
-        const opt = el('option', null, def.title);
+        const opt = el('option', null, editorLabel(def));
         opt.value = def.id;
-        opt.title = def.hint || '';
+        opt.title = editorHint(def);
         sel.appendChild(opt);
     }
     head.appendChild(sel);
@@ -409,9 +410,9 @@ function createSlot(view, areaNodeSrc) {
     head.appendChild(el('div', 'area-gap'));
 
     const acts = [
-        ['split-h', 'rows', '横向分割（上下）'],
-        ['split-v', 'columns', '竖向分割（左右）'],
-        ['close', 'x', '关闭区域'],
+        ['split-h', 'rows', t('shell.view.splitRows')],
+        ['split-v', 'columns', t('shell.view.splitColumns')],
+        ['close', 'x', t('shell.view.closeArea')],
     ];
     for (const [act, iconName, title] of acts) {
         const b = el('button', 'area-btn ms-icon-btn');
@@ -430,8 +431,8 @@ function createSlot(view, areaNodeSrc) {
     // 双击标题栏 = 折叠/展开：折叠后这个区域只有标题栏高度（layout.mjs 的 COLLAPSED_AREA），
     // 它的兄弟区域自动吃掉剩余空间；状态随布局一起存盘。
     head.addEventListener('dblclick', (e) => {
-        const t = e.target;
-        if (t && t.closest && (t.closest('button') || t.closest('select'))) return;
+        const node = e.target;
+        if (node && node.closest && (node.closest('button') || node.closest('select'))) return;
         e.preventDefault();
         toggleAreaCollapsed(view, areaNodeSrc.id);
     });
@@ -516,12 +517,12 @@ function syncAreas(view, rects) {
             const vertical = a.rect && a.rect.w < a.rect.h;
             slot.el.classList.toggle('is-collapsed-v', !!vertical);
             slot.el.classList.toggle('is-collapsed-h', !vertical);
-            const label = editorDef(a.editor).title;
+            const label = editorTitle(a.editor);
             if (slot.head.getAttribute('data-title') !== label) slot.head.setAttribute('data-title', label);
         }
         if (a.editor === 'canvas') {
             if (a.id === view.canvasAreaId) ensureCanvas(view, slot);
-            else showNote(view, slot, 'canvas', '画布在每个工作区只有一个：请把该区域换成别的编辑器，或关闭原画布区域');
+            else showNote(view, slot, 'canvas', t('shell.view.canvasSingle'));
         } else if (slot.editor !== a.editor) {
             slot.failedFor = null;
             mountEditor(view, a.editor, a.id);
@@ -601,7 +602,7 @@ function mountEditor(view, editorId, areaId) {
     let inst = null;
     if (!def) {
         slot.failedFor = editorId;
-        showNote(view, slot, editorId, '未知编辑器：' + editorId);
+        showNote(view, slot, editorId, t('shell.view.unknownEditor', { id: editorId }));
         return null;
     }
     try {
@@ -609,7 +610,7 @@ function mountEditor(view, editorId, areaId) {
     } catch (err) {
         console.error('[shell] 挂载编辑器失败：' + editorId, err);
         slot.failedFor = editorId;
-        showNote(view, slot, editorId, '编辑器加载失败：' + editorId);
+        showNote(view, slot, editorId, t('shell.view.mountFailed', { id: editorId }));
         return null;
     }
     slot.inst = inst;
@@ -624,6 +625,52 @@ function mountEditor(view, editorId, areaId) {
         if (view !== activeView()) syncCanvasToActive();
     }
     return inst;
+}
+
+/** 重填一个视图里所有区域下拉的选项文本（切语言后调用）。 */
+function syncEditorLabels(view) {
+    for (const slot of view.map.values()) {
+        if (!slot.sel) continue;
+        for (const opt of slot.sel.options) {
+            const def = editorDef(opt.value);
+            if (!def) continue;
+            const label = editorLabel(def);
+            const hint = editorHint(def);
+            if (opt.textContent !== label) opt.textContent = label;
+            if (opt.title !== hint) opt.title = hint;
+        }
+    }
+}
+
+/**
+ * 切语言后重挂所有面板（本地化的刷新入口）。
+ *
+ * 面板在自己 `mount()` 里把文案写进 DOM，`refresh()` 只刷数据不刷静态文案，所以换语言
+ * 必须重挂。两件事分开做：
+ *   1. **重填区域下拉**：`createSlot` 时把 option 文本写死了，得逐个改回；
+ *   2. **重挂面板实例**：卸载后按同一个 editorId 挂回来，面板内部状态（滚动位置、
+ *      折叠的组、正在编辑的输入框）会丢 —— 这是换语言的一次性代价，可接受；
+ *      但**画布实例跳过**：引擎宿主与视口都在里面，重挂会丢掉正在画的笔和缩放位置。
+ *
+ * 返回读数供自测与状态栏排查：`{ rebuilt, relabelled }`。
+ */
+export function remountAll() {
+    let rebuilt = 0;
+    let relabelled = 0;
+    for (const ws of Object.keys(state.views)) {
+        const view = state.views[ws];
+        syncEditorLabels(view);
+        relabelled += view.map.size;
+        for (const slot of [...view.map.values()]) {
+            const editorId = slot.editor;
+            if (!editorId || !slot.inst) continue;
+            if (slot.inst === view.canvasInst) continue;
+            unmountSlot(view, slot);
+            slot.editor = '';
+            if (mountEditor(view, editorId, slot.id)) rebuilt += 1;
+        }
+    }
+    return { rebuilt, relabelled };
 }
 
 function ensureCanvas(view, slot) {
@@ -779,7 +826,7 @@ function onAreaAct(view, areaId, act) {
     if (act === 'close') {
         const next = joinNode(view.tree, areaId);
         if (next === view.tree) {
-            flash('只剩一个区域，不能再关闭');
+            flash(t('shell.view.lastArea'));
             updateChrome();
             return;
         }
@@ -809,13 +856,13 @@ function setAreaEditor(view, areaId, editorId) {
         const other = walkAreas(view.tree).find((a) => a.editor === 'canvas' && a.id !== areaId);
         if (other) {
             commitTree(view, swapEditors(view.tree, areaId, other.id));
-            flash('画布已移到该区域');
+            flash(t('shell.view.canvasMoved'));
             updateChrome();
             return;
         }
     }
     commitTree(view, mapAreaEditor(view.tree, areaId, want));
-    flash('已切换为' + editorTitle(want));
+    flash(t('shell.view.switchedTo', { title: editorTitle(want) }));
     updateChrome();
 }
 
@@ -825,7 +872,7 @@ function commitTree(view, tree) {
     syncActiveTree();
     saveCurrentLayout();
     render();
-    flash('区域已更新');
+    flash(t('shell.view.areaUpdated'));
     updateChrome();
 }
 
@@ -932,8 +979,8 @@ function onGripDown(view, slot, e) {
         window.removeEventListener('pointerup', up);
         slot.el.classList.remove('is-dragging');
         if (target) {
-            const t = view.map.get(target);
-            if (t) t.el.classList.remove('is-drop');
+            const slotNode = view.map.get(target);
+            if (slotNode) slotNode.el.classList.remove('is-drop');
         }
         if (target && target !== slot.id) commitTree(view, swapEditors(view.tree, slot.id, target));
     };
@@ -992,7 +1039,7 @@ function resetLayout() {
     syncActiveTree();
     render();
     saveCurrentLayout();
-    flash('布局已重置');
+    flash(t('shell.view.layoutReset'));
     updateChrome();
     syncCanvasToActive();
     return state.activeTree;

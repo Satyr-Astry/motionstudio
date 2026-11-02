@@ -17,18 +17,36 @@
  * 这份表也是「快捷键审计」的基准：tests/icons.test.mjs 会扫 app/shell/app.mjs 的
  * 实际按键分派，把「表里有、代码里没有」的条目列出来 —— 发现不一致就改这张表
  * 或补代码，但不许在这里写一条按不响的键。
+ *
+ * 文案为什么要写成 getter：本模块在启动时 import 一次就不再重求值，而切语言只换
+ * 词条表、不重新加载模块（见 app/i18n/index.mjs 的 setLocale）。如果这里写成
+ * `name: t('…', '原文')`，常量会被首次渲染时的语言冻住，切到另一种语言后仍然吐旧文案。
+ * 用 `get name()` 让**每次读取都查一遍表**，就自然跟上了——面板重挂（remountAll）
+ * 时重读一遍即得新语言，而下游（prop-prefs.mjs / timeline-paint.mjs / 快捷键浮层）
+ * 直接读 `item.name` 的写法一个字都不用改，拿到的仍然是字符串。
+ * 第二参一律是中文原文：漏译时界面显示母语，而不是空白或 key。
  */
 
 import { icon } from '../core/icons.mjs';
+import { t } from '../i18n/index.mjs';
 
-/** 概念说明：这部分不是键位，是「动画是怎么构成的」，保留原文。 */
+/** 概念说明：这部分不是键位，是「动画是怎么构成的」。 */
 export const CONCEPT_ITEMS = [
     {
-        title: '动画是怎么构成的',
+        get title() { return t('help.concept.title'); },
         rows: [
-            ['纹理', '某时刻起显示的那张画。时间上是离散的——到点就换图，中间没有过渡。在「画板」里画出来。'],
-            ['关键帧', '位置、缩放、旋转、不透明度、网格变形。时间上连续插值，中间有过渡。拖手柄或改数值就会自动打帧。'],
-            ['时间通道', '对象自己的时间。可偏移、缩放、循环，让同一个动画用不同节奏播；套到父对象上会传给整棵子树。'],
+            {
+                get name() { return t('help.concept.texture.name'); },
+                get desc() { return t('help.concept.texture.desc'); },
+            },
+            {
+                get name() { return t('help.concept.keyframe.name'); },
+                get desc() { return t('help.concept.keyframe.desc'); },
+            },
+            {
+                get name() { return t('help.concept.timeChannel.name'); },
+                get desc() { return t('help.concept.timeChannel.desc'); },
+            },
         ],
     },
 ];
@@ -37,45 +55,90 @@ export const CONCEPT_ITEMS = [
 export const SHORTCUT_GROUPS = [
     {
         id: 'file',
-        title: '文件',
+        get title() { return t('help.shortcut.file.title'); },
         icon: 'save',
         items: [
             // 这两条刻意写全「项目库」三个字：Ctrl+S 在这里是入库，
             // 不是 Photoshop 那种「存成文件」—— 首版就是这点被误解。
-            { icon: 'save', name: '保存到项目库', keys: 'Ctrl+S', hint: '写进 IndexedDB 的项目记录，不弹文件对话框' },
-            { icon: 'folder-open', name: '打开项目库', keys: 'Ctrl+O', hint: '最近项目 / 新建 / 导入' },
+            {
+                icon: 'save',
+                keys: 'Ctrl+S',
+                get name() { return t('help.shortcut.file.saveToLibrary.name'); },
+                get hint() { return t('help.shortcut.file.saveToLibrary.hint'); },
+            },
+            {
+                icon: 'folder-open',
+                keys: 'Ctrl+O',
+                get name() { return t('help.shortcut.file.openLibrary.name'); },
+                get hint() { return t('help.shortcut.file.openLibrary.hint'); },
+            },
             // 行为说明（不是快捷键）：键位列写「自动」，免得被当成又一个组合键。
-            { icon: 'save', name: '载入前自动保存', keys: '自动', hint: '载入 / 新建前把已命名的项目静默入库；未命名的会先问你要不要保存' },
-            { icon: 'export', name: '导出帧序列', keys: 'Ctrl+Shift+E', hint: 'PNG 序列 + 帧清单' },
-            { icon: 'undo', name: '撤销', keys: 'Ctrl+Z' },
-            { icon: 'redo', name: '重做', keys: 'Ctrl+Shift+Z' },
+            {
+                icon: 'save',
+                get keys() { return t('help.shortcut.file.autoSaveOnLoad.keys'); },
+                get name() { return t('help.shortcut.file.autoSaveOnLoad.name'); },
+                get hint() { return t('help.shortcut.file.autoSaveOnLoad.hint'); },
+            },
+            {
+                icon: 'export',
+                keys: 'Ctrl+Shift+E',
+                get name() { return t('help.shortcut.file.exportFrames.name'); },
+                get hint() { return t('help.shortcut.file.exportFrames.hint'); },
+            },
+            { icon: 'undo', keys: 'Ctrl+Z', get name() { return t('help.shortcut.file.undo.name'); } },
+            { icon: 'redo', keys: 'Ctrl+Shift+Z', get name() { return t('help.shortcut.file.redo.name'); } },
         ],
     },
     {
         id: 'time',
-        title: '时间',
+        get title() { return t('help.shortcut.time.title'); },
         icon: 'timer',
         items: [
-            { icon: 'play', name: '播放 / 暂停', keys: '空格' },
-            { icon: 'step-back', name: '回到开头', keys: 'Home' },
-            { icon: 'step-forward', name: '跳到结尾', keys: 'End' },
-            { icon: 'chevron-left', name: '上一个纹理', keys: 'Shift+,' },
-            { icon: 'chevron-right', name: '下一个纹理', keys: 'Shift+.' },
-            { icon: 'chevron-right', name: '逐帧微调（1/fps）', keys: '← / →' },
-            { icon: 'grid', name: '时间轴缩放（以指针为锚）', keys: 'Ctrl+滚轮' },
+            {
+                icon: 'play',
+                get keys() { return t('help.shortcut.time.togglePlay.keys'); },
+                get name() { return t('help.shortcut.time.togglePlay.name'); },
+            },
+            { icon: 'step-back', keys: 'Home', get name() { return t('help.shortcut.time.goStart.name'); } },
+            { icon: 'step-forward', keys: 'End', get name() { return t('help.shortcut.time.goEnd.name'); } },
+            { icon: 'chevron-left', keys: 'Shift+,', get name() { return t('help.shortcut.time.prevTexture.name'); } },
+            { icon: 'chevron-right', keys: 'Shift+.', get name() { return t('help.shortcut.time.nextTexture.name'); } },
+            { icon: 'chevron-right', keys: '← / →', get name() { return t('help.shortcut.time.nudgeFrame.name'); } },
+            {
+                icon: 'grid',
+                get keys() { return t('help.shortcut.time.zoomTimeline.keys'); },
+                get name() { return t('help.shortcut.time.zoomTimeline.name'); },
+            },
         ],
     },
     {
         id: 'keyframe',
-        title: '关键帧',
+        get title() { return t('help.shortcut.keyframe.title'); },
         icon: 'diamond',
         items: [
-            { icon: 'chevron-left', name: '上一个关键帧', keys: ',' },
-            { icon: 'chevron-right', name: '下一个关键帧', keys: '.' },
-            { icon: 'magnet', name: '临时自由拖动（忽略磁铁）', keys: 'Shift+拖' },
-            { icon: 'plus', name: '在曲线上加关键帧', keys: '双击空白处' },
-            { icon: 'diamond-minus', name: '删除关键帧', keys: '右键菜单 / 双击菱形' },
-            { icon: 'copy', name: '复制 / 粘贴关键帧', keys: 'Ctrl+C / Ctrl+V', hint: '时间轴里选中的那些' },
+            { icon: 'chevron-left', keys: ',', get name() { return t('help.shortcut.keyframe.prevKey.name'); } },
+            { icon: 'chevron-right', keys: '.', get name() { return t('help.shortcut.keyframe.nextKey.name'); } },
+            {
+                icon: 'magnet',
+                get keys() { return t('help.shortcut.keyframe.freeDrag.keys'); },
+                get name() { return t('help.shortcut.keyframe.freeDrag.name'); },
+            },
+            {
+                icon: 'plus',
+                get keys() { return t('help.shortcut.keyframe.addOnCurve.keys'); },
+                get name() { return t('help.shortcut.keyframe.addOnCurve.name'); },
+            },
+            {
+                icon: 'diamond-minus',
+                get keys() { return t('help.shortcut.keyframe.deleteKey.keys'); },
+                get name() { return t('help.shortcut.keyframe.deleteKey.name'); },
+            },
+            {
+                icon: 'copy',
+                keys: 'Ctrl+C / Ctrl+V',
+                get name() { return t('help.shortcut.keyframe.copyPaste.name'); },
+                get hint() { return t('help.shortcut.keyframe.copyPaste.hint'); },
+            },
         ],
     },
     // L4 层级键：作用对象是「对象面板的层级结构」，语境与画布工具键、时间轴键都不同，
@@ -88,15 +151,20 @@ export const SHORTCUT_GROUPS = [
     // 由 Lead 在图层线合并时完成；接线前这两个键位不生效。
     {
         id: 'layer',
-        title: '对象层级',
+        get title() { return t('help.shortcut.layer.title'); },
         icon: 'rows',
         items: [
-            { icon: 'rows', name: '同级上移 / 下移', keys: 'Alt+↑ / Alt+↓', hint: '只在兄弟之间换位，不跨越父级' },
+            {
+                icon: 'rows',
+                keys: 'Alt+↑ / Alt+↓',
+                get name() { return t('help.shortcut.layer.siblingMove.name'); },
+                get hint() { return t('help.shortcut.layer.siblingMove.hint'); },
+            },
             {
                 icon: 'chevron-right',
-                name: '降级 / 升级',
                 keys: 'Alt+← / Alt+→',
-                hint: '左 = 成为前一个兄弟的子对象；右 = 成为父的兄弟、插在父之后',
+                get name() { return t('help.shortcut.layer.promoteDemote.name'); },
+                get hint() { return t('help.shortcut.layer.promoteDemote.hint'); },
             },
         ],
     },
@@ -108,79 +176,154 @@ export const SHORTCUT_GROUPS = [
     // 以前两组挤在一组，表里就同时写着「橡皮 E」和「E 取色器」，自相矛盾。
     {
         id: 'canvas',
-        title: '编排画布',
+        get title() { return t('help.shortcut.canvas.title'); },
         icon: 'center',
         items: [
-            { icon: 'select', name: '选择工具', keys: 'V' },
-            { icon: 'brush', name: '画笔', keys: 'B' },
-            { icon: 'eraser', name: '橡皮', keys: 'E' },
-            { icon: 'bucket', name: '填充', keys: 'G' },
-            { icon: 'eyedropper', name: '取色器', keys: 'I' },
-            { icon: 'move', name: '平移画布', keys: 'H' },
-            { icon: 'minus', name: '笔尖变小 / 变大', keys: '[ / ]' },
-            { icon: 'fit', name: '适配视图（缩放到刚好铺满）', keys: '0' },
+            { icon: 'select', keys: 'V', get name() { return t('help.shortcut.canvas.selectTool.name'); } },
+            { icon: 'brush', keys: 'B', get name() { return t('help.shortcut.canvas.brush.name'); } },
+            { icon: 'eraser', keys: 'E', get name() { return t('help.shortcut.canvas.eraser.name'); } },
+            { icon: 'bucket', keys: 'G', get name() { return t('help.shortcut.canvas.fill.name'); } },
+            { icon: 'eyedropper', keys: 'I', get name() { return t('help.shortcut.canvas.eyedropper.name'); } },
+            { icon: 'move', keys: 'H', get name() { return t('help.shortcut.canvas.pan.name'); } },
+            { icon: 'minus', keys: '[ / ]', get name() { return t('help.shortcut.canvas.tipSize.name'); } },
+            { icon: 'fit', keys: '0', get name() { return t('help.shortcut.canvas.fitView.name'); } },
         ],
     },
     {
         id: 'board',
-        title: '画板工作区',
+        get title() { return t('help.shortcut.board.title'); },
         icon: 'brush',
         items: [
-            { icon: 'brush', name: '切换笔刷预设', keys: '1 – 7', hint: '七支笔从左到右对应 1–7' },
-            { icon: 'eyedropper', name: '取色器（吸一次色，然后接着画）', keys: 'E' },
-            { icon: 'eyedropper', name: '直接取色（按住拖可连续取）', keys: '右键 / Alt+左键' },
-            { icon: 'bucket', name: '填充', keys: 'G', hint: '同色连通区一次填满（容差 24）；导入的位图纹理不支持' },
-            { icon: 'move', name: '按住平移画布', keys: '空格（按住）' },
-            { icon: 'minus', name: '笔尖变小 / 变大', keys: '[ / ]' },
-            { icon: 'fit', name: '适配画布', keys: '0' },
-            { icon: 'magnet', name: '笔迹稳定器档位 0–5（越高越稳）', keys: 'Ctrl+滚轮', hint: '工具条右端的磁铁按钮点按也能循环档位' },
+            {
+                icon: 'brush',
+                keys: '1 – 7',
+                get name() { return t('help.shortcut.board.brushPreset.name'); },
+                get hint() { return t('help.shortcut.board.brushPreset.hint'); },
+            },
+            {
+                icon: 'eyedropper',
+                keys: 'E',
+                get name() { return t('help.shortcut.board.sampleColor.name'); },
+            },
+            {
+                icon: 'eyedropper',
+                get keys() { return t('help.shortcut.board.pickColor.keys'); },
+                get name() { return t('help.shortcut.board.pickColor.name'); },
+            },
+            {
+                icon: 'bucket',
+                keys: 'G',
+                get name() { return t('help.shortcut.board.fill.name'); },
+                get hint() { return t('help.shortcut.board.fill.hint'); },
+            },
+            {
+                icon: 'move',
+                get keys() { return t('help.shortcut.board.panHold.keys'); },
+                get name() { return t('help.shortcut.board.panHold.name'); },
+            },
+            { icon: 'minus', keys: '[ / ]', get name() { return t('help.shortcut.board.tipSize.name'); } },
+            { icon: 'fit', keys: '0', get name() { return t('help.shortcut.board.fitCanvas.name'); } },
+            {
+                icon: 'magnet',
+                get keys() { return t('help.shortcut.board.stabilizer.keys'); },
+                get name() { return t('help.shortcut.board.stabilizer.name'); },
+                get hint() { return t('help.shortcut.board.stabilizer.hint'); },
+            },
         ],
     },
     {
         id: 'view',
-        title: '视图',
+        get title() { return t('help.shortcut.view.title'); },
         icon: 'columns',
         items: [
-            { icon: 'columns', name: '交换两个区域', keys: '拖区域标题' },
-            { icon: 'columns', name: '调整区域比例', keys: '拖分隔条' },
-            { icon: 'rotate-ccw', name: '复位比例', keys: '双击分隔条' },
-            { icon: 'help', name: '快捷键一览', keys: '?' },
-            { icon: 'search', name: '命令面板（所有命令，可搜）', keys: 'Ctrl+Shift+P' },
-            { icon: 'chevron-down', name: '面板里换行（命令面板 / 项目库）', keys: '↑ / ↓' },
-            { icon: 'trash', name: '删除选中对象', keys: 'Delete', hint: '两段式确认，Backspace 不接' },
-            { icon: 'x', name: '关闭浮层 / 取消当前操作', keys: 'Esc', hint: '在画板或设置里 = 回编排' },
+            {
+                icon: 'columns',
+                get keys() { return t('help.shortcut.view.swapAreas.keys'); },
+                get name() { return t('help.shortcut.view.swapAreas.name'); },
+            },
+            {
+                icon: 'columns',
+                get keys() { return t('help.shortcut.view.resizeAreas.keys'); },
+                get name() { return t('help.shortcut.view.resizeAreas.name'); },
+            },
+            {
+                icon: 'rotate-ccw',
+                get keys() { return t('help.shortcut.view.resetRatio.keys'); },
+                get name() { return t('help.shortcut.view.resetRatio.name'); },
+            },
+            { icon: 'help', keys: '?', get name() { return t('help.shortcut.view.shortcutList.name'); } },
+            {
+                icon: 'search',
+                keys: 'Ctrl+Shift+P',
+                get name() { return t('help.shortcut.view.commandPalette.name'); },
+            },
+            {
+                icon: 'chevron-down',
+                keys: '↑ / ↓',
+                get name() { return t('help.shortcut.view.moveInList.name'); },
+            },
+            {
+                icon: 'trash',
+                keys: 'Delete',
+                get name() { return t('help.shortcut.view.deleteObject.name'); },
+                get hint() { return t('help.shortcut.view.deleteObject.hint'); },
+            },
+            {
+                icon: 'x',
+                keys: 'Esc',
+                get name() { return t('help.shortcut.view.closeOverlay.name'); },
+                get hint() { return t('help.shortcut.view.closeOverlay.hint'); },
+            },
         ],
     },
 ];
 
 /**
  * 纹理 vs 关键帧的图例。
- * mark 是时间轴上那两种形状的字形占位（方块 / 菱形），kind 决定配色（.is-cel / .is-kf）。
+ * 两行都用菱形：v8 之后时间轴上只有菱形（.tline-kf），纹理的差别是菱形里多一个
+ * 实心小方块（.has-drawing），空白纹理是空心小方块（.is-blank）。所以字形不再拿方块
+ * 冒充一种形状——那会让人去泳道上找根本不存在的方块；区分交给配色（kind）与说明文字。
+ * kind 决定配色（.is-cel / .is-kf），值是测试钉死的契约，不许改。
  */
 export const LEGEND_ITEMS = [
     {
         kind: 'cel',
-        mark: '■',
+        mark: '◆',
         icon: 'timer',
-        name: '纹理',
-        text: '从这一秒起换成这张图，直到下一个纹理；格与格之间不插值。',
+        get name() { return t('help.legend.cel.name'); },
+        get text() { return t('help.legend.cel.text'); },
     },
     {
         kind: 'kf',
         mark: '◆',
         icon: 'diamond',
-        name: '关键帧',
-        text: '位移 / 缩放 / 旋转 / 不透明度在这里连续插值，与相邻关键帧平滑过渡。',
+        get name() { return t('help.legend.kf.name'); },
+        get text() { return t('help.legend.kf.text'); },
     },
 ];
 
 /** 曲线区怎么用（纯操作说明，不涉及键位） */
 export const CURVE_TIPS = [
-    ['点关键帧', '选中它，出现切线柄。Shift 点可多选，空白处拖出框选。'],
-    ['拖圆点', '上下改数值、左右改时间。按住 Shift 吸附纹理切换点。'],
-    ['拖手柄', '改缓动曲线——决定加速还是减速。'],
-    ['双击空白', '在该时刻加一个关键帧。'],
-    ['右键', '线性 / 贝塞尔 / 保持 / 删除关键帧。'],
+    {
+        get name() { return t('help.curve.pickKey.name'); },
+        get desc() { return t('help.curve.pickKey.desc'); },
+    },
+    {
+        get name() { return t('help.curve.dragDot.name'); },
+        get desc() { return t('help.curve.dragDot.desc'); },
+    },
+    {
+        get name() { return t('help.curve.dragHandle.name'); },
+        get desc() { return t('help.curve.dragHandle.desc'); },
+    },
+    {
+        get name() { return t('help.curve.doubleClickBlank.name'); },
+        get desc() { return t('help.curve.doubleClickBlank.desc'); },
+    },
+    {
+        get name() { return t('help.curve.rightClick.name'); },
+        get desc() { return t('help.curve.rightClick.desc'); },
+    },
 ];
 
 /**
@@ -189,12 +332,13 @@ export const CURVE_TIPS = [
  *
  * 浮层是「键位 + 动作名」的紧凑列表（不带图标），所以这里丢掉 icon、把 name 换成 title。
  * 数据仍然只有 SHORTCUT_GROUPS 一份 —— `?` 浮层、设置里的键位行、帮助面板三处逐条对得上。
+ * 键位空串的条目统一显示「鼠标」：那几行本来就只有鼠标操作，留空会让人以为漏了快捷键。
  */
 export function overlayGroups(groups = SHORTCUT_GROUPS) {
     return groups.map((g) => ({
         title: g.title,
         items: g.items.map((it) => ({
-            keys: it.keys || '鼠标',
+            keys: it.keys || t('help.shortcut.mouseOnly'),
             title: it.name,
             hint: it.hint || '',
         })),
@@ -231,7 +375,7 @@ export function mount(el_, ctx) {
     for (const sec of CONCEPT_ITEMS) {
         root.appendChild(el('div', 'hlp-title', sec.title));
         const list = el('div', 'hlp-list');
-        for (const [name, desc] of sec.rows) list.appendChild(row(null, name, desc));
+        for (const r of sec.rows) list.appendChild(row(null, r.name, r.desc));
         root.appendChild(list);
     }
 
@@ -240,16 +384,16 @@ export function mount(el_, ctx) {
         root.appendChild(el('div', 'hlp-title', group.title));
         const list = el('div', 'hlp-list');
         for (const item of group.items) {
-            const r = row(item.icon, item.keys || '鼠标', item.name);
+            const r = row(item.icon, item.keys || t('help.shortcut.mouseOnly'), item.name);
             if (item.hint) r.title = item.hint;
             list.appendChild(r);
         }
         root.appendChild(list);
     }
 
-    root.appendChild(el('div', 'hlp-title', '曲线区怎么用'));
+    root.appendChild(el('div', 'hlp-title', t('help.curve.title')));
     const tips = el('div', 'hlp-list');
-    for (const [name, desc] of CURVE_TIPS) tips.appendChild(row(null, name, desc));
+    for (const tip of CURVE_TIPS) tips.appendChild(row(null, tip.name, tip.desc));
     root.appendChild(tips);
 
     el_.appendChild(root);

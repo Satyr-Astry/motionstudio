@@ -14,6 +14,7 @@
 import { stateAt } from '../core/transform.mjs';
 import { celTimes } from '../core/cel.mjs';
 import { PAD_L, PAD_R, KEY_R, SAMPLES, chById, chValue, clamp, fmtVal, tToX, vToY } from './curve-geo.mjs';
+import { t } from '../i18n/index.mjs';
 
 /**
  * 按容器尺寸 + devicePixelRatio 定画布像素尺寸。
@@ -124,7 +125,7 @@ export function paintCanvas(rc) {
         g.setLineDash([]);
         g.fillStyle = 'rgba(200,205,215,.5)';
         g.font = '8px system-ui, sans-serif';
-        g.fillText(focusSolo ? '独立' : '同刻', x + 3, geo.y1 - 3);
+        g.fillText(focusSolo ? t('curve.canvas.solo') : t('curve.canvas.sameTime'), x + 3, geo.y1 - 3);
         g.restore();
     }
 
@@ -184,7 +185,7 @@ export function paintCanvas(rc) {
     if (!layer || !keys.length) {
         g.fillStyle = 'rgba(230,232,236,.45)';
         g.font = '12px system-ui, sans-serif';
-        g.fillText(layer ? '这个对象还没有关键帧 —— 在属性面板改任意数值即可打第一个' : '没有可编辑的对象', PAD_L + 8, geo.y0 + 18);
+        g.fillText(layer ? t('curve.empty.noKeys') : t('curve.empty.noLayer'), PAD_L + 8, geo.y0 + 18);
     }
     return true;
 }
@@ -327,10 +328,17 @@ function drawGrid(g, rc) {
     }
 }
 
+/**
+ * `describeTime()` 用这句中文当「时间变换恒等」的哨兵（`app/core/timegraph.mjs:518`），
+ * 三个消费者都拿它做字符串比较。这里只比对、不显示，所以**不走词典** —— 词条一换语言，
+ * 哨兵就对不上了。要根治得让 core 导出显式的恒等判定，那不在本片范围。
+ */
+const IDENTITY_TIME_TEXT = '无时间变换';
+
 /** 当前对象的时间通道是否恒等（没有就跳过时间网格）。 */
 function isIdentityTimeOf(rc, layer) {
     if (typeof rc.describeLayerTime === 'function') {
-        return rc.describeLayerTime(layer.id) === '无时间变换';
+        return rc.describeLayerTime(layer.id) === IDENTITY_TIME_TEXT;
     }
     return true;
 }

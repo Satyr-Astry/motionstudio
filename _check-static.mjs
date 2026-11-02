@@ -80,8 +80,43 @@ for (const f of files) {
     }
 }
 
+// 1b) import 了却没用到的符号（v11 补的缝：v12 之前这类死 import 攒了 43 个，
+//     全部是「删了功能但没删 import」，而本脚本当时只查「名字是否真的被 export」）。
+//     body 里出现同名标识符就算用到（注释里提到也算，宁可漏报不可误报——
+//     误报会逼着人加 ignore 注释，闸门就废了）。
+const unusedImports = [];
+for (const f of files) {
+    const src = readFileSync(f, 'utf8');
+    const specs = [];
+    for (const m of src.matchAll(/import\s+([\s\S]*?)\s+from\s*['"]\.[^'"]+['"];?[ \t]*$/gm)) {
+        const raw = m[1].trim().replace(/^\{/, '').replace(/\}$/, '');
+        if (/^\*\s+as\s+/.test(raw)) {
+            specs.push(raw.replace(/^\*\s+as\s+/, '').trim());
+        } else if (m[1].trim().startsWith('{')) {
+            for (const part of raw.split(',')) {
+                const name = part.trim().split(/\s+as\s+/).pop().trim();
+                if (name) specs.push(name);
+            }
+        } else {
+            const first = raw.split(',')[0].trim();
+            if (first) specs.push(first); // default import
+        }
+    }
+    if (!specs.length) continue;
+    const body = src.replace(/import\s+[\s\S]*?\s+from\s*['"]\.[^'"]+['"];?[ \t]*$/gm, '');
+    for (const name of specs) {
+        if (!/^[A-Za-z_$][\w$]*$/.test(name)) continue;
+        const re = new RegExp('(^|[^\\w$.])' + name.replace(/\$/g, '\\$') + '(?![\\w$])');
+        if (!re.test(body)) unusedImports.push(`${rel(f)}  ←  ${name}`);
+    }
+}
+
 console.log('== 帧概念残留 ==');
 console.log(leftovers.length === 0 ? '  （无）' : leftovers.map((l) => '  ' + l).join('\n'));
 console.log('\n== 失效 import ==');
 console.log(badImports.length === 0 ? '  （无）' : badImports.map((l) => '  ' + l).join('\n'));
-console.log(`\n扫描 ${files.length} 个模块；残留 ${leftovers.length} 处，坏 import ${badImports.length} 处`);
+console.log('\n== 未使用 import ==');
+console.log(unusedImports.length === 0 ? '  （无）' : unusedImports.map((l) => '  ' + l).join('\n'));
+console.log(`\n扫描 ${files.length} 个模块；残留 ${leftovers.length} 处，坏 import ${badImports.length} 处，未使用 import ${unusedImports.length} 处`);
+
+if (leftovers.length || badImports.length || unusedImports.length) process.exitCode = 1;

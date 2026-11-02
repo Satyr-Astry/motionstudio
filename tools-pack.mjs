@@ -6,6 +6,10 @@ const out = path.join(root, "dist", "MotionStudio-win32-x64");
 const dist = path.join(root, "node_modules", "electron", "dist");
 if (!fs.existsSync(dist)) throw new Error("找不到 electron dist: " + dist);
 
+// 安装脚本里的版本号曾经写死成 0.0.1-alpha，一路没跟上（dist/ 里现存那两个包就是这样）。
+// 现在从 package.json 读，别再手改。
+const APP_VERSION = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
+
 function rmrf(p) { if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true }); }
 function copyDir(src, dst, filter) {
     fs.mkdirSync(dst, { recursive: true });
@@ -40,7 +44,7 @@ const install = `@echo off
 chcp 65001 >nul
 setlocal
 set "TARGET=%LOCALAPPDATA%\\Programs\\MotionStudio"
-echo 正在安装 MotionStudio 0.0.1-alpha 到 %TARGET% ...
+echo 正在安装 MotionStudio ${APP_VERSION} 到 %TARGET% ...
 if exist "%TARGET%" rd /s /q "%TARGET%"
 mkdir "%TARGET%"
 xcopy "%~dp0MotionStudio-win32-x64\\*" "%TARGET%\\" /E /I /H /Y >nul

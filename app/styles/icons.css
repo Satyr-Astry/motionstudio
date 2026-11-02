@@ -120,31 +120,6 @@ button.ms-icon-label:focus-visible {
     --icon-px: 14;
 }
 
-/* 行内图标统一 14px（与 10px 副标题、11px 名称同一视觉节奏） */
-.lyr-time.ms-icon-btn .ms-icon,
-.lyr-caret.ms-icon-btn .ms-icon {
-    --icon-size: var(--icon-sm);
-    --icon-px: 14;
-}
-
-/* 折叠箭头原本是 ▾ 文本，靠全局 button 样式（有边框有底色）显示；
-   换成图标后底色/边框都该消失，只留箭头本身。 */
-.lyr-caret.ms-icon-btn {
-    width: var(--h-btn);
-    min-width: var(--h-btn);
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--ink-dim);
-}
-
-/* ── 6. 纹理库小工具条（＋ 复制 上一个 下一个 删除） ─────────────
-   宿主是 min-width:22 + padding:0 4px 的单字按钮（「复」「删」），
-   换图标后 padding 归零 = 22×22 方盒，一行五个仍放得下。 */
-.lyr-cels-btn.ms-icon-btn {
-    padding: 0;
-}
-
 /* ── 7. 变换面板（xform.mjs）────────────────────────────────────
    .xf-actions 是 grid 四等分（panels.css:755），每格约 66px 宽、22px 高。
    宿主 .xf-btn 的 padding 是 0，加图标后内容会顶到边，所以这里给回内边距。

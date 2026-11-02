@@ -14,7 +14,15 @@
  * 这样它能被 node 单测（`jsdom` 之外的纯函数部分）与真机共用同一套参数校验。
  */
 
-import { EXPORT_DEFAULTS, normalizeExportOptions } from '../core/export-options.mjs';
+import {
+    ENGINES,
+    EXPORT_DEFAULTS,
+    FORMATS,
+    PRESET_IDS,
+    applyPreset,
+    normalizeExportOptions,
+} from '../core/export-options.mjs';
+import { t } from '../i18n/index.mjs';
 
 const LS_KEY = 'ms.export';
 
@@ -28,13 +36,16 @@ export function readExportPrefs(storage) {
         const obj = JSON.parse(raw);
         if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return Object.assign({}, EXPORT_DEFAULTS);
         const out = Object.assign({}, EXPORT_DEFAULTS);
-        ['scale', 'fps', 'from', 'to'].forEach((k) => {
+        ['scale', 'fps', 'from', 'to', 'quality', 'maxTextureSize'].forEach((k) => {
             const n = Number(obj[k]);
             if (Number.isFinite(n)) out[k] = n;
         });
         if (obj.background === 'solid' || obj.background === 'transparent') out.background = obj.background;
         if (typeof obj.bgColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(obj.bgColor)) out.bgColor = obj.bgColor;
         if (typeof obj.openAfter === 'boolean') out.openAfter = obj.openAfter;
+        if (typeof obj.trim === 'boolean') out.trim = obj.trim;
+        if (FORMATS.includes(obj.format)) out.format = obj.format;
+        if (ENGINES.includes(obj.engine)) out.engine = obj.engine;
         return out;
     } catch (err) {
         return Object.assign({}, EXPORT_DEFAULTS);
@@ -54,6 +65,13 @@ export function writeExportPrefs(prefs, storage) {
         background: p.background === 'solid' ? 'solid' : 'transparent',
         bgColor: typeof p.bgColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(p.bgColor) ? p.bgColor : EXPORT_DEFAULTS.bgColor,
         openAfter: p.openAfter !== false,
+        format: FORMATS.includes(p.format) ? p.format : EXPORT_DEFAULTS.format,
+        quality: Number.isFinite(Number(p.quality)) ? Number(p.quality) : EXPORT_DEFAULTS.quality,
+        engine: ENGINES.includes(p.engine) ? p.engine : EXPORT_DEFAULTS.engine,
+        // 这两项界面上没有控件（预设会写它们），但**必须存** ——
+        // 不存的话用户点了「排版」预设、重开对话框又变回裁剪 + 4096。
+        trim: p.trim !== false,
+        maxTextureSize: Number.isFinite(Number(p.maxTextureSize)) ? Number(p.maxTextureSize) : EXPORT_DEFAULTS.maxTextureSize,
     };
     try {
         st.setItem(LS_KEY, JSON.stringify(slim));
@@ -104,7 +122,7 @@ export function openExportDialog(deps) {
         const root = el('div', 'exp-modal');
         root.setAttribute('role', 'dialog');
         root.setAttribute('aria-modal', 'true');
-        root.setAttribute('aria-label', '导出');
+        root.setAttribute('aria-label', t('export.dialog.aria'));
         Object.assign(root.style, {
             position: 'fixed',
             inset: '0',
@@ -129,9 +147,34 @@ export function openExportDialog(deps) {
         });
         root.appendChild(box);
 
-        const title = el('div', 'exp-title', '导出');
+        const title = el('div', 'exp-title', t('export.dialog.title'));
         Object.assign(title.style, { fontWeight: '600', marginBottom: '10px' });
         box.appendChild(title);
+
+        // 预设：一行四个按钮，作用只是「把下面几项填一遍」。
+        // 不记录「当前是哪个预设」——用户之后改任何一项都不会被改回去（见 export-options.mjs 的说明）。
+        // fillPreset 在控件都建好之后才赋值，这里先用空函数占位（点击发生在之后，闭包拿到的是最终值）。
+        let fillPreset = () => {};
+        const presetWrap = el('div', 'exp-presets');
+        Object.assign(presetWrap.style, { display: 'flex', gap: '6px', margin: '0 0 10px', flexWrap: 'wrap' });
+        PRESET_IDS.forEach((id) => {
+            const b = el('button', 'exp-preset-' + id, t('export.preset.' + id));
+            b.type = 'button';
+            b.title = t('export.preset.' + id + '.hint');
+            Object.assign(b.style, {
+                background: '#242932',
+                color: '#cfd4de',
+                border: '1px solid #3f4551',
+                borderRadius: '4px',
+                padding: '3px 10px',
+                font: '12px/1.4 system-ui, sans-serif',
+                cursor: 'pointer',
+            });
+            b.addEventListener('click', () => fillPreset(id));
+            presetWrap.appendChild(b);
+        });
+        presetWrap.appendChild(el('span', 'exp-preset-note', t('export.preset.note')));
+        box.appendChild(presetWrap);
 
         const row = (label, node) => {
             const r = el('label', 'exp-row');
@@ -162,7 +205,7 @@ export function openExportDialog(deps) {
         scale.step = '0.05';
         scale.value = String(prefs.scale || 1);
         Object.assign(scale.style, fieldStyle);
-        row('缩放', scale);
+        row(t('export.field.scale'), scale);
 
         const fps = el('input', 'exp-fps');
         fps.type = 'number';
@@ -170,9 +213,9 @@ export function openExportDialog(deps) {
         fps.max = '120';
         fps.step = '1';
         fps.value = String(prefs.fps || 0);
-        fps.title = '0 = 跟随文档帧率';
+        fps.title = t('export.field.fps.hint');
         Object.assign(fps.style, fieldStyle);
-        row('帧率', fps);
+        row(t('export.field.fps'), fps);
 
         const from = el('input', 'exp-from');
         from.type = 'number';
@@ -186,7 +229,7 @@ export function openExportDialog(deps) {
         to.min = '0';
         to.step = '0.01';
         to.value = fmtTime(prefs.to);
-        to.title = '0 = 到片尾';
+        to.title = t('export.field.range.to.hint');
         Object.assign(to.style, fieldStyle);
 
         const range = el('div', 'exp-range');
@@ -194,17 +237,17 @@ export function openExportDialog(deps) {
         range.appendChild(from);
         range.appendChild(el('span', 'exp-dash', '–'));
         range.appendChild(to);
-        row('时间', range);
+        row(t('export.field.range'), range);
 
         const bg = el('select', 'exp-bg');
         Object.assign(bg.style, fieldStyle);
         [
-            ['transparent', '透明'],
-            ['solid', '纯色'],
-        ].forEach(([v, t]) => {
+            ['transparent', t('export.background.transparent')],
+            ['solid', t('export.background.solid')],
+        ].forEach(([value, label]) => {
             const o = document.createElement('option');
-            o.value = v;
-            o.textContent = t;
+            o.value = value;
+            o.textContent = label;
             bg.appendChild(o);
         });
         bg.value = prefs.background || 'transparent';
@@ -219,7 +262,77 @@ export function openExportDialog(deps) {
         Object.assign(bgWrap.style, { display: 'flex', alignItems: 'center', gap: '6px', flex: '1 1 auto' });
         bgWrap.appendChild(bg);
         bgWrap.appendChild(color);
-        row('背景', bgWrap);
+        row(t('export.field.background'), bgWrap);
+
+        const fmt = el('select', 'exp-format');
+        Object.assign(fmt.style, fieldStyle);
+        FORMATS.forEach((f) => {
+            const o = document.createElement('option');
+            o.value = f;
+            o.textContent = t('export.format.' + f);
+            fmt.appendChild(o);
+        });
+        fmt.value = FORMATS.includes(prefs.format) ? prefs.format : EXPORT_DEFAULTS.format;
+        row(t('export.field.format'), fmt);
+
+        const quality = el('input', 'exp-quality');
+        quality.type = 'number';
+        quality.min = '0.1';
+        quality.max = '1';
+        quality.step = '0.01';
+        quality.value = String(Number.isFinite(Number(prefs.quality)) ? Number(prefs.quality) : EXPORT_DEFAULTS.quality);
+        Object.assign(quality.style, fieldStyle);
+        row(t('export.field.quality'), quality);
+
+        // 帧表：own / phaser / aseprite / both。
+        // 这一项以前**界面上根本没有**——`engine` 永远停在默认的 `own`，
+        // 于是「给 Godot / Phaser 用的帧表」这句功能说明一直是空头承诺。
+        const eng = el('select', 'exp-engine');
+        Object.assign(eng.style, fieldStyle);
+        ENGINES.forEach((id) => {
+            const o = document.createElement('option');
+            o.value = id;
+            o.textContent = t('export.engine.' + id);
+            o.title = t('export.engine.' + id + '.hint');
+            eng.appendChild(o);
+        });
+        eng.value = ENGINES.includes(prefs.engine) ? prefs.engine : EXPORT_DEFAULTS.engine;
+        row(t('export.field.engine'), eng);
+
+        // 界面上没有控件的两项（只有预设会写它们）：图集上限、是否裁边。
+        // 必须跟着选项一起存，否则点了「排版」预设、重开对话框又变回 4096 + 裁边。
+        const extra = {
+            trim: prefs.trim !== false,
+            maxTextureSize: Number(prefs.maxTextureSize) || EXPORT_DEFAULTS.maxTextureSize,
+        };
+
+        const syncQuality = () => {
+            const needs = fmt.value === 'jpeg' || fmt.value === 'webp';
+            quality.disabled = !needs;
+            quality.title = needs ? t('export.field.quality.hint') : t('export.field.quality.na');
+        };
+        fmt.addEventListener('change', syncQuality);
+        syncQuality();
+
+        // 预设只填字段：改完之后用户再动任何一项都不会被改回去。
+        fillPreset = (id) => {
+            const merged = applyPreset({
+                scale: Number(scale.value),
+                format: fmt.value,
+                quality: Number(quality.value),
+                engine: eng.value,
+                trim: extra.trim,
+                maxTextureSize: extra.maxTextureSize,
+            }, id);
+            if (!merged) return;
+            scale.value = String(merged.scale);
+            fmt.value = merged.format;
+            quality.value = String(merged.quality);
+            eng.value = merged.engine;
+            extra.trim = merged.trim !== false;
+            extra.maxTextureSize = Number(merged.maxTextureSize) || EXPORT_DEFAULTS.maxTextureSize;
+            syncQuality();
+        };
 
         const open = el('input', 'exp-open');
         open.type = 'checkbox';
@@ -227,8 +340,8 @@ export function openExportDialog(deps) {
         const openWrap = el('label', 'exp-openwrap');
         Object.assign(openWrap.style, { display: 'flex', alignItems: 'center', gap: '6px', flex: '1 1 auto' });
         openWrap.appendChild(open);
-        openWrap.appendChild(el('span', null, '完成后打开所在文件夹'));
-        row('选项', openWrap);
+        openWrap.appendChild(el('span', null, t('export.openAfter')));
+        row(t('export.field.options'), openWrap);
 
         const hint = el('div', 'exp-hint');
         Object.assign(hint.style, { minHeight: '16px', color: '#8f96a3', marginTop: '8px' });
@@ -246,15 +359,21 @@ export function openExportDialog(deps) {
 
         const actions = el('div', 'exp-actions');
         Object.assign(actions.style, { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' });
-        const btnCancel = el('button', 'exp-cancel', '取消');
+        const btnCancel = el('button', 'exp-cancel', t('export.action.cancel'));
         btnCancel.type = 'button';
-        const btnSheet = el('button', 'exp-sheet', '导出精灵图');
+        const btnSheet = el('button', 'exp-sheet', t('export.action.sheet'));
         btnSheet.type = 'button';
-        const btnVideo = el('button', 'exp-video', '导出 WebM');
+        const btnVideo = el('button', 'exp-video', t('export.action.video'));
         btnVideo.type = 'button';
-        const btnGo = el('button', 'exp-go', '导出');
+        const btnGif = el('button', 'exp-gif', t('export.action.gif'));
+        btnGif.type = 'button';
+        btnGif.title = t('export.action.gif.hint');
+        const btnApng = el('button', 'exp-apng', t('export.action.apng'));
+        btnApng.type = 'button';
+        btnApng.title = t('export.action.apng.hint');
+        const btnGo = el('button', 'exp-go', t('export.action.export'));
         btnGo.type = 'button';
-        [btnCancel, btnSheet, btnVideo, btnGo].forEach((b) => {
+        [btnCancel, btnSheet, btnGif, btnApng, btnVideo, btnGo].forEach((b) => {
             Object.assign(b.style, {
                 background: '#2a2f38',
                 color: '#d8dbe2',
@@ -277,6 +396,11 @@ export function openExportDialog(deps) {
             background: bg.value === 'solid' ? 'solid' : 'transparent',
             bgColor: color.value,
             openAfter: !!open.checked,
+            format: fmt.value,
+            quality: Number(quality.value),
+            engine: eng.value,
+            trim: extra.trim,
+            maxTextureSize: extra.maxTextureSize,
             dir: '',
         });
 
@@ -285,7 +409,7 @@ export function openExportDialog(deps) {
             bar.hidden = false;
             bar.setAttribute('aria-valuenow', String(pct));
             barFill.style.width = pct + '%';
-            hint.textContent = '已处理 ' + done + ' / ' + total;
+            hint.textContent = t('export.progress', { done, total });
         };
 
         const close = (payload) => {
@@ -300,7 +424,7 @@ export function openExportDialog(deps) {
         const cancel = () => {
             if (busy) {
                 canceled = true;
-                hint.textContent = '正在取消…';
+                hint.textContent = t('export.cancel.pending');
                 return;
             }
             close(null);
@@ -310,18 +434,18 @@ export function openExportDialog(deps) {
             if (busy) return;
             const opts = normalizeExportOptions(collect(), doc);
             if (which === 'frames' && !opts.count) {
-                hint.textContent = '时间范围为空，没有可导出的帧';
+                hint.textContent = t('export.emptyRange');
                 return;
             }
             busy = true;
             canceled = false;
             bar.hidden = which === 'sheet';
             barFill.style.width = '0%';
-            [btnGo, btnSheet, btnVideo].forEach((b) => {
+            [btnGo, btnSheet, btnGif, btnApng, btnVideo].forEach((b) => {
                 b.disabled = true;
             });
-            btnCancel.textContent = '取消导出';
-            hint.textContent = '正在导出…';
+            btnCancel.textContent = t('export.action.cancelExport');
+            hint.textContent = t('export.running');
             let res = null;
             try {
                 res = await d.run(which, opts, { progress, canceled: () => canceled });
@@ -331,16 +455,18 @@ export function openExportDialog(deps) {
             busy = false;
             if (settled) return;
             if (res && res.canceled) {
-                hint.textContent = res.written != null ? '已取消（已写出 ' + res.written + ' 帧）' : '已取消';
+                hint.textContent = res.written != null
+                    ? t('export.canceledWith', { written: res.written })
+                    : t('export.canceled');
             } else if (res && res.ok !== false) {
-                hint.textContent = res.message || '导出完成';
+                hint.textContent = res.message || t('export.done');
             } else {
-                hint.textContent = (res && res.error) || '导出失败';
+                hint.textContent = (res && res.error) || t('export.failed');
             }
-            [btnGo, btnSheet, btnVideo].forEach((b) => {
+            [btnGo, btnSheet, btnGif, btnApng, btnVideo].forEach((b) => {
                 b.disabled = false;
             });
-            btnCancel.textContent = '关闭';
+            btnCancel.textContent = t('export.action.close');
             if (res && res.ok !== false && !res.canceled) {
                 writeExportPrefs(opts, d.storage);
                 close({ kind: which, opts, res });
@@ -356,8 +482,9 @@ export function openExportDialog(deps) {
                 return;
             }
             if (ev.key === 'Enter' && !busy) {
-                const t = ev.target;
-                const tag = t && t.tagName ? t.tagName : '';
+                // 局部变量不能叫 t：那是 i18n 的查表函数，遮蔽掉会让本文件后面的文案全部取不到。
+                const target = ev.target;
+                const tag = target && target.tagName ? target.tagName : '';
                 // 文本/数字输入框里的 Enter 也当作「导出」；下拉框留给它自己
                 if (tag !== 'SELECT') {
                     ev.preventDefault();
@@ -378,6 +505,14 @@ export function openExportDialog(deps) {
         btnVideo.addEventListener('click', () => {
             kind = 'video';
             run('video');
+        });
+        btnGif.addEventListener('click', () => {
+            kind = 'gif';
+            run('gif');
+        });
+        btnApng.addEventListener('click', () => {
+            kind = 'apng';
+            run('apng');
         });
         btnCancel.addEventListener('click', cancel);
         bg.addEventListener('change', () => {

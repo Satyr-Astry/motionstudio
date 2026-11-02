@@ -18,23 +18,25 @@
 
 import { BRUSH_PRESETS } from '../paint/brush.mjs';
 import { icon } from '../core/icons.mjs';
+import { t } from '../i18n/index.mjs';
 
 // 工具的图标名直接是 core/icons.mjs 的键（不是字形）。六件工具都是纯图标按钮，
-// 所以 name + key 同时进 title 与 aria-label —— 图标本身 aria-hidden，读屏只念一次。
+// 所以显示名 + key 同时进 title 与 aria-label —— 图标本身 aria-hidden，读屏只念一次。
+// `nameKey` 而不是 `name`：显示名跟着语言走，`id` 才是落盘值。
 const TOOL_DEFS = Object.freeze([
-    { id: 'select', icon: 'select', name: '选择', key: 'V' },
-    { id: 'brush', icon: 'brush', name: '画笔', key: 'B' },
-    { id: 'eraser', icon: 'eraser', name: '橡皮', key: 'E' },
-    { id: 'bucket', icon: 'bucket', name: '填充', key: 'G' },
-    { id: 'picker', icon: 'eyedropper', name: '取色', key: 'I' },
-    { id: 'pan', icon: 'move', name: '平移', key: 'H' },
+    { id: 'select', icon: 'select', nameKey: 'tool.select.name', key: 'V' },
+    { id: 'brush', icon: 'brush', nameKey: 'tool.brush.name', key: 'B' },
+    { id: 'eraser', icon: 'eraser', nameKey: 'tool.eraser.name', key: 'E' },
+    { id: 'bucket', icon: 'bucket', nameKey: 'tool.bucket.name', key: 'G' },
+    { id: 'picker', icon: 'eyedropper', nameKey: 'tool.picker.name', key: 'I' },
+    { id: 'pan', icon: 'move', nameKey: 'tool.pan.name', key: 'H' },
 ]);
 
 const BRUSH_DEFS = Object.freeze([
-    { id: 'round', fallback: '圆头' },
-    { id: 'soft', fallback: '柔边' },
-    { id: 'pencil', fallback: '铅笔' },
-    { id: 'pixel', fallback: '像素' },
+    { id: 'round', labelKey: 'tbar.brush.round' },
+    { id: 'soft', labelKey: 'tbar.brush.soft' },
+    { id: 'pencil', labelKey: 'tbar.brush.pencil' },
+    { id: 'pixel', labelKey: 'tbar.brush.pixel' },
 ]);
 
 const SIZE_MIN = 1;
@@ -42,11 +44,11 @@ const SIZE_MAX = 120;
 const ALPHA_MIN = 5;
 const ALPHA_MAX = 100;
 
-function presetName(id, fallback) {
+function presetName(id, labelKey) {
     for (const p of BRUSH_PRESETS) {
-        if (p.id === id) return p.name || fallback;
+        if (p.id === id) return p.name || t(labelKey);
     }
-    return fallback;
+    return t(labelKey);
 }
 
 function clampSize(v) {
@@ -104,16 +106,17 @@ export function mount(el, ctx) {
     /* ── 工具组 ── */
     const toolBox = mk('div', 'tbar-tools');
     const toolBtns = new Map();
-    for (const t of TOOL_DEFS) {
+    for (const def of TOOL_DEFS) {
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'tbar-tool';
-        b.dataset.tool = t.id;
-        b.title = `${t.name} (${t.key})`;
-        b.setAttribute('aria-label', `${t.name} (${t.key})`);
-        b.innerHTML = icon(t.icon);
+        b.dataset.tool = def.id;
+        const label = t('tool.label', { name: t(def.nameKey), key: def.key });
+        b.title = label;
+        b.setAttribute('aria-label', label);
+        b.innerHTML = icon(def.icon);
         toolBox.appendChild(b);
-        toolBtns.set(t.id, b);
+        toolBtns.set(def.id, b);
     }
 
     /* ── 笔刷组 ── */
@@ -124,7 +127,7 @@ export function mount(el, ctx) {
         b.type = 'button';
         b.className = 'tbar-brush';
         b.dataset.brush = d.id;
-        const label = presetName(d.id, d.fallback);
+        const label = presetName(d.id, d.labelKey);
         b.title = label;
         b.textContent = label;
         brushBox.appendChild(b);
@@ -132,8 +135,8 @@ export function mount(el, ctx) {
     }
 
     /* ── 滑块组 ── */
-    const sizeF = field('笔尖', 'tbar-size', 'tbar-size-val', SIZE_MIN, SIZE_MAX);
-    const alphaF = field('不透明', 'tbar-alpha', 'tbar-alpha-val', ALPHA_MIN, ALPHA_MAX);
+    const sizeF = field(t('tbar.size'), 'tbar-size', 'tbar-size-val', SIZE_MIN, SIZE_MAX);
+    const alphaF = field(t('tbar.opacity'), 'tbar-alpha', 'tbar-alpha-val', ALPHA_MIN, ALPHA_MAX);
 
     /* ── 撤销 / 重做 ── */
     const histBox = mk('div', 'tbar-history');
@@ -141,15 +144,15 @@ export function mount(el, ctx) {
     undoBtn.type = 'button';
     undoBtn.className = 'tbar-btn';
     undoBtn.dataset.act = 'undo';
-    undoBtn.title = '撤销 (Ctrl+Z)';
-    undoBtn.setAttribute('aria-label', '撤销 (Ctrl+Z)');
+    undoBtn.title = t('tbar.undo');
+    undoBtn.setAttribute('aria-label', t('tbar.undo'));
     undoBtn.innerHTML = icon('undo');
     const redoBtn = document.createElement('button');
     redoBtn.type = 'button';
     redoBtn.className = 'tbar-btn';
     redoBtn.dataset.act = 'redo';
-    redoBtn.title = '重做 (Ctrl+Shift+Z)';
-    redoBtn.setAttribute('aria-label', '重做 (Ctrl+Shift+Z)');
+    redoBtn.title = t('tbar.redo');
+    redoBtn.setAttribute('aria-label', t('tbar.redo'));
     redoBtn.innerHTML = icon('redo');
     histBox.append(undoBtn, redoBtn);
 
@@ -160,8 +163,9 @@ export function mount(el, ctx) {
 
     /** 工具状态：优先外壳，外壳没给才回落引擎 */
     function toolNow() {
-        const t = ctx && typeof ctx.tool === 'function' ? ctx.tool() : null;
-        if (t) return t;
+        // 这里刻意不叫 t：模块级的 t 是词条函数，同名局部变量会把取词路径彻底遮死
+        const cur = ctx && typeof ctx.tool === 'function' ? ctx.tool() : null;
+        if (cur) return cur;
         if (engine && typeof engine.tool === 'function') return engine.tool();
         return 'brush';
     }
@@ -198,8 +202,9 @@ export function mount(el, ctx) {
     }
 
     function sync() {
-        const t = toolNow();
-        for (const [id, btn] of toolBtns) btn.classList.toggle('is-on', id === t);
+        // 同样不叫 t：这个名字在本模块里已经是词条函数了
+        const curTool = toolNow();
+        for (const [id, btn] of toolBtns) btn.classList.toggle('is-on', id === curTool);
 
         const b = brushNow();
         for (const [id, btn] of brushBtns) btn.classList.toggle('is-on', id === b.id);

@@ -11,6 +11,11 @@ import { test } from 'node:test';
 
 import { moveSubtreeDoc } from '../app/core/timegraph.mjs';
 import { timeCtx } from '../app/shell/ctx-time.mjs';
+import { setLocale } from '../app/i18n/index.mjs';
+
+// 撤销步的 label 已经迁进词条表（`shell.time.moveObject`），而默认语言是 en。
+// 这里断言钉的是中文译文，先把语言钉死；英文侧由 i18n 分片测试的镜面断言兜。
+setLocale('zh-Hans');
 import { objectById, objectsOf } from '../app/core/doc-model.mjs';
 import { elementSize, elementWorldMatrix, applyMatrix, reparentOffset } from '../app/core/element.mjs';
 

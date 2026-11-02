@@ -1,0 +1,294 @@
+/**
+ * 叠放面板与曲线编辑器的词条。
+ *
+ * 键前缀 `layers.*` / `curve.*` / `dragtip.*`。`layers.kind.*`、`curve.corner.*`、
+ * `curve.channel.*` 已经在 `panels.mjs` 里了（那些是单一数据源常量），这一片只放
+ * **面板内就地写的**文案，不要重复定义同名键 —— 合并时撞键会直接抛错。
+ *
+ * 范围：`app/editors/{layers,curve,curve-geo,curve-draw,drag-tip}.mjs`。
+ *
+ * 两组键是「值 → 显示名」，值本身一律不进词典（那是落盘值）：
+ * - `layers.timeEase.*` 键就是 `layer.time.ease` 的取值（linear / in / out / inout）；
+ * - `curve.preset.<key>.{glyph,label}` 的 key 与按钮 `data-preset` 同值，
+ *   条目里的 `ease` 才是写进关键帧的缓动名。
+ */
+export default {
+    en: {
+        'layers.act.add': 'New object',
+        'layers.act.dup': 'Duplicate object',
+        'layers.act.up': 'Move up one',
+        'layers.act.down': 'Move down one',
+        'layers.act.merge': 'Merge down (the result lands in the lower object\'s coordinate space)',
+        'layers.act.del': 'Delete object',
+
+        'layers.alpha.title': 'Current object opacity',
+
+        'layers.empty': 'No objects yet. Click + above to create one, or use "Import" to bring an image in.',
+
+        'layers.drop.noSource': 'Nothing to drag',
+        'layers.drop.noTarget': 'No drop target',
+        'layers.drop.self': 'Cannot drop onto itself',
+
+        'layers.reorder.noApi': 'This build has no stacking API',
+        'layers.reorder.noTarget': 'No drop position found',
+        'layers.reorder.failed': 'Failed to reorder',
+        'layers.reorder.label': 'Reorder stacking',
+
+        'layers.row.visibility': 'Show / hide',
+        'layers.row.rename': 'Double-click to rename',
+        'layers.row.timeChannel': 'Time channel (offset / scale / loop / freeze)',
+        'layers.row.hide': 'Hide "{name}"',
+        'layers.row.show': 'Show "{name}"',
+        'layers.row.tip': '{name} · opacity {pct}% · {sub} · exposed {expo}×',
+        'layers.row.textureTip': '{n} texture(s) in total (this badge is not a child count — see the Hierarchy panel)',
+        'layers.row.timeTipSuffix': ' (click to edit)',
+
+        'layers.sub.main': '{kind} · {lib} tex · {keys} keys',
+        'layers.sub.linked': ' · linked',
+        'layers.sub.texBadge': '{n} tex',
+
+        'layers.count': '{n} objects',
+        'layers.newName': 'Object {n}',
+        'layers.rename.prompt': 'Object name',
+
+        'layers.undo.delete': 'Delete object',
+        'layers.undo.deleteMany': 'Delete multiple objects',
+        'layers.notify.deletedMany': 'Deleted {n} objects',
+        'layers.notify.deletedOne': 'Deleted object "{name}"',
+
+        'layers.timeEase.linear': 'Linear',
+        'layers.timeEase.in': 'Ease in',
+        'layers.timeEase.out': 'Ease out',
+        'layers.timeEase.inout': 'Ease in-out',
+
+        'layers.tp.title': '{name} · time channel',
+        'layers.tp.object': 'Object',
+        'layers.tp.offset': 'Offset s',
+        'layers.tp.scale': 'Scale ×',
+        'layers.tp.from': 'Range start s',
+        'layers.tp.to': 'Range end s',
+        'layers.tp.mode': 'Mode',
+        'layers.tp.ease': 'Easing',
+        'layers.tp.easeLinearHint': 'Time advances at a constant rate',
+        'layers.tp.easeHint': 'Time flow follows the curve (ignored in loop / ping-pong)',
+        'layers.tp.held': 'Frozen',
+        'layers.tp.holdNow': 'Freeze at this time',
+        'layers.tp.hold': 'Freeze',
+        'layers.tp.reset': 'Reset to identity',
+        'layers.tp.close': 'Close',
+
+        'curve.channelFallback': 'Channel',
+        'curve.canvas.solo': 'Solo',
+        'curve.canvas.sameTime': 'Same time',
+        'curve.empty.noKeys': 'This object has no keyframes yet — change any value in the properties panel to add the first one',
+        'curve.empty.noLayer': 'No object to edit',
+        'curve.group.transform': 'Transform',
+        'curve.group.warp': 'Mesh vertices',
+
+        'curve.row.hint': 'Click: focus this curve · Shift+click: overlay it as a reference',
+        'curve.row.focus': 'Currently edited curve',
+        'curve.row.focusSolo': 'Currently edited curve · solo: only its own keys move',
+        'curve.row.refSolo': 'Solo: has its own keyframe times · click to focus this curve',
+
+        'curve.notify.located': 'Jumped to channel keyframe · {name} · {t} s',
+        'curve.notify.locatedMulti': ' ({n} channels at this time, switched to {name})',
+        'curve.notify.keyUpdated': 'Keyframe updated',
+        'curve.notify.keyAdded': 'Keyframe added at t = {t} s',
+        'curve.notify.keyAddedSolo': ' · {name} is now solo',
+        'curve.notify.keysDeleted': 'Deleted {n} keyframes',
+        'curve.notify.easeChanged': 'Easing changed to {ease}',
+        'curve.notify.backToShared': '{name} is back on the shared keyframes',
+        'curve.notify.occupied': 'This time already has a keyframe: pick another frame, or delete that one first',
+
+        'curve.bar.solo': ' · solo: has its own keyframe times and no longer follows the shared keys',
+        'curve.bar.open': ' — open to switch curves (Shift+click a row to overlay it as a reference)',
+        'curve.bar.noObject': 'No object',
+        'curve.bar.objectTime': ' · object time',
+        'curve.bar.refs': ' · {n} reference',
+        'curve.bar.summary': '{n} keys · {ease}',
+        'curve.bar.summarySolo': ' · ⤴solo',
+        'curve.bar.titleObjectTime': 'X axis = this object\'s local time ({desc})',
+        'curve.bar.titleHelp': 'Drag keys to retime/change the value · drag handles to reshape · right-click for easing · double-click empty space to add · Delete to remove · Shift to snap to texture frames',
+        'curve.bar.titleSolo': 'This channel is solo (⤴): only its own keyframes move, the other curves are unaffected. Right-click "Back to shared keyframes" to undo.',
+        'curve.bar.titleFollow': 'The first time you drag this curve alone it copies its own keyframes (⤴ solo); after that it only affects itself.',
+
+        'curve.hint.selectFirst': 'Select keys first',
+        'curve.hint.easeApplied': 'Easing {ease}',
+        'curve.hint.easeMulti': ' ×{n}',
+        'curve.hint.autoApplied': 'Auto tangents ×{n}',
+
+        'curve.ease.linear': 'Linear',
+        'curve.ease.bezier': 'Bezier',
+        'curve.ease.hold': 'Hold',
+
+        'curve.marquee.picked': 'Marquee-selected {n} keyframes',
+        'curve.menu.deleteKey': 'Delete keyframe',
+        'curve.menu.backToShared': '⤴ Back to shared keyframes',
+        'curve.menu.backToSharedHint': 'Drop this channel\'s own track and follow the shared keyframes again (values snap back to the shared evaluation immediately)',
+
+        'curve.preset.linear.glyph': 'Lin',
+        'curve.preset.linear.label': 'Linear',
+        'curve.preset.in.glyph': 'In',
+        'curve.preset.in.label': 'Ease in',
+        'curve.preset.out.glyph': 'Out',
+        'curve.preset.out.label': 'Ease out',
+        'curve.preset.inout.glyph': 'Both',
+        'curve.preset.inout.label': 'Ease in-out',
+        'curve.preset.back.glyph': 'Back',
+        'curve.preset.back.label': 'Overshoot',
+        'curve.preset.hint.linear': '{name}: select keyframes → make this segment linear',
+        'curve.preset.hint.bezier': '{name}: select keyframes → make this segment a bezier "{name}"',
+        'curve.preset.auto.glyph': 'Auto',
+        'curve.preset.auto.hint': 'Free: auto tangents — flatten the tangents from the neighbouring keyframes\' slopes (press again to go back to manual, so the curve can be dragged freely)',
+
+        'curve.warp.label': 'Mesh {c},{r} {axis}',
+        'curve.warp.corner': ' (corner)',
+
+        'dragtip.snap.frame': 'snap: frame',
+        'dragtip.snap.grid': 'snap: grid',
+        'dragtip.snap.free': 'free',
+        'dragtip.frame': 'frame {n}',
+        'dragtip.overDuration': 'past the duration',
+        'dragtip.conflict.merge': 'will merge into the same time',
+        'dragtip.conflict.blocked': 'this time already has a keyframe',
+    },
+    'zh-Hans': {
+        'layers.act.add': '新建对象',
+        'layers.act.dup': '复制对象',
+        'layers.act.up': '上移一层',
+        'layers.act.down': '下移一层',
+        'layers.act.merge': '向下合并（结果会落到下层对象的坐标系）',
+        'layers.act.del': '删除对象',
+
+        'layers.alpha.title': '当前对象不透明度',
+
+        'layers.empty': '还没有对象。点上方 ＋ 新建，或用「导入」放一张图进来。',
+
+        'layers.drop.noSource': '没有可拖动的对象',
+        'layers.drop.noTarget': '没有落点',
+        'layers.drop.self': '不能拖到自身',
+
+        'layers.reorder.noApi': '这个版本没有叠放接口',
+        'layers.reorder.noTarget': '找不到落点',
+        'layers.reorder.failed': '调整叠放失败',
+        'layers.reorder.label': '调整叠放顺序',
+
+        'layers.row.visibility': '显示 / 隐藏',
+        'layers.row.rename': '双击重命名',
+        'layers.row.timeChannel': '时间通道（偏移 / 倍率 / 循环 / 冻结）',
+        'layers.row.hide': '隐藏「{name}」',
+        'layers.row.show': '显示「{name}」',
+        'layers.row.tip': '{name} · 不透明度 {pct}% · {sub} · 曝光 {expo} 处',
+        'layers.row.textureTip': '共 {n} 张纹理（这个角标不表示子对象数，子对象看「父子」面板）',
+        'layers.row.timeTipSuffix': '（点击编辑）',
+
+        'layers.sub.main': '{kind} · {lib} 纹理 · {keys} 键',
+        'layers.sub.linked': ' · 链接',
+        'layers.sub.texBadge': '{n} 纹',
+
+        'layers.count': '{n} 个对象',
+        'layers.newName': '对象 {n}',
+        'layers.rename.prompt': '对象名称',
+
+        'layers.undo.delete': '删除对象',
+        'layers.undo.deleteMany': '删除多个对象',
+        'layers.notify.deletedMany': '已删除 {n} 个对象',
+        'layers.notify.deletedOne': '已删除对象「{name}」',
+
+        'layers.timeEase.linear': '匀速',
+        'layers.timeEase.in': '渐快',
+        'layers.timeEase.out': '渐慢',
+        'layers.timeEase.inout': '缓入缓出',
+
+        'layers.tp.title': '{name} · 时间通道',
+        'layers.tp.object': '对象',
+        'layers.tp.offset': '偏移 s',
+        'layers.tp.scale': '倍率 ×',
+        'layers.tp.from': '区间起 s',
+        'layers.tp.to': '区间止 s',
+        'layers.tp.mode': '模式',
+        'layers.tp.ease': '缓动',
+        'layers.tp.easeLinearHint': '时间匀速前进',
+        'layers.tp.easeHint': '时间流速按曲线变化（loop / pingpong 下不生效）',
+        'layers.tp.held': '已冻结',
+        'layers.tp.holdNow': '冻结在此刻',
+        'layers.tp.hold': '冻结',
+        'layers.tp.reset': '恢复恒等',
+        'layers.tp.close': '关闭',
+
+        'curve.channelFallback': '通道',
+        'curve.canvas.solo': '独立',
+        'curve.canvas.sameTime': '同刻',
+        'curve.empty.noKeys': '这个对象还没有关键帧 —— 在属性面板改任意数值即可打第一个',
+        'curve.empty.noLayer': '没有可编辑的对象',
+        'curve.group.transform': '变换',
+        'curve.group.warp': '网格顶点',
+
+        'curve.row.hint': '点击：切到这条曲线 · Shift+点击：当作参考线叠加',
+        'curve.row.focus': '当前编辑的曲线',
+        'curve.row.focusSolo': '当前编辑的曲线 · 已独立：只动它自己',
+        'curve.row.refSolo': '已独立：有自己的关键帧时间 · 点击切到这条曲线',
+
+        'curve.notify.located': '已定位到通道关键帧 · {name} · {t} s',
+        'curve.notify.locatedMulti': '（该时刻有 {n} 个通道，已切到 {name}）',
+        'curve.notify.keyUpdated': '关键帧已更新',
+        'curve.notify.keyAdded': '已添加关键帧 t = {t} s',
+        'curve.notify.keyAddedSolo': ' · {name} 已独立',
+        'curve.notify.keysDeleted': '已删除 {n} 颗关键帧',
+        'curve.notify.easeChanged': '缓动改为{ease}',
+        'curve.notify.backToShared': '{name} 已回到共用关键帧',
+        'curve.notify.occupied': '这个时刻已经有关键帧了：换一帧再拖，或先把那一颗删掉',
+
+        'curve.bar.solo': ' · 已独立：有自己的关键帧时间，不再跟随共用关键帧',
+        'curve.bar.open': ' —— 点开切换曲线（Shift+点击列表项可叠加参考线）',
+        'curve.bar.noObject': '无对象',
+        'curve.bar.objectTime': ' · 对象时间',
+        'curve.bar.refs': ' · 参考 {n}',
+        'curve.bar.summary': '{n} 键 · {ease}',
+        'curve.bar.summarySolo': ' · ⤴独立',
+        'curve.bar.titleObjectTime': '横轴 = 该对象的局部时间（{desc}）',
+        'curve.bar.titleHelp': '拖点改时间/数值 · 拖柄改曲线 · 右键改缓动 · 双击空白加点 · Delete 删点 · Shift 吸附纹理',
+        'curve.bar.titleSolo': '这条通道已独立（⤴）：只动它自己的关键帧，其余曲线不受影响。右键「回到共用关键帧」可撤销。',
+        'curve.bar.titleFollow': '第一次单独拖这条曲线时，它会拷贝一份自己的关键帧（⤴ 独立），之后只影响它自己。',
+
+        'curve.hint.selectFirst': '先选点',
+        'curve.hint.easeApplied': '缓动 {ease}',
+        'curve.hint.easeMulti': ' ×{n}',
+        'curve.hint.autoApplied': '自动切线 ×{n}',
+
+        'curve.ease.linear': '线性',
+        'curve.ease.bezier': '贝塞尔',
+        'curve.ease.hold': '保持',
+
+        'curve.marquee.picked': '框选 {n} 颗关键帧',
+        'curve.menu.deleteKey': '删除关键帧',
+        'curve.menu.backToShared': '⤴ 回到共用关键帧',
+        'curve.menu.backToSharedHint': '删掉这条通道自己的轨道，重新跟随共用关键帧（数值会立刻变回共用求值）',
+
+        'curve.preset.linear.glyph': '线',
+        'curve.preset.linear.label': '线性',
+        'curve.preset.in.glyph': '入',
+        'curve.preset.in.label': '进入',
+        'curve.preset.out.glyph': '出',
+        'curve.preset.out.label': '退出',
+        'curve.preset.inout.glyph': '双',
+        'curve.preset.inout.label': '双向',
+        'curve.preset.back.glyph': '冲',
+        'curve.preset.back.label': '回弹',
+        'curve.preset.hint.linear': '{name}：选中关键帧 → 这一段改为线性',
+        'curve.preset.hint.bezier': '{name}：选中关键帧 → 这一段改为贝塞尔「{name}」',
+        'curve.preset.auto.glyph': '自',
+        'curve.preset.auto.hint': '自由：自动切线 —— 按相邻关键帧的斜率自动摆平切线（再按一次回到手动，曲线可自由拖）',
+
+        'curve.warp.label': '网格 {c},{r} {axis}',
+        'curve.warp.corner': '（角）',
+
+        'dragtip.snap.frame': '吸附:帧',
+        'dragtip.snap.grid': '吸附:网格',
+        'dragtip.snap.free': '自由',
+        'dragtip.frame': '第 {n} 帧',
+        'dragtip.overDuration': '超出时长',
+        'dragtip.conflict.merge': '会合并到同一时刻',
+        'dragtip.conflict.blocked': '该时刻已有关键帧',
+    },
+};

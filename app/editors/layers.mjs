@@ -2,7 +2,7 @@
 // 结构变更全部委托 core/cel.mjs 与 paint/ops.mjs 的纯函数，本文件只管交互与重绘。
 // 选中态：.is-active = 当前操作对象（ctx.activeLayerId），.is-sel = 画布/面板选中的对象（ctx.selection）。
 
-import { addLayer, removeLayer, patchLayer, celAt, imageAt, celTimes, objectsOf } from '../core/cel.mjs';
+import { addLayer, removeLayer, patchLayer, celAt, celTimes, objectsOf } from '../core/cel.mjs';
 import { objectSize } from '../core/doc-model.mjs';
 import { icon } from '../core/icons.mjs';
 import { duplicateLayer, mergeDown } from '../paint/ops.mjs';
@@ -10,9 +10,19 @@ import { reorderIndex } from '../core/layer-order.mjs';
 import { drawOrderOf, moveInOrder } from '../core/draw-order.mjs';
 import { textureCount } from '../core/textures.mjs';
 import { clickIntent, rangeBetween } from '../core/selection.mjs';
+// 本模块的 `syncRows(doc, active, sel, t)` 里 t 是「时刻」，所以翻译函数导入成 tr。
+import { t as tr } from '../i18n/index.mjs';
 
-// 对象种类文案（CONTRACT-v2 §1：kind = 'paint' 手绘 / 'image' 导入图片）
-const KIND_TEXT = { paint: '手绘', image: '图片' };
+// 对象种类文案（CONTRACT-v2 §1：kind = 'paint' 手绘 / 'image' 导入图片 / 'bone' 骨骼）。
+// 这里只剩「值 → 词条键」：显示名走词典，kind 本身是落盘值。
+// 注意命名空间：paint/image 两条在面板片（layers.kind.*），bone 在效果片（kind.bone）——
+// 骨骼种类先于本面板落地，词条跟着 kind.* 那一族走，这里只引用、不重复定义。
+const KIND_KEYS = { paint: 'layers.kind.paint', image: 'layers.kind.image', bone: 'kind.bone' };
+/**
+ * `describeTime()` 用这句中文当「时间变换恒等」的哨兵（`app/core/timegraph.mjs:518`），
+ * 这里只拿去显示/兜底、不做语言切换 —— 换成词条会和 core 的返回值对不上。
+ */
+const IDENTITY_TIME_TEXT = '无时间变换';
 let dragId = null;   // v5：正在拖拽的对象 id（dragstart 里写入）
 // v10：折叠体系随「叠放列表扁平化」下线 —— 本面板只回答「谁盖谁」，没有子层级可折；
 // 父子层级与折叠归「父子」面板（tree.mjs）。旧 localStorage 键不再写入。
@@ -21,82 +31,26 @@ let popover = null;   // v5：时间通道浮层（懒创建、模块级复用�
 // v8（第十六批）：对象动作不再折进 ⋯ 菜单。
 // 上一版把 5 个动作收进菜单是为了省宽度，代价是「复制 / 上移 / 下移 / 合并 / 删除」每次都要先开菜单 ——
 // 这五个都是对象栈的常用动作，宽度也用不着省（6 个 22px 按钮 ≈ 150px，面板 230px）。
-// [act, 图标名, 提示] —— 图标来自 core/icons.mjs，全部纯图标，靠 title + aria-label 说明
+// [act, 图标名, 词条键] —— 图标来自 core/icons.mjs，全部纯图标，靠 title + aria-label 说明
 const BAR_ACTS = [
-    ['add', 'plus', '新建对象'],
-    ['dup', 'copy', '复制对象'],
-    ['up', 'chevron-up', '上移一层'],
-    ['down', 'chevron-down', '下移一层'],
-    ['merge', 'merge-down', '向下合并（结果会落到下层对象的坐标系）'],
-    ['del', 'trash', '删除对象'],
+    ['add', 'plus', 'layers.act.add'],
+    ['dup', 'copy', 'layers.act.dup'],
+    ['up', 'chevron-up', 'layers.act.up'],
+    ['down', 'chevron-down', 'layers.act.down'],
+    ['merge', 'merge-down', 'layers.act.merge'],
+    ['del', 'trash', 'layers.act.del'],
 ];
 // 动作全集：状态同步（置灰）与守卫提示都按这一份走
 const ACTS = BAR_ACTS;
 
-/* ───────────────────── 树形显示与拖拽落点：纯逻辑，零 DOM ─────────────────────
- * 单测在 tests/layers-tree.test.mjs。约定：
- * - objects 数组顺序 = 绘制顺序（composite 按它画），parentId 只表达归属；
- * - 深度优先遍历保证「父在前、子紧随」，同层内部仍按数组相对顺序；
- * - 环由 maxDepth / seen 兜住（core 的 setParent 已做环检测，这里只防脏数据）。 */
+/* ───────────────────── 树序只有一处：core/hierarchy.treeOrder（v11 统一） ─────────────────────
+ * 深度优先 + 同级按 drawOrder 的唯一实现在 app/core/hierarchy.mjs，父子面板（tree.mjs）直接用。
+ * 这里以前自带一套「同级按 objects 数组顺序」的实现：v10 把叠放拆到 drawOrder 之后，
+ * 数组序不再等于叠放序（叠放面板上移一层只改 drawOrder、不碰数组），
+ * 两套排序会在同一个面板上打架，所以删掉重复实现。
+ * 单测见 tests/layers-tree.test.mjs 的同级排序回归用例。 */
 
-const MAX_TREE_DEPTH = 64;
-
-/** 深度优先展开：返回 [{ layer, depth }]。根 = parentId 为空或指向不存在的对象。 */
-export function treeOrder(all) {
-    const list = Array.isArray(all) ? all.filter((o) => o && o.id != null) : [];
-    const ids = new Set(list.map((o) => o.id));
-    const byParent = new Map();
-    for (const o of list) {
-        if (o.parentId == null || !ids.has(o.parentId)) continue;
-        const arr = byParent.get(o.parentId);
-        if (arr) arr.push(o);
-        else byParent.set(o.parentId, [o]);
-    }
-    const out = [];
-    const seen = new Set();
-    const walk = (o, depth) => {
-        if (!o || seen.has(o.id) || depth > MAX_TREE_DEPTH) return;
-        seen.add(o.id);
-        out.push({ layer: o, depth });
-        const kids = byParent.get(o.id);
-        if (kids) for (const k of kids) walk(k, depth + 1);
-    };
-    for (const o of list) {
-        if (o.parentId == null || !ids.has(o.parentId)) walk(o, 0);
-    }
-    // 父链成环的孤岛遍历不到，按原顺序补到最后（depth 记 0，至少让人看得见）
-    for (const o of list) {
-        if (!seen.has(o.id)) {
-            seen.add(o.id);
-            out.push({ layer: o, depth: 0 });
-        }
-    }
-    return out;
-}
-
-/** 自身 + 全部后代的 id（深度优先，含自身）。 */
-export function subtreeIds(all, id) {
-    const list = Array.isArray(all) ? all : [];
-    if (id == null) return [];
-    const out = [];
-    const seen = new Set();
-    const queue = [id];
-    while (queue.length) {
-        const cur = queue.shift();
-        if (cur == null || seen.has(cur)) continue;
-        seen.add(cur);
-        if (!list.some((o) => o && o.id === cur)) continue;
-        out.push(cur);
-        for (const o of list) if (o && o.parentId === cur) queue.push(o.id);
-    }
-    return out;
-}
-
-/** id 是否落在 ancestorId 的子树里（含 ancestorId 自身）。 */
-export function isDescendantId(all, id, ancestorId) {
-    if (id == null || ancestorId == null) return false;
-    return subtreeIds(all, ancestorId).includes(id);
-}
+/* ───────────────────── 叠放列表的拖拽落点：纯逻辑，零 DOM ───────────────────── */
 
 /** 二区判定（叠放列表）：上半 = 插到这一行之上，下半 = 插到之下。
  *  v11：叠放面板没有「投进去」这一区 —— 改层级是「父子」面板的事
@@ -108,9 +62,9 @@ export function dropZone(ratio) {
 
 /** 落点合法性：叠放只重排、不改父子，所以只禁止拖到自身。 */
 export function dropVerdict(all, fromId, targetId) {
-    if (fromId == null) return { ok: false, reason: '没有可拖动的对象' };
-    if (targetId == null) return { ok: false, reason: '没有落点' };
-    if (String(fromId) === String(targetId)) return { ok: false, reason: '不能拖到自身' };
+    if (fromId == null) return { ok: false, reason: tr('layers.drop.noSource') };
+    if (targetId == null) return { ok: false, reason: tr('layers.drop.noTarget') };
+    if (String(fromId) === String(targetId)) return { ok: false, reason: tr('layers.drop.self') };
     return { ok: true, reason: '' };
 }
 
@@ -163,7 +117,8 @@ export function mount(el, ctx) {
     const bar = document.createElement('div');
     bar.className = 'lyr-bar';
     const actBtn = new Map();   // act → 要同步置灰的控件
-    for (const [act, iconName, title] of BAR_ACTS) {
+    for (const [act, iconName, titleKey] of BAR_ACTS) {
+        const title = tr(titleKey);
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'lyr-btn ms-icon-btn';
@@ -185,7 +140,7 @@ export function mount(el, ctx) {
     alpha.max = '100';
     alpha.step = '1';
     alpha.value = '100';
-    alpha.title = '当前对象不透明度';
+    alpha.title = tr('layers.alpha.title');
     const alphaVal = document.createElement('span');
     alphaVal.className = 'lyr-alpha-val';
     alphaVal.textContent = '100%';
@@ -220,9 +175,9 @@ export function mount(el, ctx) {
         dropState = { targetId: null, where: 'below', ok: true };
         clearDropMarks();
         const last = visibleRows().pop() || null;
-        if (last) showDropLine(last, 'after', indentOf(0));
+        if (last) showDropLine(last, 'after', DROP_INDENT);
         else {
-            dropLine.style.setProperty('--drop-indent', indentOf(0) + 'px');
+            dropLine.style.setProperty('--drop-indent', DROP_INDENT + 'px');
             dropLine.style.top = '0px';
             dropLine.hidden = false;
         }
@@ -260,22 +215,12 @@ export function mount(el, ctx) {
     const emptyEl = document.createElement('div');
     emptyEl.className = 'lyr-empty';
     emptyEl.hidden = true;
-    emptyEl.textContent = '还没有对象。点上方 ＋ 新建，或用「导入」放一张图进来。';
+    emptyEl.textContent = tr('layers.empty');
     list.appendChild(emptyEl);
 
-    // 超过 6 级不再继续缩进（12px×7 就把名字挤没了），改用行尾的 +N 标记说明还剩几层
-    const MAX_VISIBLE_DEPTH = 6;
-    const indentOf = (depth) => 6 + Math.min(MAX_VISIBLE_DEPTH, Math.max(0, Number(depth) || 0)) * 12;
-
-    /** 「N 个子对象」：优先用 ctx 现成的子树计数，没有就自己按 parentId 数（不重复造轮子，但要能降级）。 */
-    function kidCountOf(all, id) {
-        if (typeof ctx.subtreeCount === 'function') return Math.max(0, Number(ctx.subtreeCount(id)) || 0);
-        return Math.max(0, subtreeIds(all, id).length - 1);
-    }
-
-    function depthOf(id) {
-        return typeof ctx.layerDepth === 'function' ? Number(ctx.layerDepth(id)) || 0 : 0;
-    }
+    // 落点缩进：行内 6px 基准。叠放列表是扁平的（docs/层级与叠放-2026-10.md §5），
+    // 没有层级要加，所以落点线一律对齐行内文本起点。
+    const DROP_INDENT = 6;
 
     function clearDropMarks() {
         for (const rec of rows.values()) {
@@ -313,7 +258,7 @@ export function mount(el, ctx) {
             return;
         }
         rec.row.classList.add(where === 'above' ? 'drop-before' : 'drop-after');
-        showDropLine(rec.row, where === 'above' ? 'before' : 'after', indentOf(0));
+        showDropLine(rec.row, where === 'above' ? 'before' : 'after', DROP_INDENT);
     }
 
     /** 列表上/下边缘 24px 内自动滚动：拖长列表时不必先松手再滚。 */
@@ -338,13 +283,13 @@ export function mount(el, ctx) {
             return;
         }
         if (typeof ctx.moveDrawOrder !== 'function') {
-            notify('这个版本没有叠放接口');
+            notify(tr('layers.reorder.noApi'));
             return;
         }
         const order = drawOrderOf(doc);
         const to = reorderIndex(order, fromId, opts.targetId, opts.where);
         if (to < 0) {
-            notify('找不到落点');
+            notify(tr('layers.reorder.noTarget'));
             return;
         }
         // 多选整块搬：目标下标由 blockMovePlan 逐个算，但**整批只写一次 doc**。
@@ -357,11 +302,11 @@ export function mount(el, ctx) {
                 let next = drawOrderOf(d);
                 for (const step of plan) next = moveInOrder(next, step.id, step.to);
                 return Object.assign({}, d, { drawOrder: next });
-            }, { label: '调整叠放顺序' });
+            }, { label: tr('layers.reorder.label') });
             paint();
             return;
         }
-        if (ctx.moveDrawOrder(fromId, to) === false) notify('调整叠放失败');
+        if (ctx.moveDrawOrder(fromId, to) === false) notify(tr('layers.reorder.failed'));
         paint();
     }
 
@@ -372,7 +317,7 @@ export function mount(el, ctx) {
         const order = drawOrderOf(doc);
         if (!order.length || typeof ctx.moveDrawOrder !== 'function') return;
         if (order[order.length - 1] === fromId) return;
-        if (ctx.moveDrawOrder(fromId, order.length - 1) === false) notify('调整叠放失败');
+        if (ctx.moveDrawOrder(fromId, order.length - 1) === false) notify(tr('layers.reorder.failed'));
         paint();
     }
 
@@ -407,7 +352,7 @@ export function mount(el, ctx) {
         const vis = document.createElement('button');
         vis.type = 'button';
         vis.className = 'lyr-vis ms-icon-btn';
-        vis.title = '显示 / 隐藏';
+        vis.title = tr('layers.row.visibility');
         vis.innerHTML = icon('eye');
         vis.dataset.icon = 'eye';
 
@@ -415,7 +360,7 @@ export function mount(el, ctx) {
         meta.className = 'lyr-meta';
         const name = document.createElement('div');
         name.className = 'lyr-name';
-        name.title = '双击重命名';
+        name.title = tr('layers.row.rename');
         const sub = document.createElement('div');
         sub.className = 'lyr-sub';
         meta.append(name, sub);
@@ -426,7 +371,7 @@ export function mount(el, ctx) {
         timeBadge.type = 'button';
         timeBadge.className = 'lyr-time is-off ms-icon-btn';
         timeBadge.innerHTML = icon('timer');
-        timeBadge.title = '时间通道（偏移 / 倍率 / 循环 / 冻结）';
+        timeBadge.title = tr('layers.row.timeChannel');
         timeBadge.setAttribute('aria-label', timeBadge.title);
         timeBadge.addEventListener('pointerdown', (e) => e.stopPropagation());
         timeBadge.addEventListener('click', (e) => {
@@ -500,13 +445,12 @@ export function mount(el, ctx) {
     }
 
     // ── 时间通道浮层（v5）
-    const TIME_EASE_TEXT = [['linear', '匀速'], ['in', '渐快'], ['out', '渐慢'], ['inout', '缓入缓出']];
-const TIME_MODE_TEXT = [
-        ['none', '无'],
-        ['loop', '循环'],
-        ['pingpong', '往返'],
-        ['clamp', '夹取'],
-    ];
+    // 缓动显示名走词典（`layers.timeEase.*`）；缓动名本身是落盘值，原样不动。
+    // 缓动名（落盘值）按顺序列出。写成两个字面量相邻的数组，会被 icons.test.mjs 里
+    // 「表行第二列是图标名」那条正则连跨行一起抓，把 'in' 误报成不存在的图标，所以这里 split。
+    const TIME_EASE_IDS = 'linear in out inout'.split(' ');
+    // 模式显示名走词典（`layers.timeMode.*`）；模式值本身写进对象的 time.mode，原样不动。
+    const TIME_MODE_IDS = ['none', 'loop', 'pingpong', 'clamp'];
 
     function ensurePopover() {
         if (popover) return popover;
@@ -558,7 +502,8 @@ const TIME_MODE_TEXT = [
     function openTimePopover(id, anchor) {
         const host = ensurePopover();
         const cur = typeof ctx.layerTime === 'function' ? ctx.layerTime(id) : null;
-        const t = cur || { offset: 0, scale: 1, mode: 'none', from: 0, to: 0, hold: false, holdAt: 0, ease: 'linear' };
+        // 局部变量叫 lt（layer time）而不是 t：本文件里 t() 是翻译函数。
+        const lt = cur || { offset: 0, scale: 1, mode: 'none', from: 0, to: 0, hold: false, holdAt: 0, ease: 'linear' };
         const set = (patch) => {
             if (typeof ctx.setLayerTime === 'function') ctx.setLayerTime(id, patch);
         };
@@ -566,20 +511,21 @@ const TIME_MODE_TEXT = [
         const title = document.createElement('div');
         title.className = 'lyr-tp-title';
         const layer = objectsOf(ctx.doc()).find((l) => l.id === id);
-        title.textContent = (layer ? layer.name : '对象') + ' · 时间通道';
+        title.textContent = tr('layers.tp.title', { name: layer ? layer.name : tr('layers.tp.object') });
         host.appendChild(title);
 
-        host.appendChild(rowOf(numField(t.offset, -9999, 9999, 0.05, (v) => set({ offset: v })), '偏移 s'));
-        host.appendChild(rowOf(numField(t.scale, -100, 100, 0.1, (v) => set({ scale: v })), '倍率 ×'));
-        host.appendChild(rowOf(numField(t.from, 0, 9999, 0.05, (v) => set({ from: v })), '区间起 s'));
-        host.appendChild(rowOf(numField(t.to, 0, 9999, 0.05, (v) => set({ to: v })), '区间止 s'));
+        host.appendChild(rowOf(numField(lt.offset, -9999, 9999, 0.05, (v) => set({ offset: v })), tr('layers.tp.offset')));
+        host.appendChild(rowOf(numField(lt.scale, -100, 100, 0.1, (v) => set({ scale: v })), tr('layers.tp.scale')));
+        host.appendChild(rowOf(numField(lt.from, 0, 9999, 0.05, (v) => set({ from: v })), tr('layers.tp.from')));
+        host.appendChild(rowOf(numField(lt.to, 0, 9999, 0.05, (v) => set({ to: v })), tr('layers.tp.to')));
 
         const modeWrap = document.createElement('div');
         modeWrap.className = 'lyr-tp-modes';
-        for (const [val, text] of TIME_MODE_TEXT) {
+        for (const val of TIME_MODE_IDS) {
+            const text = tr('layers.timeMode.' + val);
             const b = document.createElement('button');
             b.type = 'button';
-            b.className = 'lyr-tp-mode' + (t.mode === val ? ' is-on' : '');
+            b.className = 'lyr-tp-mode' + (lt.mode === val ? ' is-on' : '');
             b.textContent = text;
             b.addEventListener('click', () => {
                 set({ mode: val });
@@ -587,42 +533,42 @@ const TIME_MODE_TEXT = [
             });
             modeWrap.appendChild(b);
         }
-        host.appendChild(rowOf(modeWrap, '模式'));
+        host.appendChild(rowOf(modeWrap, tr('layers.tp.mode')));
 
         // retime 缓动：让时间流速本身非线性（只在单调模式下生效，loop/pingpong 会忽略）
         const easeWrap = document.createElement('div');
         easeWrap.className = 'lyr-tp-modes';
-        for (const [val, text] of TIME_EASE_TEXT) {
+        for (const val of TIME_EASE_IDS) {
             const b = document.createElement('button');
             b.type = 'button';
-            b.className = 'lyr-tp-mode' + ((t.ease || 'linear') === val ? ' is-on' : '');
-            b.textContent = text;
-            b.title = val === 'linear' ? '时间匀速前进' : '时间流速按曲线变化（loop / pingpong 下不生效）';
+            b.className = 'lyr-tp-mode' + ((lt.ease || 'linear') === val ? ' is-on' : '');
+            b.textContent = tr('layers.timeEase.' + val);
+            b.title = val === 'linear' ? tr('layers.tp.easeLinearHint') : tr('layers.tp.easeHint');
             b.addEventListener('click', () => {
                 set({ ease: val });
                 for (const other of easeWrap.children) other.classList.toggle('is-on', other === b);
             });
             easeWrap.appendChild(b);
         }
-        host.appendChild(rowOf(easeWrap, '缓动'));
+        host.appendChild(rowOf(easeWrap, tr('layers.tp.ease')));
 
         const holdBtn = document.createElement('button');
         holdBtn.type = 'button';
-        holdBtn.className = 'lyr-tp-hold' + (t.hold ? ' is-on' : '');
-        holdBtn.textContent = t.hold ? '已冻结' : '冻结在此刻';
+        holdBtn.className = 'lyr-tp-hold' + (lt.hold ? ' is-on' : '');
+        holdBtn.textContent = lt.hold ? tr('layers.tp.held') : tr('layers.tp.holdNow');
         holdBtn.addEventListener('click', () => {
-            if (t.hold) set({ hold: false });
+            if (lt.hold) set({ hold: false });
             else set({ hold: true, holdAt: typeof ctx.time === 'function' ? ctx.time() : 0 });
             openTimePopover(id, anchor);
         });
-        host.appendChild(rowOf(holdBtn, '冻结'));
+        host.appendChild(rowOf(holdBtn, tr('layers.tp.hold')));
 
         const foot = document.createElement('div');
         foot.className = 'lyr-tp-foot';
         const reset = document.createElement('button');
         reset.type = 'button';
         reset.className = 'lyr-tp-reset';
-        reset.textContent = '恢复恒等';
+        reset.textContent = tr('layers.tp.reset');
         reset.addEventListener('click', () => {
             set({ offset: 0, scale: 1, mode: 'none', from: 0, to: 0, hold: false, holdAt: 0, ease: 'linear' });
             host.hidden = true;
@@ -630,7 +576,7 @@ const TIME_MODE_TEXT = [
         const close = document.createElement('button');
         close.type = 'button';
         close.className = 'lyr-tp-reset';
-        close.textContent = '关闭';
+        close.textContent = tr('layers.tp.close');
         close.addEventListener('click', () => {
             host.hidden = true;
         });
@@ -651,7 +597,10 @@ const TIME_MODE_TEXT = [
 
 
     function kindLabel(layer) {
-        return KIND_TEXT[layer && layer.kind] || KIND_TEXT.paint;
+        const kind = layer && KIND_KEYS[layer.kind] ? layer.kind : 'paint';
+        // 本文件把 i18n 的 t 导入成 tr（syncRows 的形参 t 是「时刻」）。
+        // 这里以前写成 t(...)，实际没有那个绑定 —— 一调用就 ReferenceError。
+        return tr(KIND_KEYS[kind]);
     }
 
     function keyCount(layer) {
@@ -690,7 +639,7 @@ const TIME_MODE_TEXT = [
             rec.row.classList.toggle('is-hold', !!(cel && cel.hold && !cel.image));
             rec.row.classList.toggle('is-linked', !!(cel && cel.group));
             rec.vis.classList.toggle('is-off', !layer.visible);
-            rec.vis.title = layer.visible ? '隐藏「' + layer.name + '」' : '显示「' + layer.name + '」';
+            rec.vis.title = layer.visible ? tr('layers.row.hide', { name: layer.name }) : tr('layers.row.show', { name: layer.name });
             rec.vis.setAttribute('aria-label', rec.vis.title);
             // 眼睛图标跟随可见性：可见 = eye，隐藏 = eye-off。同样只在切换时重建。
             const wantEye = layer.visible ? 'eye' : 'eye-off';
@@ -705,14 +654,14 @@ const TIME_MODE_TEXT = [
             // 用户看到的是半截词。曝光处数不是「几个时刻在用它」，完整版放进 row.title。
             const libCount = textureCount(layer);
             const expoCount = celTimes(layer).length;
-            let sub = kindLabel(layer) + ' · ' + libCount + ' 纹理 · ' + keyCount(layer) + ' 键';
+            let sub = tr('layers.sub.main', { kind: kindLabel(layer), lib: libCount, keys: keyCount(layer) });
     // 对象自己带分辨率：只有和文档画布不一样时才标出来，否则每行都挂一遍 900×640 是噪音
     const osz = objectSize(layer);
     if (osz && doc && (osz.w !== doc.width || osz.h !== doc.height)) sub += ' · ' + osz.w + '×' + osz.h;
-            if (cel && cel.group != null) sub += ' · 链接';
+            if (cel && cel.group != null) sub += tr('layers.sub.linked');
             if (rec.sub.textContent !== sub) rec.sub.textContent = sub;
             const pct = Math.round((layer.opacity == null ? 1 : layer.opacity) * 100);
-            const tip = layer.name + ' · 不透明度 ' + pct + '% · ' + sub + ' · 曝光 ' + expoCount + ' 处';
+            const tip = tr('layers.row.tip', { name: layer.name, pct, sub, expo: expoCount });
             if (rec.row.title !== tip) rec.row.title = tip;
 
             // 叠放列表是纯扁平的（docs/层级与叠放-2026-10.md §5）：
@@ -725,15 +674,16 @@ const TIME_MODE_TEXT = [
             // 子对象数属于父子树（那边有自己的「N 个子对象」胶囊），两个面板各说各的。
             const texCount = textureCount(layer);
             rec.kids.hidden = false;
-            const ktxt = texCount + ' 纹';
+            const ktxt = tr('layers.sub.texBadge', { n: texCount });
             if (rec.kids.textContent !== ktxt) rec.kids.textContent = ktxt;
-            const ktip = '共 ' + texCount + ' 张纹理（这个角标不表示子对象数，子对象看「父子」面板）';
+            const ktip = tr('layers.row.textureTip', { n: texCount });
             if (rec.kids.title !== ktip) rec.kids.title = ktip;
             const ident = typeof ctx.isLayerTimeIdentity === 'function' ? ctx.isLayerTimeIdentity(layer.id) : true;
             rec.timeBadge.classList.toggle('is-off', ident);
+            // timegraph 的恒等哨兵是那句中文本身，比对不翻译（详见 IDENTITY_TIME_TEXT）
             const timeTip =
-                (typeof ctx.describeLayerTime === 'function' ? ctx.describeLayerTime(layer.id) : '无时间变换') +
-                '（点击编辑）';
+                (typeof ctx.describeLayerTime === 'function' ? ctx.describeLayerTime(layer.id) : IDENTITY_TIME_TEXT) +
+                tr('layers.row.timeTipSuffix');
             if (rec.timeBadge.title !== timeTip) rec.timeBadge.title = timeTip;
         });
 
@@ -763,7 +713,7 @@ const TIME_MODE_TEXT = [
         setOff(actBtn.get('merge'), i < 0 || i >= last);
         setOff(actBtn.get('del'), i < 0);
         setOff(actBtn.get('dup'), i < 0);
-        countEl.textContent = objectsOf(doc).length + ' 个对象';
+        countEl.textContent = tr('layers.count', { n: objectsOf(doc).length });
     }
 
     function syncAlpha(doc, active) {
@@ -804,7 +754,7 @@ const TIME_MODE_TEXT = [
         if (act === 'add') {
             let newId = null;
             ctx.setDoc((d) => {
-                const n = addLayer(d, '对象 ' + (objectsOf(d).length + 1));
+                const n = addLayer(d, tr('layers.newName', { n: objectsOf(d).length + 1 }));
                 newId = objectsOf(n).length ? objectsOf(n)[0].id : null;
                 return n;
             });
@@ -858,13 +808,13 @@ const TIME_MODE_TEXT = [
             const sels = selIds();
             const targets = sels.length > 1 && sels.includes(active) ? sels.slice() : [active];
             const i = objectsOf(doc).findIndex((l) => l.id === active);
-            const single = (objectsOf(doc)[i] || {}).name || '对象';
+            const single = (objectsOf(doc)[i] || {}).name || tr('layers.tp.object');
             // v8：不再有「至少保留一个对象」的死胡同 —— 删光就得到一个空文档
             ctx.setDoc((d) => {
                 let out = d;
                 for (const x of targets) out = removeLayer(out, x);
                 return out;
-            }, { label: targets.length > 1 ? '删除多个对象' : '删除对象' });
+            }, { label: targets.length > 1 ? tr('layers.undo.deleteMany') : tr('layers.undo.delete') });
             if (typeof ctx.setLayerSelection === 'function') ctx.setLayerSelection([]);
             // 单选标记（画布叠加层读的 ctx.selection）也要清，否则删完还会有一行亮着
             if (typeof ctx.setSelection === 'function') ctx.setSelection(null);
@@ -875,7 +825,7 @@ const TIME_MODE_TEXT = [
             } else if (typeof ctx.setActiveLayer === 'function') {
                 ctx.setActiveLayer(null);
             }
-            notify(targets.length > 1 ? '已删除 ' + targets.length + ' 个对象' : '已删除对象「' + single + '」');
+            notify(targets.length > 1 ? tr('layers.notify.deletedMany', { n: targets.length }) : tr('layers.notify.deletedOne', { name: single }));
         }
     }
 
@@ -964,7 +914,7 @@ const TIME_MODE_TEXT = [
     function askName(layer) {
         if (typeof window === 'undefined' || !window || typeof window.prompt !== 'function') return null;
         try {
-            return window.prompt('对象名称', layer.name);
+            return window.prompt(tr('layers.rename.prompt'), layer.name);
         } catch (err) {
             const row = rows.get(layer.id);
             if (row) renameInline(row.row, layer);

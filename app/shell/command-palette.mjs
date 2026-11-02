@@ -34,6 +34,7 @@
  */
 
 import { icon, hasIcon } from '../core/icons.mjs';
+import { t } from '../i18n/index.mjs';
 
 /** 列表最多渲染多少行（超出截断并提示）。 */
 const MAX_ROWS = 200;
@@ -44,9 +45,7 @@ const KIND_BAND = { substring: 10000, subsequence: 0 };
 const POS_SPAN = 60;
 const TIGHT_SPAN = 30;
 const DISABLED_PENALTY = 1;
-const FOOT_HINT = '↑↓ 选择 · Enter 执行 · Esc 关闭';
-const EMPTY_TEXT = '没有匹配的命令';
-const UNGROUPED_LABEL = '其他';
+// 外壳文案（aria / 占位符 / 页脚 / 空态 / 分组兜底）走词条表 `palette.*`，原文留在取用处作回退。
 
 /**
  * 命令 id → 图标名。
@@ -232,7 +231,6 @@ export function createPalette(opts = {}) {
 
     const overlay = make('div', 'cmd-overlay');
     overlay.setAttribute('role', 'dialog');
-    overlay.setAttribute('aria-label', '命令面板');
     overlay.setAttribute('aria-modal', 'true');
     overlay.hidden = true;
     // 这四行内联是「全屏遮挡」的兜底：CSS 没加载时也不至于只遮住一个角落。
@@ -244,24 +242,40 @@ export function createPalette(opts = {}) {
 
     const input = make('input', 'cmd-input');
     input.setAttribute('role', 'combobox');
-    input.setAttribute('aria-label', '搜索命令');
     input.setAttribute('aria-autocomplete', 'list');
     input.setAttribute('aria-expanded', 'false');
     input.setAttribute('aria-controls', listId);
     input.setAttribute('autocomplete', 'off');
     input.setAttribute('spellcheck', 'false');
-    input.setAttribute('placeholder', '输入命令名称…');
 
     const list = make('div', 'cmd-list');
     list.id = listId;
     list.setAttribute('role', 'listbox');
-    list.setAttribute('aria-label', '命令列表');
 
     const foot = make('div', 'cmd-foot');
-    foot.textContent = FOOT_HINT;
 
     box.append(input, list, foot);
     overlay.appendChild(box);
+
+    /**
+     * 面板外壳文案（aria / 占位符 / 页脚）。命令名自己带 getter，这里只管外壳。
+     *
+     * 面板在 `boot()` 里建在 `applyLocale()` 之前，创建那一刻未必是最终语言；
+     * 所以每次打开 / 重渲染都同步一次 —— 切过语言再开，外壳和命令名一起换过来。
+     */
+    function syncChromeText() {
+        const setAttr = (node, name, value) => {
+            if (node.getAttribute(name) !== value) node.setAttribute(name, value);
+        };
+        setAttr(overlay, 'aria-label', t('palette.aria.panel'));
+        setAttr(input, 'aria-label', t('palette.aria.input'));
+        setAttr(input, 'placeholder', t('palette.placeholder'));
+        setAttr(list, 'aria-label', t('palette.aria.list'));
+        const hint = t('palette.foot');
+        if (foot.textContent !== hint) foot.textContent = hint;
+    }
+
+    syncChromeText();
 
     /* ── 监听器登记表：destroy 时逐条摘掉，绝不留下野监听 ───────────────── */
 
@@ -361,6 +375,7 @@ export function createPalette(opts = {}) {
 
     function render(o = {}) {
         if (destroyed) return;
+        syncChromeText();
         const keep = active;
         active = -1;
         entries = [];
@@ -373,7 +388,7 @@ export function createPalette(opts = {}) {
 
         if (!matched.length) {
             const empty = make('div', 'cmd-empty');
-            empty.textContent = EMPTY_TEXT;
+            empty.textContent = t('palette.empty');
             list.appendChild(empty);
             return;
         }
@@ -388,7 +403,7 @@ export function createPalette(opts = {}) {
                     currentGroup = group;
                     const head = make('div', 'cmd-group');
                     head.setAttribute('data-group', group);
-                    head.textContent = group || UNGROUPED_LABEL;
+                    head.textContent = group || t('palette.ungrouped');
                     list.appendChild(head);
                 }
             }
@@ -397,7 +412,7 @@ export function createPalette(opts = {}) {
 
         if (matched.length > visible.length) {
             const more = make('div', 'cmd-more');
-            more.textContent = `还有 ${matched.length - visible.length} 项…`;
+            more.textContent = t('palette.more', { n: matched.length - visible.length });
             list.appendChild(more);
         }
 

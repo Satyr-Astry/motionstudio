@@ -5,10 +5,12 @@
 // 属性面板通过 opts.timebase === false 关掉它，独立挂载时（opts 为空）照旧出现。
 import { docDuration } from '../core/cel.mjs';
 import { makeGroup, makeValue, makeNum, makeNumPair, makeSeg, nowTime } from './prop-kit.mjs';
+import { t } from '../i18n/index.mjs';
 
 // 顺序与 core/playback.mjs 的 PLAY_MODES 一致：工具条按钮点一下就是按这个顺序换下一种，
-// 两处文案相同（「来回」不写「往返」），用户看到的词不该因面板而异。
-const LOOP_VALUE = [['cycle', '循环'], ['pingpong', '来回'], ['reverse', '反向循环'], ['none', '单次']];
+// 两处文案同源（都取自词典的「来回」而不是「往返」），用户看到的词不该因面板而异。
+// 右边只留 id —— 它才是写进 doc.loopMode 的值，显示名在 mount 里现取。
+const LOOP_IDS = ['cycle', 'pingpong', 'reverse', 'none'];
 
 export function mount(el, ctx, opts) {
     const o = opts || {};
@@ -17,15 +19,15 @@ export function mount(el, ctx, opts) {
 
     // ── 画布（场景尺寸）
     // 之前这里只有总时长/帧率/循环，画布宽高根本没有入口，「场景画布尺寸无法调整」就是这个坑。
-    const canvasBody = makeGroup(el, '画布', 'canvas');
-    const sizePair = makeNumPair(canvasBody, '尺寸', { min: 16, max: 8192, step: 1, key: 'canvas-size', placeholder: '宽' });
+    const canvasBody = makeGroup(el, t('props.doc.canvas'), 'canvas');
+    const sizePair = makeNumPair(canvasBody, t('props.doc.size'), { min: 16, max: 8192, step: 1, key: 'canvas-size', placeholder: t('props.doc.widthShort') });
     const widthInput = sizePair.w;
     const heightInput = sizePair.h;
     // 与对象面板的「尺寸」同一个坑：空值时两个框只剩占位符，分不出谁宽谁高。
     // placeholder + aria-label 把方向写死（Lead 的审计里这两个框正落在 emptyFields 里）。
-    heightInput.placeholder = '高';
-    widthInput.setAttribute('aria-label', '文档宽度（像素）');
-    heightInput.setAttribute('aria-label', '文档高度（像素）');
+    heightInput.placeholder = t('props.doc.heightShort');
+    widthInput.setAttribute('aria-label', t('props.doc.widthAria'));
+    heightInput.setAttribute('aria-label', t('props.doc.heightAria'));
     const presetWrap = document.createElement('div');
     presetWrap.className = 'prop-inline prop-canvas-presets';
     for (const [label, w, h] of [['16:9', 1920, 1080], ['9:16', 1080, 1920], ['1:1', 1080, 1080], ['4:3', 1440, 1080]]) {
@@ -59,13 +61,13 @@ export function mount(el, ctx, opts) {
     }
 
     // ── 时间与时长
-    const timeBody = makeGroup(el, '时间与时长', 'time');
-    const timeNow = makeValue(timeBody, '当前时间', '—');
+    const timeBody = makeGroup(el, t('props.doc.time'), 'time');
+    const timeNow = makeValue(timeBody, t('props.doc.now'), '—');
     timeNow.classList.add('prop-time'); // panels.css：等宽数字 + 次要色
-    const durationInput = makeNum(timeBody, '总时长', { min: 0.01, max: 600, step: 0.1, value: 1, key: 'duration' });
-    durationInput.title = '文档总时长（秒）；下限是 max(一帧, 内容长度)，由外壳夹住';
-    const fpsInput = makeNum(timeBody, '帧率', { min: 1, max: 120, step: 1, value: 12, key: 'fps' });
-    const loopBtns = makeSeg(timeBody, '循环', LOOP_VALUE, 'cycle');
+    const durationInput = makeNum(timeBody, t('props.doc.duration'), { min: 0.01, max: 600, step: 0.1, value: 1, key: 'duration' });
+    durationInput.title = t('props.doc.durationTitle');
+    const fpsInput = makeNum(timeBody, t('props.doc.fps'), { min: 1, max: 120, step: 1, value: 12, key: 'fps' });
+    const loopBtns = makeSeg(timeBody, t('props.doc.loop'), LOOP_IDS.map((id) => [id, t('doc.loop.' + id)]), 'cycle');
 
     // ── 帧率分段（高级，属性面板不挂）
     let tbBody = null;
@@ -79,12 +81,12 @@ export function mount(el, ctx, opts) {
     let tbResetBtn = null;
 
     if (wantTimebase) {
-        tbBody = makeGroup(el, '时间轴（帧率分段）', 'timebase');
-        tbNow = makeValue(tbBody, '本段帧率', '—');
-        tbMs = makeValue(tbBody, '本段区间', '—');
-        tbCount = makeValue(tbBody, '帧率段数', '—');
-        tbFpsInput = makeNum(tbBody, '改为', { min: 1, max: 120, step: 1, value: 12, key: 'tb-fps' });
-        tbAtInput = makeNum(tbBody, '分段于', { min: 0, max: 9999, step: 0.1, value: 0, key: 'tb-at' });
+        tbBody = makeGroup(el, t('props.doc.timebase.group'), 'timebase');
+        tbNow = makeValue(tbBody, t('props.doc.timebase.fps'), '—');
+        tbMs = makeValue(tbBody, t('props.doc.timebase.span'), '—');
+        tbCount = makeValue(tbBody, t('props.doc.timebase.count'), '—');
+        tbFpsInput = makeNum(tbBody, t('props.doc.timebase.set'), { min: 1, max: 120, step: 1, value: 12, key: 'tb-fps' });
+        tbAtInput = makeNum(tbBody, t('props.doc.timebase.at'), { min: 0, max: 9999, step: 0.1, value: 0, key: 'tb-at' });
         const tbBtn = (text, title) => {
             const b = document.createElement('button');
             b.type = 'button';
@@ -95,9 +97,9 @@ export function mount(el, ctx, opts) {
         };
         const tbBtnRow = document.createElement('div');
         tbBtnRow.className = 'prop-inline tb-btnrow';
-        tbAddBtn = tbBtn('＋分段', '在「分段于」的时间点插入一个新的渲染帧率');
-        tbDelBtn = tbBtn('删除段', '删除当前时间所在的帧率段');
-        tbResetBtn = tbBtn('统一', '恢复成全片单一帧率（= 文档帧率）');
+        tbAddBtn = tbBtn(t('props.doc.timebase.add'), t('props.doc.timebase.addTitle'));
+        tbDelBtn = tbBtn(t('props.doc.timebase.del'), t('props.doc.timebase.delTitle'));
+        tbResetBtn = tbBtn(t('props.doc.timebase.unify'), t('props.doc.timebase.unifyTitle'));
         tbBtnRow.append(tbAddBtn, tbDelBtn, tbResetBtn);
         tbBody.appendChild(tbBtnRow);
 
@@ -193,7 +195,7 @@ export function mount(el, ctx, opts) {
         const idx = segs.length && typeof ctx.segmentIndexAt === 'function' ? ctx.segmentIndexAt(now) : 0;
         const cur = segs[idx] || { at: 0, fps: doc.fps };
         const range = typeof ctx.segmentRange === 'function' ? ctx.segmentRange(idx) : null;
-        tbNow.textContent = cur.fps + ' fps' + (segs.length > 1 ? '（第 ' + (idx + 1) + '/' + segs.length + ' 段）' : '');
+        tbNow.textContent = cur.fps + ' fps' + (segs.length > 1 ? t('props.doc.timebase.segIndex', { i: idx + 1, n: segs.length }) : '');
         tbMs.textContent = range ? range.at.toFixed(2) + ' – ' + range.end.toFixed(2) + ' s' : '—';
         tbCount.textContent = String(segs.length);
         if (document.activeElement !== tbFpsInput) tbFpsInput.value = String(Math.round(cur.fps));

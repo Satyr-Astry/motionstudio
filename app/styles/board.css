@@ -9,9 +9,10 @@
  *   .bd-ovl        笔刷游标层（独立 canvas，不重绘纹理）
  *
  * 两个约定：
- * 1. panels.css 末尾还有一套单类旧规则（.bd-tool / .bd-btn / .bd-ask …）以及
- *    v8 覆写（.bd .bd-bar 等）。这里一律带 .bd 前缀、保持同级或更高特异性，
- *    靠「本文件在 panels.css 之后加载」压过去 —— 不用 !important。
+ * 1. 这里一律带 `.bd` 前缀、保持同级或更高特异性，靠「本文件在 panels.css 之后加载」
+ *    压过 panels.css 里那几条 `.bd-bar` 单类规则 —— 不用 !important。
+ *    （历史上 panels.css 末尾还有一整套单类旧规则 `.bd-tool / .bd-btn / .bd-ask …`，
+ *     它们随 alpha.24 的「无引用类名清理」删掉了：全仓没有任何 mjs 再造那些类名。）
  * 2. 尺寸只用 tokens.css 的令牌：--h-bar / --h-btn / --h-field / --r-1 / --r-pop。
  * ──────────────────────────────────────────────────────────────── */
 

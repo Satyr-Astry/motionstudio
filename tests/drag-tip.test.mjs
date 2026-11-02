@@ -9,13 +9,32 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { formatTip, snapText, frameOf, findConflict, showTip, hideTip, tipMounted } from '../app/editors/drag-tip.mjs';
+import { DEFAULT_LOCALE, setLocale, t } from '../app/i18n/index.mjs';
+
+/** 在指定语言下跑一段断言，跑完必定回到缺省语言（别的用例不该被带偏）。 */
+function withLocale(id, fn) {
+    setLocale(id);
+    try {
+        fn();
+    } finally {
+        setLocale(DEFAULT_LOCALE);
+    }
+}
 
 test('snapText：三态映射，未知值一律「自由」', () => {
-    assert.equal(snapText('frame'), '吸附:帧');
-    assert.equal(snapText('grid'), '吸附:网格');
-    assert.equal(snapText('off'), '自由');
-    assert.equal(snapText(undefined), '自由');
-    assert.equal(snapText('奇怪的值'), '自由');
+    withLocale('zh-Hans', () => {
+        assert.equal(snapText('frame'), '吸附:帧');
+        assert.equal(snapText('grid'), '吸附:网格');
+        assert.equal(snapText('off'), '自由');
+        assert.equal(snapText(undefined), '自由');
+        assert.equal(snapText('奇怪的值'), '自由');
+    });
+    withLocale('en', () => {
+        assert.equal(snapText('frame'), 'snap: frame');
+        assert.equal(snapText('grid'), 'snap: grid');
+        assert.equal(snapText('off'), 'free');
+        assert.equal(snapText('奇怪的值'), 'free', '未知值一律「自由」，与语言无关');
+    });
 });
 
 test('frameOf：秒换算帧号（0 起算），非法 fps 返回 null', () => {
@@ -29,9 +48,20 @@ test('frameOf：秒换算帧号（0 起算），非法 fps 返回 null', () => {
 });
 
 test('formatTip：秒 · 帧 · 缓动 · 吸附 四段齐全', () => {
-    const r = formatTip({ t: 1.417, fps: 12, easeText: '线性', snapped: 'frame' });
-    assert.equal(r.text, 't = 1.417 s · 第 17 帧 · 线性 · 吸附:帧');
-    assert.equal(r.suffix, '');
+    const opts = { t: 1.417, fps: 12, easeText: '线性', snapped: 'frame' };
+    withLocale('zh-Hans', () => {
+        // 中文逐字钉住：词条化不许把「第 N 帧」改写成别的说法
+        assert.equal(formatTip(opts).text, 't = 1.417 s · 第 17 帧 · 线性 · 吸附:帧');
+        assert.equal(formatTip(opts).text,
+            ['t = 1.417 s', t('dragtip.frame', { n: 17 }), '线性', t('dragtip.snap.frame')].join(' · '),
+            '期望值按占位符拼出来，与代码用同一条词条');
+        assert.equal(formatTip(opts).suffix, '');
+    });
+    withLocale('en', () => {
+        const text = formatTip(opts).text;
+        assert.equal(text, ['t = 1.417 s', 'frame 17', '线性', 'snap: frame'].join(' · '));
+        assert.ok(!/[\u4e00-\u9fff]/.test(t('dragtip.frame', { n: 17 })), 'en 的帧号段不该有中文');
+    });
 });
 
 test('formatTip：fps 缺失时不印帧号，但秒仍在', () => {
@@ -39,9 +69,15 @@ test('formatTip：fps 缺失时不印帧号，但秒仍在', () => {
 });
 
 test('formatTip：超时长单独一段', () => {
-    assert.equal(formatTip({ t: 5, fps: 12, duration: 4 }).text, 't = 5.000 s · 第 60 帧 · 超出时长');
-    // 刚好等于总时长不算超
-    assert.equal(formatTip({ t: 4, fps: 12, duration: 4 }).text, 't = 4.000 s · 第 48 帧');
+    withLocale('zh-Hans', () => {
+        assert.equal(formatTip({ t: 5, fps: 12, duration: 4 }).text, 't = 5.000 s · 第 60 帧 · 超出时长');
+        // 刚好等于总时长不算超
+        assert.equal(formatTip({ t: 4, fps: 12, duration: 4 }).text, 't = 4.000 s · 第 48 帧');
+    });
+    withLocale('en', () => {
+        assert.equal(formatTip({ t: 5, fps: 12, duration: 4 }).text,
+            ['t = 5.000 s', t('dragtip.frame', { n: 60 }), t('dragtip.overDuration')].join(' · '));
+    });
 });
 
 test('formatTip：NaN / 负数回落成占位，不印 NaN', () => {
@@ -51,9 +87,15 @@ test('formatTip：NaN / 负数回落成占位，不印 NaN', () => {
 });
 
 test('formatTip：冲突后缀两种说法', () => {
-    assert.equal(formatTip({ t: 1, conflict: 'blocked' }).suffix, '该时刻已有关键帧');
-    assert.equal(formatTip({ t: 1, conflict: 'merge' }).suffix, '会合并到同一时刻');
+    withLocale('zh-Hans', () => {
+        assert.equal(formatTip({ t: 1, conflict: 'blocked' }).suffix, '该时刻已有关键帧');
+        assert.equal(formatTip({ t: 1, conflict: 'merge' }).suffix, '会合并到同一时刻');
+    });
     assert.equal(formatTip({ t: 1, conflict: 'none' }).suffix, '');
+    withLocale('en', () => {
+        assert.equal(formatTip({ t: 1, conflict: 'blocked' }).suffix, t('dragtip.conflict.blocked'));
+        assert.notEqual(formatTip({ t: 1, conflict: 'blocked' }).suffix, '该时刻已有关键帧', 'en 下不许漏中文');
+    });
 });
 
 test('findConflict：目标刻被别的键占着 → blocked', () => {

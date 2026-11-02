@@ -25,6 +25,7 @@ import { mount as mountInfo } from '../editors/prop-info.mjs';
 import { mount as mountPrefs } from '../editors/prop-prefs.mjs';
 import { mount as mountHelp } from '../editors/help.mjs';
 import { mount as mountProjects } from '../editors/projects.mjs';
+import { t } from '../i18n/index.mjs';
 
 /**
  * @typedef {{id:string, title:string, hint:string, mount:(el:Element, ctx:object)=>object}} EditorDef
@@ -52,28 +53,28 @@ function withPropShell(mountFn) {
 }
 
 export const EDITORS = [
-    { id: 'canvas', title: '画布', hint: '绘制、缩放、平移', mount: mountCanvas },
+    { id: 'canvas', mount: mountCanvas },
     // 画板：对象的出生地。自带 canvas 与工具条，与画布的单例宿主互不相干。
-    { id: 'board', title: '画板', hint: '只编辑当前这一张纹理（与编排分离）', mount: mountBoard },
-    { id: 'toolbar', title: '工具', hint: '画笔 / 笔尖 / 撤销', mount: mountToolbar },
+    { id: 'board', mount: mountBoard },
+    { id: 'toolbar', mount: mountToolbar },
     // 层级与叠放拆成两个面板（docs/层级与叠放-2026-10.md §5）：
     // tree 只编辑 parentId（跟谁动），layers 只管 drawOrder（谁盖谁），两边各改一处数据。
-    { id: 'tree', title: '父子', hint: '父子关系（跟谁动）', mount: mountTree },
-    { id: 'layers', title: '叠放', hint: '叠放顺序（谁盖谁）', mount: mountLayers },
-    { id: 'timeline', title: '时间轴', hint: '帧、时长与播放', mount: mountTimeline },
-    { id: 'curve', title: '曲线', hint: '对象变换的连续曲线与贝塞尔切线', mount: mountCurve },
-    { id: 'palette', title: '调色', hint: '色相、明度与最近颜色', mount: mountPalette },
-    { id: 'properties', title: '属性', hint: '文档、帧与变换参数', mount: mountProperties },
+    { id: 'tree', mount: mountTree },
+    { id: 'layers', mount: mountLayers },
+    { id: 'timeline', mount: mountTimeline },
+    { id: 'curve', mount: mountCurve },
+    { id: 'palette', mount: mountPalette },
+    { id: 'properties', mount: mountProperties },
     // 设置模式的三块：文档 / 洋葱皮 / 信息（原先挤在属性面板里）
-    { id: 'doc', title: '文档', hint: '画布尺寸、帧率与循环', mount: withPropShell(mountDoc) },
-    { id: 'onion', title: '洋葱皮', hint: '前后纹理的残影', mount: withPropShell(mountOnion) },
-    { id: 'info', title: '信息', hint: '对象 / 纹理 / 关键帧统计', mount: withPropShell(mountInfo) },
+    { id: 'doc', mount: withPropShell(mountDoc) },
+    { id: 'onion', mount: withPropShell(mountOnion) },
+    { id: 'info', mount: withPropShell(mountInfo) },
     // 偏好：本机习惯（localStorage ms.prefs），不随项目走，所以独立成一块
-    { id: 'prefs', title: '偏好', hint: '自动保存、撤销步数、吸附与画布底色', mount: withPropShell(mountPrefs) },
+    { id: 'prefs', mount: withPropShell(mountPrefs) },
 
-    { id: 'help', title: '帮助', hint: '快捷键一览', mount: mountHelp },
+    { id: 'help', mount: mountHelp },
     // 本地项目库：保存/打开项目的入口（数据走 shell/project-store.mjs，不是 iframe）。
-    { id: 'projects', title: '项目库', hint: '已保存的项目：载入 / 新建 / 删除', mount: mountProjects },
+    { id: 'projects', mount: mountProjects },
 ];
 
 /** 缺省编辑器（layout.mjs 的 DEFAULT_EDITOR 是 timeline，这里保持同一口味）。 */
@@ -93,5 +94,22 @@ export function editorIds() {
 /** 面板标题；未知 id 原样回显，方便状态栏排查布局文件。 */
 export function editorTitle(id) {
     const def = editorDef(id);
-    return def ? def.title : String(id == null ? '' : id);
+    if (!def) return String(id == null ? '' : id);
+    return t('editor.' + def.id + '.title');
+}
+
+/**
+ * 区域下拉用的显示名与说明：**只有词条一条路**。
+ * alpha.25 起 `EDITORS` 不再带中文原文——缺词时 `t()` 返回键名本身，
+ * 界面上出现 `editor.canvas.title` 这种字样就等于「这里漏了一条词条」，反而好查；
+ * 结构性缺口由 `_check-i18n.mjs --strict` 的「编辑器覆盖 15/15」先兜住。
+ */
+export function editorLabel(def) {
+    if (!def) return '';
+    return t('editor.' + def.id + '.title');
+}
+
+export function editorHint(def) {
+    if (!def) return '';
+    return t('editor.' + def.id + '.hint');
 }

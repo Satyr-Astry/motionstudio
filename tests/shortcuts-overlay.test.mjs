@@ -4,8 +4,23 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createShortcutGroups, groupsFromCommands } from '../app/shell/shortcuts-overlay.mjs';
 import { overlayGroups, SHORTCUT_GROUPS } from '../app/editors/help.mjs';
+import { t, setLocale, DEFAULT_LOCALE } from '../app/i18n/index.mjs';
 
 const read = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+
+/**
+ * 帮助表的文案是词条化的，默认语言是英文 —— 但下面这几条钉的是**中文界面的措辞**
+ * （「项目库」三个字、Ctrl+S 不是存成文件、键位列写「自动」），是产品语义而不是本地化细节。
+ * 所以显式切到 zh-Hans 跑，跑完复位；按中文文案定位的断言从此不随默认语言漂移。
+ */
+function inZh(fn) {
+    try {
+        setLocale('zh-Hans');
+        return fn();
+    } finally {
+        setLocale(DEFAULT_LOCALE);
+    }
+}
 
 test('createShortcutGroups：按结构过滤空组、空条目，并补默认组名', () => {
     const g = createShortcutGroups({
@@ -81,7 +96,7 @@ test('overlayGroups：把 SHORTCUT_GROUPS 原样搬成浮层 spec', () => {
     assert.ok(expectedRows >= 30, '帮助表被削空了？：' + expectedRows);
     // 缺 keys / hint 的条目要有兜底，浮层才不会出现空键位列
     const soft = overlayGroups([{ title: 'G', items: [{ name: '拖拽' }] }]);
-    assert.equal(soft[0].items[0].keys, '鼠标');
+    assert.equal(soft[0].items[0].keys, t('help.shortcut.mouseOnly', '鼠标'));
     assert.equal(soft[0].items[0].hint, '');
 });
 
@@ -94,7 +109,8 @@ test('浮层只读 help.mjs 那一份：app.mjs 不再从命令表派生', () =>
 });
 
 test('help 表接住了原来手补的全局键位', () => {
-    const keys = SHORTCUT_GROUPS.flatMap((g) => g.items.map((i) => i.keys));
+    // 前三个是语言无关的按键串；后两个是「鼠标操作」，中文描述只在 zh-Hans 下逐字对得上
+    const keys = inZh(() => SHORTCUT_GROUPS.flatMap((g) => g.items.map((i) => i.keys)));
     for (const k of ['Ctrl+Shift+P', 'Esc', '↑ / ↓', 'Shift+拖', 'Ctrl+滚轮']) {
         assert.ok(keys.includes(k), 'help 表缺键位：' + k);
     }
@@ -103,9 +119,12 @@ test('help 表接住了原来手补的全局键位', () => {
 // ── task-28：顶栏保存态 + 文件组补录 ──────────────────────────────────────
 test('顶栏保存态：未入库文案、脏点语义、保存反馈都在', () => {
     const chrome = read('../app/shell/chrome.mjs');
-    // 未入库与「已命名但未保存」以前视觉上一样，现在必须分开说
-    assert.ok(chrome.includes('未命名项目（未入库）'), '未入库要显式写出来');
-    assert.match(chrome, /aria-label', '有未保存的改动'\)/, '脏点必须带 aria-label');
+    // 未入库与「已命名但未保存」以前视觉上一样，现在必须分开说。
+    // 文案已进词条表（`shell.topbar.*`）：源码里只剩键，中文措辞查 zh-Hans 那张表。
+    assert.match(chrome, /t\('shell\.topbar\.untitled'\)/, '未入库要显式写出来（走词条 shell.topbar.untitled）');
+    assert.ok(inZh(() => t('shell.topbar.untitled')).includes('未入库'), '中文词条要写明「未入库」');
+    assert.match(chrome, /projectDot\.setAttribute\('aria-label', dirtyLabel\)/, '脏点必须带 aria-label');
+    assert.ok(inZh(() => t('shell.topbar.dirty')).includes('未保存'), '脏点的中文语义要写「未保存」');
     // 反馈上限 800ms（任务书要求），且靠 dirty 的 true→false 跳变触发
     assert.match(chrome, /const SAVE_FLASH_MS = 800;/, '保存反馈时长必须 ≤800ms');
     assert.match(chrome, /prevDirty === true && dirty === false/, '反馈只能由「从脏变干净」触发');
@@ -131,18 +150,20 @@ test('顶栏保存态：样式钉子（脏点隐藏 / 已保存用 --ok / flex �
 });
 
 test('文件组：保存/打开写明「项目库」，并有一条不是快捷键的行为说明', () => {
-    const file = SHORTCUT_GROUPS.find((g) => g.id === 'file');
-    assert.ok(file, '缺少「文件」组');
-    const byName = (re) => file.items.find((i) => re.test(i.name));
-    const save = byName(/保存到项目库/);
-    assert.ok(save, 'Ctrl+S 的语义是入库，名字里要写「项目库」');
-    assert.ok(byName(/打开项目库/), 'Ctrl+O 要写「项目库」');
-    // Ctrl+S 的 hint 要说清「不是存成文件」—— 首版就是这点被误解
-    assert.match(save.hint || '', /不弹文件对话框|项目记录/, 'Ctrl+S 的 hint 要排除「存成文件」的误解');
-    // 行为说明：键位列写「自动」，免得被当成又一个组合键
-    const auto = file.items.find((i) => i.keys === '自动');
-    assert.ok(auto, '缺「载入前自动保存」这条行为说明');
-    assert.match(auto.hint || '', /未命名/, '行为说明要讲清未命名时会先问');
-    const keys = file.items.map((i) => i.keys);
-    assert.equal(new Set(keys).size, keys.length, '文件组键位重复');
+    inZh(() => {
+        const file = SHORTCUT_GROUPS.find((g) => g.id === 'file');
+        assert.ok(file, '缺少「文件」组');
+        const byName = (re) => file.items.find((i) => re.test(i.name));
+        const save = byName(/保存到项目库/);
+        assert.ok(save, 'Ctrl+S 的语义是入库，名字里要写「项目库」');
+        assert.ok(byName(/打开项目库/), 'Ctrl+O 要写「项目库」');
+        // Ctrl+S 的 hint 要说清「不是存成文件」—— 首版就是这点被误解
+        assert.match(save.hint || '', /不弹文件对话框|项目记录/, 'Ctrl+S 的 hint 要排除「存成文件」的误解');
+        // 行为说明：键位列写「自动」，免得被当成又一个组合键
+        const auto = file.items.find((i) => i.keys === '自动');
+        assert.ok(auto, '缺「载入前自动保存」这条行为说明');
+        assert.match(auto.hint || '', /未命名/, '行为说明要讲清未命名时会先问');
+        const keys = file.items.map((i) => i.keys);
+        assert.equal(new Set(keys).size, keys.length, '文件组键位重复');
+    });
 });

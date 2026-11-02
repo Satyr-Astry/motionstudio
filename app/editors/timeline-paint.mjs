@@ -4,7 +4,7 @@
 //
 // 结构：
 //   .tline
-//     .tline-tools   播放 / 上一纹理 / 下一纹理 / 加纹理 / 删纹理 / − 缩放 + / 倍率 / 总时长
+//     .tline-tools   播放 / 再曝光 / 删曝光 / 关键帧 / − 缩放 + / 倍率 / 总时长
 //     .tline-ruler   秒刻度尺 + .tline-fpslane 段帧率条 + 播放头
 //     .tline-rows    每个对象一行
 //       .tline-row
@@ -16,17 +16,15 @@
 // 几何（left/top/width/height）一律内联写入，CSS 只负责颜色与手感。
 
 import { icon, escapeAttr } from '../core/icons.mjs';
+import { t } from '../i18n/index.mjs';
 // 播放速度的读数与播放方式的名/图标：与 core/playback.mjs 的判定表同源
 import { formatSpeed, modeInfo } from '../core/playback.mjs';
 // 图例的唯一数据源在 help.mjs：设置里的「图例」分组与这个浮层读同一份，不再各写一套
 import { LEGEND_ITEMS } from './help.mjs';
-import { docDuration, drawingsOf, drawingIdOf, imageAt, objectById, objectsOf } from '../core/doc-model.mjs';
+import { celTimes, docDuration, objectById, objectsOf } from '../core/doc-model.mjs';
 import {
-    CEL_SIZE,
-    CEL_TOP,
     CUR_EPS_PX,
     DEFAULT_FPS,
-    EASE_TEXT,
     FPS_H,
     KF_SIZE,
     KF_TOP,
@@ -36,9 +34,7 @@ import {
     T_EPS,
     ZOOM_MAX,
     ZOOM_MIN,
-    celLeft,
-    celMarks,
-    currentCelIndex,
+    easeText,
     fmt2,
     keyGroups,
     keySummary,
@@ -99,15 +95,15 @@ export function createView(el) {
        图标化：字形（⏮ ‹ ▶ › ⏭）在不同系统字体里缺字或粗细不一，换成自绘 SVG 后
        5 个按钮仍然各占 22px，工具条总宽不变。标题照旧写中文（含快捷键）。 */
     const gTr = grp('transport', 'transport');
-    const first = mkBtn(gTr, 'first', { icon: 'step-back', text: '', title: '回到开头（Home）' });
-    const prev = mkBtn(gTr, 'prev', { icon: 'chevron-left', text: '', title: '上一帧（←）' });
-    const play = mkBtn(gTr, 'play', { icon: 'play', text: '', title: '播放 / 暂停（空格）' });
-    const next = mkBtn(gTr, 'next', { icon: 'chevron-right', text: '', title: '下一帧（→）' });
-    const last = mkBtn(gTr, 'last', { icon: 'step-forward', text: '', title: '跳到结尾（End）' });
+    const first = mkBtn(gTr, 'first', { icon: 'step-back', text: '', title: t('timeline.btn.first') });
+    const prev = mkBtn(gTr, 'prev', { icon: 'chevron-left', text: '', title: t('timeline.btn.prev') });
+    const play = mkBtn(gTr, 'play', { icon: 'play', text: '', title: t('timeline.btn.play') });
+    const next = mkBtn(gTr, 'next', { icon: 'chevron-right', text: '', title: t('timeline.btn.next') });
+    const last = mkBtn(gTr, 'last', { icon: 'step-forward', text: '', title: t('timeline.btn.last') });
     /* v10：预览的两件事放在走带后面 —— 它们只影响播放，不影响文档内容。
        速度是观看偏好（存 ms.prefs），方式是文档字段（doc.loopMode），点一下换下一种。 */
-    const speedBtn = mkBtn(gTr, 'play-speed', { icon: 'gauge', text: '1×', title: '播放速度 1×（点一下换档，Shift+点反向）' });
-    const modeBtn = mkBtn(gTr, 'play-mode', { icon: 'loop', text: '', title: '播放方式：循环（点一下换下一种）' });
+    const speedBtn = mkBtn(gTr, 'play-speed', { icon: 'gauge', text: formatSpeed(1), title: t('timeline.btn.speed', { speed: formatSpeed(1) }) });
+    const modeBtn = mkBtn(gTr, 'play-mode', { icon: 'loop', text: '', title: t('timeline.btn.mode', { label: modeInfo(null).label }) });
 
     /* ── 2. 时间读数：当前时间与总时长都是可输入的数字 ──
        「总时长调整不直观」的根因就是它原本只是一段只读文字。 */
@@ -118,7 +114,7 @@ export function createView(el) {
     nowEl.className = 'tline-now';
     nowEl.inputMode = 'decimal';
     nowEl.spellcheck = false;
-    nowEl.title = '当前时间（秒）· 回车跳到该时间';
+    nowEl.title = t('timeline.now.title');
     nowEl.value = '0.00';
     const sepEl = document.createElement('span');
     sepEl.className = 'tline-sep';
@@ -128,38 +124,38 @@ export function createView(el) {
     totalEl.className = 'tline-total';
     totalEl.inputMode = 'decimal';
     totalEl.spellcheck = false;
-    totalEl.title = '总时长（秒）· 回车生效，或在刻度尺上拖右端的方块';
+    totalEl.title = t('timeline.total.title');
     totalEl.value = '0.00';
     const unitEl = document.createElement('span');
     unitEl.className = 'tline-unit';
     unitEl.textContent = 's';
     gTime.append(nowEl, sepEl, totalEl, unitEl);
 
-    /* ── 3. 纹理（从这一刻起换图） ──
-       三字文案缩成两字：加图标后「上一格」要 61px，工具条在 1280 宽已经贴边。
-       「上格 / 下格 / 曝光 / 删格」配上图标语义一样清楚，标题里保留完整说明。 */
-    const gCel = grp('cel', 'edit');
-    const prevCel = mkBtn(gCel, 'prevcel', { icon: 'chevron-left', text: '上格', title: '跳到上一个纹理点' });
-    const nextCel = mkBtn(gCel, 'nextcel', { icon: 'chevron-right', text: '下格', title: '跳到下一个纹理点' });
-    const add = mkBtn(gCel, 'addcel', { icon: 'plus', text: '曝光', title: '在播放头处再加一次曝光（复用当前纹理，不新建图）' });
-    const del = mkBtn(gCel, 'delcel', { icon: 'trash', text: '删格', title: '删除当前时间生效的纹理' });
+    /* ── 3. 曝光（某段时刻显示哪张纹理） ──
+       「上一格 / 下一格」已删：时间轴上没有「格」这个单位，跳纹理切换点由 Shift+, / Shift+.
+       和命令面板承担（app.mjs 的 goPrevCel / goNextCel），工具条只留两个真入口。
+       组名 cel → tex 是术语清算的一部分：data-grp 只是分组标记，panels.css 只认
+       [data-zone-start]，不认它的值。 */
+    const gTex = grp('tex', 'edit');
+    const add = mkBtn(gTex, 'addcel', { icon: 'plus', text: t('timeline.btn.addcel.text'), title: t('timeline.btn.addcel') });
+    const del = mkBtn(gTex, 'delcel', { icon: 'trash', text: t('timeline.btn.delcel.text'), title: t('timeline.btn.delcel') });
 
     /* ── 4. 关键帧 ── */
     const gKey = grp('key', 'edit');
-    const addKey = mkBtn(gKey, 'addkey', { icon: 'diamond', text: '', title: '在当前时间打一个变换关键帧（也可双击对应泳道）' });
+    const addKey = mkBtn(gKey, 'addkey', { icon: 'diamond', text: '', title: t('timeline.btn.addKey') });
     // 磁铁：拖动关键帧 / 纹理 / 时长手柄时吸附到整帧（AE、Aseprite 的默认行为）。
-    const snap = mkBtn(gKey, 'snap', { icon: 'magnet', text: '磁铁', title: '吸附到整帧（拖动时按住 Shift 可临时自由）' });
+    const snap = mkBtn(gKey, 'snap', { icon: 'magnet', text: t('timeline.btn.snap.text'), title: t('timeline.btn.snap') });
     if (typeof snap.setAttribute === 'function') snap.setAttribute('aria-pressed', 'true');
 
     /* ── 5. 缩放 ── */
     const gZoom = grp('zoom', 'zoom');
-    const zoomOut = mkBtn(gZoom, 'zoomout', { icon: 'minus', text: '', title: '横向缩小（Ctrl+滚轮）' });
-    const zoomIn = mkBtn(gZoom, 'zoomin', { icon: 'plus', text: '', title: '横向放大（Ctrl+滚轮）' });
+    const zoomOut = mkBtn(gZoom, 'zoomout', { icon: 'minus', text: '', title: t('timeline.btn.zoomOut') });
+    const zoomIn = mkBtn(gZoom, 'zoomin', { icon: 'plus', text: '', title: t('timeline.btn.zoomIn') });
 
     const zoomEl = document.createElement('span');
     zoomEl.className = 'tline-zoom';
     zoomEl.textContent = '1.0×';
-    zoomEl.title = '横向缩放（只影响视图，不影响文档）· 双击复位';
+    zoomEl.title = t('timeline.zoom.title');
     gZoom.appendChild(zoomEl);
 
     /* ── 刻度尺 ── */
@@ -255,7 +251,7 @@ export function createView(el) {
         zoomEl,
         nowEl,
         totalEl,
-        // v8 的五组按钮：播放控制 / 时间读数 / 纹理 / 关键帧 / 缩放
+        // v8 的五组按钮：播放控制 / 时间读数 / 曝光 / 关键帧 / 缩放
         btns: {
             first,
             prev,
@@ -264,8 +260,6 @@ export function createView(el) {
             last,
             speed: speedBtn,
             mode: modeBtn,
-            prevCel,
-            nextCel,
             addCel: add,
             delCel: del,
             addKey,
@@ -305,7 +299,7 @@ export function createLegend() {
     btn.type = 'button';
     btn.className = 'tline-legend';
     btn.innerHTML = icon('help');
-    btn.title = '纹理与关键帧有什么区别（点开看图例）';
+    btn.title = t('timeline.legend.title');
     if (typeof btn.setAttribute === 'function') btn.setAttribute('aria-label', btn.title);
 
     function close() {
@@ -411,7 +405,7 @@ export function appendTimeBadge(label, obj) {
     const badge = document.createElement('span');
     badge.className = 'tline-tbadge';
     badge.textContent = text || '⏱';
-    badge.title = '时间通道：' + badge.textContent + '（在对象列表点 ⏱ 可改）';
+    badge.title = t('timeline.badge.title', { text: badge.textContent });
     label.appendChild(badge);
 }
 
@@ -423,8 +417,8 @@ function makeKfNode(objId) {
     b.className = 'tline-kf';
     // 兜底文案：节点刚建、还没被 paint() 覆写 title 的那一帧也必须可读（悬停不能是空的）。
     // 真正的摘要（时刻 / 缓动 / 通道数 / 拖动说明）由 paint 里的 tip 覆盖。
-    b.title = '关键帧：变换在这里有一条关键帧（连续插值）';
-    if (typeof b.setAttribute === 'function') b.setAttribute('aria-label', '关键帧');
+    b.title = t('timeline.kf.title');
+    if (typeof b.setAttribute === 'function') b.setAttribute('aria-label', t('timeline.kf.aria'));
     b.dataset.layer = objId;
     b.dataset.t = '0';
     b.style.position = 'absolute';
@@ -466,7 +460,7 @@ export function rebuildRows(view, doc) {
 
         const nameEl = document.createElement('span');
         nameEl.className = 'tline-label-name';
-        nameEl.textContent = obj.name || '对象';
+        nameEl.textContent = obj.name || t('timeline.objectFallback');
         nameEl.style.overflow = 'hidden';
         nameEl.style.textOverflow = 'ellipsis';
         nameEl.style.whiteSpace = 'nowrap';
@@ -481,7 +475,7 @@ export function rebuildRows(view, doc) {
         lane.style.height = ROW_H + 'px';
         // 空白区本来就能双击，但没有任何提示；悬停在空白处时由这条 title 告诉用户。
         // 纹理/菱形自带 title，浏览器会优先显示更内层的那条，互不干扰。
-        lane.title = '双击空白处打一个变换关键帧 · 右键看更多';
+        lane.title = t('timeline.lane.title');
 
         row.append(label, lane);
         view.rows.appendChild(row);
@@ -569,8 +563,9 @@ export function buildRuler(view, doc, zoomX) {
     const leftX = edge ? Math.max(0, viewW - 11) : endX;
     view.durHandle.classList.toggle('is-edge', edge);
     view.durHandle.style.left = leftX.toFixed(2) + 'px';
-    view.durHandle.title = '拖动改总时长（当前 ' + fmt2(docDuration(doc)) + ' s）'
-        + (edge ? ' · 末端在视野外，缩小时刻度尺或直接在里面输入' : '');
+    view.durHandle.title = edge
+        ? t('timeline.durHandle.edge', { dur: fmt2(docDuration(doc)) })
+        : t('timeline.durHandle', { dur: fmt2(docDuration(doc)) });
 }
 
 /** 时长手柄是常驻节点（每次重画只挪位置），免得拖拽中节点被重建、指针事件丢失。 */
@@ -642,7 +637,7 @@ export function buildSegments(view, opts, onEdit) {
         node.dataset.i = String(i);
         node.dataset.fps = String(seg.fps);
         node.classList.toggle('is-cur', i === cur);
-        node.title = Math.round(seg.fps) + ' fps · ' + fmt2(seg.at) + '–' + fmt2(seg.end) + ' s（双击改帧率）';
+        node.title = t('timeline.seg.fps', { fps: Math.round(seg.fps), from: fmt2(seg.at), to: fmt2(seg.end) });
         if (node.dataset.editing) return; // 正在编辑就别改文字
         // 段太窄时不写字：10px 字号下「12fps」要 40px，硬挤会变成「12ps」这种残字
         const narrow = (x1 - x0) < 42;
@@ -717,7 +712,7 @@ export function paintRows(view, frame, celDrag) {
             ref.lane.style.minWidth = pxWidth;
         }
 
-        const name = obj.name || '对象';
+        const name = obj.name || t('timeline.objectFallback');
         if (ref.lastName !== name) {
             ref.lastName = name;
             ref.nameEl.textContent = name;
@@ -791,12 +786,13 @@ export function paintTracks(view, frame) {
 
             // 菱形原本不带任何数值信息，用户看不出这个键到底改了什么；摘要补上这一点
             const own = keys[g.idx[0]];
-            const tip =
-                '关键帧 ' + g.t.toFixed(3) + ' s · ' + (EASE_TEXT[g.ease] || '线性') +
-                ' · ' + keySummary(own && own.state) +
-                (g.idx.length > 1 ? ' · ' + g.idx.length + ' 个通道同刻' : '') +
-                ' · 连续插值：与相邻关键帧之间平滑过渡' +
-                ' · 拖动改时间（Shift 吸附 0.1s）/ 双击删除 / 右键菜单';
+            const tipArgs = {
+                t: g.t.toFixed(3),
+                ease: easeText(g.ease),
+                summary: keySummary(own && own.state),
+                n: g.idx.length,
+            };
+            const tip = t(g.idx.length > 1 ? 'timeline.tip.kf.multi' : 'timeline.tip.kf.single', tipArgs);
             if (node.title !== tip) node.title = tip;
         });
 
@@ -827,8 +823,7 @@ export function paintTracks(view, frame) {
             node.classList.toggle('is-sel',
                 !!selKey && selKey.layerId === ref.id && Math.abs(selKey.t - p.t) <= T_EPS);
             node.classList.toggle('is-sel2', false); // 通道键不参与多选集合，别残留上一帧的类
-            const tip2 = '通道关键帧 ' + p.t.toFixed(3) + ' s · ' + p.fields.join(' / ') +
-                ' · 只作用于这些通道，其余通道仍按共用关键帧走 · 到曲线区编辑';
+            const tip2 = t('timeline.tip.channelKey', { t: p.t.toFixed(3), fields: p.fields.join(' / ') });
             if (node.title !== tip2) node.title = tip2;
         });
     }
@@ -883,7 +878,8 @@ export function syncRulerScroll(view) {
  */
 export function updateTools(view, frame) {
     const obj = objectById(frame.doc, frame.active);
-    const marks = obj ? celMarks(obj) : [];
+    // 判据用 celTimes（关键帧上的真源），不用 celMarks（obj.cels 那条只读投影）
+    const times = obj ? celTimes(obj) : [];
     const playing = !!frame.playing;
     const zoomX = frame.zoomX;
     const total = Number(frame.total) || 0;
@@ -891,7 +887,7 @@ export function updateTools(view, frame) {
 
     // 播放：图标跟着状态走，标题说明「按下会发生什么」
     view.btns.play.innerHTML = icon(playing ? 'pause' : 'play');
-    view.btns.play.title = playing ? '暂停（空格）' : '播放 / 暂停（空格）';
+    view.btns.play.title = playing ? t('timeline.btn.pause') : t('timeline.btn.play');
     if (typeof view.btns.play.setAttribute === 'function') view.btns.play.setAttribute('aria-label', view.btns.play.title);
     view.btns.play.classList.toggle('is-on', playing);
 
@@ -903,15 +899,15 @@ export function updateTools(view, frame) {
         const lab = view.btns.speed.querySelector ? view.btns.speed.querySelector('span') : null;
         if (lab) lab.textContent = speedTxt;
         else view.btns.speed.textContent = speedTxt;
-        view.btns.speed.title = '播放速度 ' + speedTxt + '（点一下换档，Shift+点反向）';
-        if (typeof view.btns.speed.setAttribute === 'function') view.btns.speed.setAttribute('aria-label', '播放速度 ' + speedTxt);
+        view.btns.speed.title = t('timeline.btn.speed', { speed: speedTxt });
+        if (typeof view.btns.speed.setAttribute === 'function') view.btns.speed.setAttribute('aria-label', t('timeline.btn.speedAria', { speed: speedTxt }));
         view.btns.speed.classList.toggle('is-odd', speedTxt !== '1×');
     }
     if (view.btns.mode) {
         const info = modeInfo(frame.doc && frame.doc.loopMode);
         view.btns.mode.innerHTML = icon(info.icon);
-        view.btns.mode.title = '播放方式：' + info.label + '（' + info.hint + '）· 点一下换下一种';
-        if (typeof view.btns.mode.setAttribute === 'function') view.btns.mode.setAttribute('aria-label', '播放方式：' + info.label);
+        view.btns.mode.title = t('timeline.btn.mode', { label: info.label });
+        if (typeof view.btns.mode.setAttribute === 'function') view.btns.mode.setAttribute('aria-label', t('timeline.btn.modeAria', { label: info.label }));
         view.btns.mode.classList.toggle('is-odd', info.id !== 'cycle');
     }
 
@@ -926,11 +922,9 @@ export function updateTools(view, frame) {
     view.btns.next.disabled = now >= total - T_EPS;
     view.btns.last.disabled = now >= total - T_EPS;
 
-    // 纹理动作：必须先选对象；删纹理还要留一格
-    view.btns.prevCel.disabled = !obj || !marks.some((m) => m.at < now - T_EPS);
-    view.btns.nextCel.disabled = !obj || !marks.some((m) => m.at > now + T_EPS);
+    // 曝光动作：必须先选对象；删曝光要留一次（removeCelAt 也不允许一张不剩）
     view.btns.addCel.disabled = !obj;
-    view.btns.delCel.disabled = !obj || marks.length <= 1;
+    view.btns.delCel.disabled = !obj || times.length <= 1;
     view.btns.addKey.disabled = !obj;
 
     view.btns.zoomOut.disabled = zoomX <= ZOOM_MIN + 1e-9;
@@ -941,7 +935,5 @@ export function updateTools(view, frame) {
     const on = frame.snapOn !== false;
     view.btns.snap.classList.toggle('is-on', on);
     if (typeof view.btns.snap.setAttribute === 'function') view.btns.snap.setAttribute('aria-pressed', on ? 'true' : 'false');
-    view.btns.snap.title = on
-        ? '吸附到整帧：开（拖动时按住 Shift 可临时自由）'
-        : '吸附到整帧：关（拖动时按住 Shift 可临时吸附到 0.1 s 网格）';
+    view.btns.snap.title = on ? t('timeline.snapOn') : t('timeline.snapOff');
 }

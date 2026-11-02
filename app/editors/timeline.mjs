@@ -11,13 +11,14 @@
 //   · 时间轴上只有两种东西：纹理切换点（方块）与变换关键帧（菱形）。
 // 外壳只保证 mount(el, ctx) → { destroy, refresh, focusFrame }。
 
-import { celAt, celTimes, docDuration, objectById } from '../core/doc-model.mjs';
+import { celAt, docDuration, objectById } from '../core/doc-model.mjs';
+import { t } from '../i18n/index.mjs';
 // 预览播放：速度换档与方式循环的判定表都在 core/playback.mjs（工具条与设置面板同源）
 import { PLAY_MODE_IDS, modeInfo, nextSpeed } from '../core/playback.mjs';
 import { setSegmentFps } from '../core/timebase.mjs';
 import {
-    LABEL_W, SNAP_GRID, T_EPS, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP, celMarks,
-    clampNum, fitZoom, fmt2, pxPerSecond, snapFrame, snapGrid, structSignature, tickStep, timeToX, xToTime,
+    LABEL_W, SNAP_GRID, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP, celMarks,
+    clampNum, fitZoom, pxPerSecond, snapFrame, snapGrid, structSignature, tickStep, timeToX, xToTime,
 } from './timeline-geo.mjs';
 import {
     beginFpsEdit, buildRuler, buildSegments, createLegend, createView, paintPlayhead, paintRows, paintTracks,
@@ -43,7 +44,7 @@ export function mount(el, ctx) {
             /* 外壳自己的提示炸了也不能拖垮面板 */
         }
     };
-    const notWired = (name) => notify((name ? name + '：' : '') + '该操作尚未接线');
+    const notWired = (name) => notify(name ? t('timeline.notWired.named', { name }) : t('timeline.notWired'));
     const has = (name) => typeof c[name] === 'function';
     const peek = (name) => {
         if (!has(name)) return undefined;
@@ -62,7 +63,7 @@ export function mount(el, ctx) {
         try {
             return c[name].apply(c, Array.isArray(args) ? args : []);
         } catch (err) {
-            notify(name + ' 失败：' + ((err && err.message) || err));
+            notify(t('timeline.callFailed', { name, error: (err && err.message) || err }));
             return undefined;
         }
     };
@@ -133,7 +134,7 @@ export function mount(el, ctx) {
             return false;
         }
         if (!Number.isFinite(v) || v <= 0) {
-            notify('总时长要大于 0 秒');
+            notify(t('timeline.duration.positive'));
             return false;
         }
         call('setDuration', [v]);
@@ -249,7 +250,7 @@ export function mount(el, ctx) {
     }
 
     function commitSegmentFps(index, fps) {
-        const done = () => notify('第 ' + (index + 1) + ' 段帧率改成 ' + Math.round(fps) + ' fps');
+        const done = () => notify(t('timeline.segmentFps', { index: index + 1, fps: Math.round(fps) }));
         if (has('setSegmentFps')) {
             call('setSegmentFps', [index, fps]);
             done();
@@ -424,7 +425,7 @@ export function mount(el, ctx) {
         } catch {
             /* 隐私模式下写不进 localStorage：开关只在本会话有效 */
         }
-        notify(snapOn ? '磁铁：吸附到整帧' : '磁铁：关闭（按住 Shift 吸 0.1 s 网格）');
+        notify(snapOn ? t('timeline.snap.on') : t('timeline.snap.off'));
         paint();
     }
 
@@ -461,61 +462,35 @@ export function mount(el, ctx) {
         const avail = (Number(box.clientWidth) || 0) - LABEL_W - 24;
         const z = fitZoom(doc, avail);
         if (z == null) {
-            notify('时长或视口宽度为 0，没法适应全长');
+            notify(t('timeline.fit.empty'));
             return;
         }
         setZoom(z);
         box.scrollLeft = 0;
         syncRulerScroll(view);
-        notify('适应全长：' + zoomX.toFixed(2) + '×');
+        notify(t('timeline.fit.done', { zoom: zoomX.toFixed(2) }));
     }
 
-    /* ── 播放头移动：定义在文件头部的 seek / stepBy / seekFirst / seekLast ── */
+    /* ── 播放头移动：定义在文件头部的 seek / stepBy / seekFirst / seekLast ──
+       跳「纹理切换点」的 goCel 随工具条的 上格/下格 一起删了：那两个动作由外壳的
+       goPrevCel / goNextCel 承担（Shift+, / Shift+. 与命令面板），面板里不再留第二份。 */
 
-    function goCel(dir) {
-        const doc = docNow();
-        if (!doc) return;
-        const name = dir < 0 ? 'prevCel' : 'nextCel';
-        if (has(name)) {
-            call(name, []);
-            return;
-        }
-        // 本地兜底：在活动对象的纹理点之间跳
-        const obj = objectById(doc, activeId());
-        if (!obj) {
-            notify('先选一个对象');
-            return;
-        }
-        const times = celTimes(obj);
-        const now = timeNow();
-        if (dir < 0) {
-            const back = times.filter((t) => t < now - T_EPS).pop();
-            setTime(back == null ? 0 : back);
-        } else {
-            const fwd = times.find((t) => t > now + T_EPS);
-            if (fwd == null) {
-                notify('已经是最后一个纹理');
-                return;
-            }
-            setTime(fwd);
-        }
-    }
-
+    /** 工具条「删曝光」：摘掉当前时间的这次曝光（关键帧保留，画面回落到上一张）。 */
     function deleteCelNow() {
         const doc = docNow();
         if (!doc) return;
         const obj = objectById(doc, activeId());
         if (!obj) {
-            notify('先选一个对象');
+            notify(t('timeline.needLayer'));
             return;
         }
         if (celMarks(obj).length <= 1) {
-            notify('每个对象至少保留一个纹理');
+            notify(t('timeline.cel.keepOne'));
             return;
         }
         const cel = celAt(obj, timeNow());
         if (!cel) {
-            notify('该时间没有生效的纹理');
+            notify(t('timeline.cel.noneAtTime'));
             return;
         }
         celOp('removeCelAt', obj.id, cel.at);
@@ -527,7 +502,7 @@ export function mount(el, ctx) {
         if (!doc) return;
         const obj = objectById(doc, activeId());
         if (!obj) {
-            notify('先选一个对象');
+            notify(t('timeline.needLayer'));
             return;
         }
         // 播放头可以停在两帧之间（按 ←/→ 是逐帧，但拖动播放头、点刻度尺、外接
@@ -623,18 +598,14 @@ export function mount(el, ctx) {
             const mode0 = curDoc && typeof curDoc.loopMode === 'string' ? curDoc.loopMode : 'cycle';
             const idx = PLAY_MODE_IDS.indexOf(mode0);
             const next = PLAY_MODE_IDS[(idx + 1) % PLAY_MODE_IDS.length];
-            call('setDoc', [(d) => Object.assign({}, d, { loopMode: next }), { label: '播放方式：' + modeInfo(next).label }]);
-            notify('播放方式：' + modeInfo(next).label + '（' + modeInfo(next).hint + '）');
-        } else if (act === 'prevcel') {
-            goCel(-1);
-        } else if (act === 'nextcel') {
-            goCel(1);
+            call('setDoc', [(d) => Object.assign({}, d, { loopMode: next }), { label: t('timeline.loopMode.set', { label: modeInfo(next).label }) }]);
+            notify(t('timeline.loopMode.notify', { label: modeInfo(next).label, hint: modeInfo(next).hint }));
         } else if (act === 'addcel') {
             // 加的是「曝光」：把当前纹理在下一个空帧再曝光一次，不新建图
             if (!has('addExposure')) {
                 notWired('addExposure');
             } else if (!activeId()) {
-                notify('先选一个对象');
+                notify(t('timeline.needLayer'));
             } else {
                 call('addExposure', [activeId(), timeNow()]);
             }
@@ -656,7 +627,7 @@ export function mount(el, ctx) {
 
     /* ── 刻度尺 ── */
 
-    view.ruler.title = '拖动 = 擦洗时间 · 双击 = 适应全长（整段时长装进视口）';
+    view.ruler.title = t('timeline.ruler.title');
 
     // 双击适应全长。段条与时长手柄自己处理双击（改帧率 / 不做），先让它们优先。
     view.ruler.addEventListener('dblclick', (e) => {

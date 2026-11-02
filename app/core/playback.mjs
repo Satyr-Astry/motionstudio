@@ -14,15 +14,42 @@
 //   reverse  反向循环：从末尾往开头走，到 0 再回到末尾（同样是一条折叠曲线）
 //   once     单次：acc ≥ total 就停在末尾，并报告 done
 import { LOOP_CYCLE, LOOP_PINGPONG, LOOP_NONE } from './cel.mjs';
+import { t } from '../i18n/index.mjs';
 
 export const LOOP_REVERSE = 'reverse';
 
-/** 播放方式表：id 与 `doc.loopMode` 同值，icon 供时间轴按钮用。 */
+/**
+ * 播放方式表：id 与 `doc.loopMode` 同值，icon 供时间轴按钮用。
+ *
+ * `label` / `hint` 是访问器而不是字面量：读到的时候才去词典取当前语言的词条。
+ * 这样表只建一次也不会留下旧语言的文案（`setLocale` 不重建任何常量），
+ * 而落盘值始终只有 `id`，换语言不碰存档。
+ */
 export const PLAY_MODES = [
-    { id: LOOP_CYCLE, label: '循环', icon: 'loop', hint: '播到末尾从头继续' },
-    { id: LOOP_PINGPONG, label: '来回', icon: 'pingpong', hint: '播到末尾倒着回来，往返不停' },
-    { id: LOOP_REVERSE, label: '反向循环', icon: 'loop-reverse', hint: '从末尾倒着播到开头，再回到末尾' },
-    { id: LOOP_NONE, label: '单次', icon: 'play-once', hint: '播到末尾就停' },
+    {
+        id: LOOP_CYCLE,
+        get label() { return t('playback.mode.cycle.label'); },
+        icon: 'loop',
+        get hint() { return t('playback.mode.cycle.hint'); },
+    },
+    {
+        id: LOOP_PINGPONG,
+        get label() { return t('playback.mode.pingpong.label'); },
+        icon: 'pingpong',
+        get hint() { return t('playback.mode.pingpong.hint'); },
+    },
+    {
+        id: LOOP_REVERSE,
+        get label() { return t('playback.mode.reverse.label'); },
+        icon: 'loop-reverse',
+        get hint() { return t('playback.mode.reverse.hint'); },
+    },
+    {
+        id: LOOP_NONE,
+        get label() { return t('playback.mode.none.label'); },
+        icon: 'play-once',
+        get hint() { return t('playback.mode.none.hint'); },
+    },
 ];
 
 export const PLAY_MODE_IDS = PLAY_MODES.map((m) => m.id);

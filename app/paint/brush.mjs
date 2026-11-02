@@ -9,6 +9,8 @@
  *   spacingPx() 的默认值按 Klecks 的「半径倍数」口径重标定（见 KLEKS_PEN_GAP_DIAMETER）。
  */
 
+import { t } from '../i18n/index.mjs';
+
 export const BRUSH_DEFAULTS = Object.freeze({
     size: 8,
     opacity: 1,
@@ -51,28 +53,32 @@ export const KLEKS_PEN_GAP_DIAMETER = KLEKS_PEN_SPACING / 2;   // 0.42445（直�
  *   像素笔关掉：它是整格方块，缩放会引入半格与抗锯齿糊边。
  *   晕染关掉：Klecks `smudge-brush.ts:281 settingHasSizePressure = false`，且我们的
  *   搬运缓冲区按笔尖尺寸开，缩放着色会和取样区错位。
+ *
+ * `name` 是**读时求值**的 getter，不是常量字符串：预设表在模块加载时就建好了，
+ * 而语言可以中途切换 —— 要是这里存成字符串，切语言后按钮还挂着旧语言的名字。
+ * 落盘只用 `id`，名字一个字符都不进 .msp。消费者（工具条 / 画板）一行都不用改。
  */
 export const BRUSH_PRESETS = Object.freeze([
-    { id: 'pixel', name: '像素笔', hardness: 1, spacing: 1, antialias: false, pixelGrid: true, flow: 1, sizePressure: false },
+    { id: 'pixel', get name() { return t('brush.pixel.name'); }, hardness: 1, spacing: 1, antialias: false, pixelGrid: true, flow: 1, sizePressure: false },
     // 圆笔 = Klecks pen 的几何量级（间距比旧值稀 3.54 倍）
-    { id: 'round', name: '圆笔', hardness: 0.85, spacing: KLEKS_PEN_GAP_DIAMETER, antialias: true, flow: 1, sizePressure: true },
+    { id: 'round', get name() { return t('brush.round.name'); }, hardness: 0.85, spacing: KLEKS_PEN_GAP_DIAMETER, antialias: true, flow: 1, sizePressure: true },
     // 软笔：同样对齐 Klecks，但它是渐变尖（hardness 0.08）+ 低流量，笔画浓淡靠叠加次数。
     // 实测中段振荡 9%（size 20 / 不透明 100：中段 alpha 91–100，无可见珠串），未到需要收紧的程度；
     // 代价是中段浓度从旧间距下的 234 降到 ~100（密度 5.31 倍 → 1 倍，单笔更淡），要浓就多叠几遍。
-    { id: 'soft', name: '软笔', hardness: 0.08, spacing: KLEKS_PEN_GAP_DIAMETER, antialias: true, flow: 0.32, sizePressure: true },
-    { id: 'pencil', name: '铅笔', hardness: 0.55, spacing: KLEKS_PEN_GAP_DIAMETER, antialias: true, jitter: 0.22, flow: 0.82, sizePressure: true },
+    { id: 'soft', get name() { return t('brush.soft.name'); }, hardness: 0.08, spacing: KLEKS_PEN_GAP_DIAMETER, antialias: true, flow: 0.32, sizePressure: true },
+    { id: 'pencil', get name() { return t('brush.pencil.name'); }, hardness: 0.55, spacing: KLEKS_PEN_GAP_DIAMETER, antialias: true, jitter: 0.22, flow: 0.82, sizePressure: true },
     // 晕染：把上一处的像素「拖」到当前处（Kleks 里叫 smudge / blender），
     // strength 是每次搬运的强度，带 0.25 的固色比例，否则拖久了颜色会被抹平。
     // 间距 0.1（= R × 0.2）：Klecks 自由笔画是 R × 0.0682，但那是逐像素 lerp + dither；
     // 我们的位图搬运式 smudge **越密越糊**（docs 笔刷计划 :199），所以取 Klecks 线工具
     // 口径（0.2045R）与橡皮口径（0.2R）的量级，把每像素搬运次数从 ~8 次降到 ~5 次。
-    { id: 'smudge', name: '晕染', hardness: 0.5, spacing: 0.1, antialias: true, smudge: true, strength: 0.55, flow: 1, sizePressure: false },
+    { id: 'smudge', get name() { return t('brush.smudge.name'); }, hardness: 0.5, spacing: 0.1, antialias: true, smudge: true, strength: 0.55, flow: 1, sizePressure: false },
     // 散点：一个落点上打 count 个随机偏移的小点，画星星/粒子/毛边很好用。
     // 每个落点自带 7 点 × 1.1R 的散布，间距按圆笔口径即可铺匀（旧值 0.05 让同一点被反复覆盖）。
-    { id: 'scatter', name: '散点', hardness: 0.9, spacing: KLEKS_PEN_GAP_DIAMETER, antialias: true, scatter: { count: 7, spread: 1.1 }, flow: 0.85, sizePressure: true },
+    { id: 'scatter', get name() { return t('brush.scatter.name'); }, hardness: 0.9, spacing: KLEKS_PEN_GAP_DIAMETER, antialias: true, scatter: { count: 7, spread: 1.1 }, flow: 0.85, sizePressure: true },
     // 橡皮：Klecks `eraser-brush.ts:17/:93` 的 bdist = max(0.5, 1-opacity) × R × 0.4，
     // 不透明度 1 时 = R × 0.2 = 直径 × 0.1。
-    { id: 'eraser', name: '橡皮', hardness: 0.8, spacing: 0.1, antialias: true, erase: true, flow: 1, sizePressure: true },
+    { id: 'eraser', get name() { return t('brush.eraser.name'); }, hardness: 0.8, spacing: 0.1, antialias: true, erase: true, flow: 1, sizePressure: true },
 ]);
 
 export function brushById(id) {
@@ -272,8 +278,9 @@ export function marchStamps(from, to, opts) {
     if (!(dist >= 0.01)) return { stamps: out, carry };   // 亚像素抖动：不落笔、不动 carry
     let travelled = carry;
     for (;;) {
-        const t = Math.min(1, travelled / dist);
-        const step = Math.max(0.5, gap * sizeScaleAt(o.brush, p0 + (p1 - p0) * t));
+        // 这里不叫 t：本模块的 t 是词条函数，同名局部变量会把取词路径遮死
+        const ratio = Math.min(1, travelled / dist);
+        const step = Math.max(0.5, gap * sizeScaleAt(o.brush, p0 + (p1 - p0) * ratio));
         if (travelled + step > dist) break;
         travelled += step;
         const k = Math.min(1, travelled / dist);

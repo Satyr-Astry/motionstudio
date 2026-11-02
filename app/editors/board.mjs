@@ -46,6 +46,7 @@ import { MAX_LEVEL, clampLevel, createStabilizer } from '../paint/stabilizer.mjs
 import { floodFillRegion } from '../paint/fill.mjs';
 import { icon } from '../core/icons.mjs';
 import { imageAt, objectById, objectsOf } from '../core/doc-model.mjs';
+import { t } from '../i18n/index.mjs';
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 16;
@@ -62,10 +63,25 @@ const LS_BRUSH_MIGRATE = 'ms.brush.migrate';  // 间距重标定的迁移版本�
  * 早先是单字（像/圆/软/铅/晕/散/擦）——单字不构成词，「像」是像素还是图像、「晕」是晕染还是模糊
  * 都得点了才知道。两字是「一眼读得懂」与「26px 工具条放得下」的折中点。
  * 见 docs/画板图标与可读性计划-2026-10.md §0 与 §5 第 1–7 行。
+ *
+ * 短名本身在词条表里（`board.brush.short.*`）；这里只留 id → 键的对应，
+ * 读时求值才能跟着语言切换走。
  */
-const BRUSH_SHORT = {
-    pixel: '像素', round: '圆头', soft: '柔边', pencil: '铅笔', smudge: '晕染', scatter: '散点', eraser: '橡皮',
+const BRUSH_SHORT_KEY = {
+    pixel: 'board.brush.short.pixel',
+    round: 'board.brush.short.round',
+    soft: 'board.brush.short.soft',
+    pencil: 'board.brush.short.pencil',
+    smudge: 'board.brush.short.smudge',
+    scatter: 'board.brush.short.scatter',
+    eraser: 'board.brush.short.eraser',
 };
+
+/** 笔刷 chip 的可见短名。键缺失时退回预设名的前两字 —— chip 永远有字，不会空。 */
+function brushShortName(b) {
+    const key = BRUSH_SHORT_KEY[b.id];
+    return key ? t(key) : b.name.slice(0, 2);
+}
 
 /** 笔刷 chip 的图标名（icon-system 交付；名字缺失时 icon() 自己回退默认图标，不会炸）。 */
 const BRUSH_ICON = {
@@ -79,21 +95,22 @@ const BRUSH_ICON = {
 };
 
 const MIRROR_MODES = [
-    ['none', '镜像：无'],
-    ['x', '镜像：左右'],
-    ['y', '镜像：上下'],
-    ['both', '镜像：四向'],
+    ['none', 'board.mirror.none'],
+    ['x', 'board.mirror.x'],
+    ['y', 'board.mirror.y'],
+    ['both', 'board.mirror.both'],
 ];
 
 /**
  * 四条滑杆的界面映射：滑杆是整数，参数是小数。
  * 间距下限 2（=0.02）而不是 0：间距归零意味着落点间距为 0，一笔会卡死。
+ * `labelKey` 是词条键 —— 名称要跟着语言走，所以不在这里存字符串。
  */
 const PARAM_UI = [
-    { key: 'hardness', label: '硬度', min: 0, max: 100, step: 1, to: (v) => Math.round(v * 100), from: (s) => s / 100 },
-    { key: 'spacing', label: '间距', min: 2, max: 200, step: 1, to: (v) => Math.round(v * 100), from: (s) => s / 100 },
-    { key: 'jitter', label: '抖动', min: 0, max: 100, step: 1, to: (v) => Math.round(v * 100), from: (s) => s / 100 },
-    { key: 'flow', label: '流量', min: 2, max: 100, step: 1, to: (v) => Math.round(v * 100), from: (s) => s / 100 },
+    { key: 'hardness', labelKey: 'board.param.hardness', min: 0, max: 100, step: 1, to: (v) => Math.round(v * 100), from: (s) => s / 100 },
+    { key: 'spacing', labelKey: 'board.param.spacing', min: 2, max: 200, step: 1, to: (v) => Math.round(v * 100), from: (s) => s / 100 },
+    { key: 'jitter', labelKey: 'board.param.jitter', min: 0, max: 100, step: 1, to: (v) => Math.round(v * 100), from: (s) => s / 100 },
+    { key: 'flow', labelKey: 'board.param.flow', min: 2, max: 100, step: 1, to: (v) => Math.round(v * 100), from: (s) => s / 100 },
 ];
 
 /* ── 小工具 ── */
@@ -308,8 +325,8 @@ export function mount(el, ctx) {
         draw();
         if (silent) return;
         notify(same
-            ? '视图已经在适配位置：整张纹理都可见。要去掉四周的透明区，用「裁到内容」'
-            : '已适配视图：整张纹理铺满可视区（不动像素）');
+            ? t('board.fit.already')
+            : t('board.fit.done'));
     }
 
     /** 画布尺寸或纹理换了 → 重新适配一次（适配过就不再打扰）。 */
@@ -334,9 +351,10 @@ export function mount(el, ctx) {
         btn.type = 'button';
         btn.dataset.brush = b.id;
         btn.innerHTML = icon(BRUSH_ICON[b.id] || 'circle')
-            + '<span>' + (BRUSH_SHORT[b.id] || b.name.slice(0, 2)) + '</span>';
-        btn.title = b.name + '（快捷键 ' + (i + 1) + '）';
-        btn.setAttribute('aria-label', b.name + '（快捷键 ' + (i + 1) + '）');
+            + '<span>' + brushShortName(b) + '</span>';
+        const brushTitle = t('board.brush.title', { name: b.name, key: i + 1 });
+        btn.title = brushTitle;
+        btn.setAttribute('aria-label', brushTitle);
         brushes.appendChild(btn);
         brushBtns.set(b.id, btn);
     });
@@ -344,12 +362,12 @@ export function mount(el, ctx) {
     // 当前色块：点开极小色板
     const swatch = mk('button', 'bd-swatch');
     swatch.type = 'button';
-    swatch.title = '当前颜色（点击打开色板）';
+    swatch.title = t('board.swatch.title');
 
     // 大小：名称 + 滑杆 + 可手输数值（三段式，名称永不隐藏）
     const sizeField = mk('label', 'bd-prow bd-prow-size');
-    sizeField.title = '笔尖大小（像素，[ / ] 调整）';
-    sizeField.appendChild(mk('span', 'bd-lab bd-plab', '大小'));
+    sizeField.title = t('board.size.fieldTitle');
+    sizeField.appendChild(mk('span', 'bd-lab bd-plab', t('board.size.short')));
     const sizeRange = mk('input');
     sizeRange.type = 'range';
     sizeRange.min = '1';
@@ -357,55 +375,55 @@ export function mount(el, ctx) {
     sizeRange.step = '1';
     sizeRange.value = '12';
     // 视觉上靠左侧的 .bd-lab 说明用途，但读屏和 UX 审计只看 input 自身属性 → 单独给一份
-    sizeRange.setAttribute('aria-label', '笔尖大小（像素）');
+    sizeRange.setAttribute('aria-label', t('board.size.label'));
     const sizeNum = mk('input', 'bd-num');
     sizeNum.type = 'number';
     sizeNum.min = '1';
     sizeNum.max = '200';
     sizeNum.step = '1';
     sizeNum.value = '12';
-    sizeNum.title = '笔尖大小（像素）';
+    sizeNum.title = t('board.size.label');
     sizeField.append(sizeRange, sizeNum);
 
     // 不透明度：名称 + 滑杆 + 数字（百分比）
     const opacityField = mk('label', 'bd-prow bd-prow-opacity');
-    opacityField.title = '笔刷不透明度（%）';
-    opacityField.appendChild(mk('span', 'bd-lab bd-plab', '不透明'));
+    opacityField.title = t('board.opacity.title');
+    opacityField.appendChild(mk('span', 'bd-lab bd-plab', t('board.opacity.short')));
     const opacityRange = mk('input');
     opacityRange.type = 'range';
     opacityRange.min = '5';
     opacityRange.max = '100';
     opacityRange.step = '1';
     opacityRange.value = '100';
-    opacityRange.setAttribute('aria-label', '笔刷不透明度（%）');
+    opacityRange.setAttribute('aria-label', t('board.opacity.title'));
     const opacityNum = mk('input', 'bd-num');
     opacityNum.type = 'number';
     opacityNum.min = '5';
     opacityNum.max = '100';
     opacityNum.step = '1';
     opacityNum.value = '100';
-    opacityNum.title = '笔刷不透明度（%）';
+    opacityNum.title = t('board.opacity.title');
     opacityField.append(opacityRange, opacityNum);
 
     const pickBtn = mk('button', 'bd-ico');
     pickBtn.type = 'button';
     pickBtn.dataset.act = 'pick';
     pickBtn.innerHTML = icon('eyedropper');
-    pickBtn.setAttribute('aria-label', '取色器');
-    pickBtn.title = '取色器：点画布取一个像素（E）· 画布上右键随时取色';
+    pickBtn.setAttribute('aria-label', t('board.pick.name'));
+    pickBtn.title = t('board.pick.title');
 
     // 油漆桶：与取色器同为「点一下生效」的模式工具（不是按住才生效的临时工具）。
     const bucketBtn = mk('button', 'bd-ico');
     bucketBtn.type = 'button';
     bucketBtn.dataset.act = 'bucket';
     bucketBtn.innerHTML = icon('bucket');
-    bucketBtn.setAttribute('aria-label', '填充');
-    bucketBtn.title = '填充：点画布把同色连通区一次填满（G）';
+    bucketBtn.setAttribute('aria-label', t('board.bucket.name'));
+    bucketBtn.title = t('board.bucket.title');
 
     const mirrorSel = mk('select', 'bd-select bd-mirror');
-    mirrorSel.title = '镜像绘制（纯前端，不改数据）';
-    for (const [value, label] of MIRROR_MODES) {
-        const opt = mk('option', null, label.replace('镜像：', ''));
+    mirrorSel.title = t('board.mirror.title');
+    for (const [value, labelKey] of MIRROR_MODES) {
+        const opt = mk('option', null, t(labelKey));
         opt.value = value;
         mirrorSel.appendChild(opt);
     }
@@ -414,39 +432,43 @@ export function mount(el, ctx) {
     undoBtn.type = 'button';
     undoBtn.dataset.act = 'undo';
     undoBtn.innerHTML = icon('undo');
-    undoBtn.setAttribute('aria-label', '撤销');
-    undoBtn.title = '撤销（引擎 history）';
+    undoBtn.setAttribute('aria-label', t('board.undo.name'));
+    undoBtn.title = t('board.undo.title');
 
     const redoBtn = mk('button', 'bd-ico');
     redoBtn.type = 'button';
     redoBtn.dataset.act = 'redo';
     redoBtn.innerHTML = icon('redo');
-    redoBtn.setAttribute('aria-label', '重做');
-    redoBtn.title = '重做（引擎 history）';
+    redoBtn.setAttribute('aria-label', t('board.redo.name'));
+    redoBtn.title = t('board.redo.title');
 
     // 稳定器：图标 + 档位数字（0–5）。数字是读数，必须留（C 类，不许纯图标化）。
     const stabBtn = mk('button', 'bd-ico bd-stab');
     stabBtn.type = 'button';
     stabBtn.dataset.act = 'stab';
-    stabBtn.setAttribute('aria-label', '笔迹稳定器档位');
-    stabBtn.title = '笔迹稳定器（点击切换 0–5 档，Ctrl+滚轮 也能调）';
+    stabBtn.setAttribute('aria-label', t('board.stab.name'));
+    // 建 DOM 时 stabLevel 还没声明（私有状态在下面才初始化），读它就是 TDZ 报错 ——
+    // 先按「关」写占位，真实档位由初始化末尾的 paintChrome() 立刻刷新。
+    stabBtn.title = t('board.stab.titleOff');
     stabBtn.innerHTML = icon('stabilizer') + '<span class="bd-stab-n">0</span>';
 
     const acts = mk('div', 'bd-acts');
     // 五个纹理动作：‹ › 是纯图标（翻页箭头，文字放不下也没必要），后三个保留中文并加前置图标。
     // "＋纹理" 的全角加号由 plus 图标承担，文字只剩「纹理」，避免出现「＋ ＋纹理」。
-    for (const [act, iconName, text, title] of [
-        ['prev', 'chevron-left', '', '上一张纹理'],
-        ['next', 'chevron-right', '', '下一张纹理'],
+    for (const [act, iconName, textKey, titleKey] of [
+        ['prev', 'chevron-left', '', 'board.act.prev'],
+        ['next', 'chevron-right', '', 'board.act.next'],
         // 动作名带 -tex 后缀：顶栏「新建项目」也叫 new，跨面板的 [data-act="new"]
         // 查询会命中错的那个（W20 的端到端脚本就踩过），一个面板内不必让路，跨面板必须唯一。
-        ['new-tex', 'plus', '纹理', '新建一张空白纹理并绑定到当前时刻'],
-        ['unique', 'sparkle', '独特化', '把当前纹理拷一份，之后改它不影响别处'],
-        ['fit', 'fit', '适配', '把整张纹理缩放到刚好可见（只动视图，不改像素）· 0 键'],
+        ['new-tex', 'plus', 'board.act.newTex.label', 'board.act.newTex.title'],
+        ['unique', 'sparkle', 'board.act.unique.label', 'board.act.unique.title'],
+        ['fit', 'fit', 'board.act.fit.label', 'board.act.fit.title'],
     ]) {
         const btn = mk('button', 'bd-act');
         btn.type = 'button';
         btn.dataset.act = act;
+        const text = textKey ? t(textKey) : '';
+        const title = t(titleKey);
         btn.innerHTML = icon(iconName) + (text ? `<span>${text}</span>` : '');
         btn.title = title;
         btn.setAttribute('aria-label', title);
@@ -471,7 +493,7 @@ export function mount(el, ctx) {
     sizeW.min = '1';
     sizeW.max = '8192';
     sizeW.step = '1';
-    sizeW.setAttribute('aria-label', '纹理宽度（像素）');
+    sizeW.setAttribute('aria-label', t('board.size.widthLabel'));
 
     const sizeX = mk('span', 'bd-size-x', '×');
 
@@ -480,7 +502,7 @@ export function mount(el, ctx) {
     sizeH.min = '1';
     sizeH.max = '8192';
     sizeH.step = '1';
-    sizeH.setAttribute('aria-label', '纹理高度（像素）');
+    sizeH.setAttribute('aria-label', t('board.size.heightLabel'));
 
     const applySizeBtn = mk('button', 'bd-ico');
     applySizeBtn.type = 'button';
@@ -489,10 +511,10 @@ export function mount(el, ctx) {
 
     // 对齐：显式三档，不用 Shift/Alt 这种隐藏修饰键切语义（keepPlace 那轮已经否掉这套）
     const alignSel = mk('select', 'bd-align');
-    for (const [value, text] of [['nw', '左上'], ['c', '居中'], ['se', '右下']]) {
+    for (const [value, textKey] of [['nw', 'board.align.nw'], ['c', 'board.align.c'], ['se', 'board.align.se']]) {
         const opt = document.createElement('option');
         opt.value = value;
-        opt.textContent = text;
+        opt.textContent = t(textKey);
         alignSel.appendChild(opt);
     }
     alignSel.value = 'c';
@@ -528,8 +550,8 @@ export function mount(el, ctx) {
     const palSwap = mk('button', 'bd-pal-swap', '⇄');
     palSwap.type = 'button';
     palSwap.dataset.act = 'swap';
-    palSwap.title = '前景 / 背景交换';
-    pal.append(mk('div', 'bd-pop-title', '最近颜色'), palGrid, palSwap);
+    palSwap.title = t('board.pal.swap');
+    pal.append(mk('div', 'bd-pop-title', t('board.pal.recent')), palGrid, palSwap);
 
     /* ── DOM：参数行（常显，零折叠）──
        原先硬度/间距/抖动/流量藏在 .bd-pop 里：不点开就不知道有这四个参数，点开还挡画布。
@@ -553,23 +575,24 @@ export function mount(el, ctx) {
     };
 
     for (const ui of PARAM_UI) {
+        const label = t(ui.labelKey);
         const row = mk('label', 'bd-prow');
-        row.title = ui.label;
-        row.appendChild(mk('span', 'bd-lab bd-plab', ui.label));
+        row.title = label;
+        row.appendChild(mk('span', 'bd-lab bd-plab', label));
         const range = mk('input');
         range.type = 'range';
         range.min = String(ui.min);
         range.max = String(ui.max);
         range.step = String(ui.step);
         range.dataset.param = ui.key;
-        range.setAttribute('aria-label', ui.label);
+        range.setAttribute('aria-label', label);
         const num = mk('input', 'bd-num');
         num.type = 'number';
         num.min = String(ui.min);
         num.max = String(ui.max);
         num.step = String(ui.step);
         num.value = String(ui.min);
-        num.title = ui.label;
+        num.title = label;
         row.append(range, num);
         params.appendChild(row);
 
@@ -584,11 +607,11 @@ export function mount(el, ctx) {
     resetBtn.type = 'button';
     resetBtn.dataset.act = 'reset';
     resetBtn.innerHTML = icon('rotate-ccw');
-    resetBtn.setAttribute('aria-label', '恢复这支笔的默认参数');
-    resetBtn.title = '恢复默认：清除这支笔的记忆参数';
+    resetBtn.setAttribute('aria-label', t('board.reset.name'));
+    resetBtn.title = t('board.reset.title');
     (params.lastElementChild || params).appendChild(resetBtn);
 
-    const hint = mk('div', 'bd-hint', '左键画 · 右键/Alt 取色 · E 取色器 · G 填充 · [ ] 笔尖 · 1–7 笔刷 · 滚轮缩放 · 空格/中键平移 · 0 适配');
+    const hint = mk('div', 'bd-hint', t('board.hint'));
 
     root.append(bar, params, stage, pal, hint);
     el.appendChild(root);
@@ -646,7 +669,7 @@ export function mount(el, ctx) {
             cell.style.background = hex;
             palGrid.appendChild(cell);
         }
-        if (!recent.length) palGrid.appendChild(mk('span', 'bd-pal-empty', '还没有用过颜色'));
+        if (!recent.length) palGrid.appendChild(mk('span', 'bd-pal-empty', t('board.pal.empty')));
         // 补足 6 格：格子数固定，弹层宽度才不会跟着「用过的颜色」跳来跳去
         for (let i = recent.length; i < 6; i += 1) palGrid.appendChild(mk('span', 'bd-pal-cell is-empty'));
     }
@@ -676,7 +699,7 @@ export function mount(el, ctx) {
         lsSet(LS_BG, bgColor);
         if (typeof c.setColor === 'function') c.setColor(color);
         paintChrome();
-        notify('已交换前景 / 背景色');
+        notify(t('board.pal.swapped'));
     }
 
     /* ── 渲染 ── */
@@ -716,7 +739,7 @@ export function mount(el, ctx) {
             g.fillStyle = '#6b7280';
             g.font = '12px system-ui, sans-serif';
             g.textAlign = 'center';
-            g.fillText('这个时刻还没有纹理：点「纹理」新建一张', w / 2, h / 2);
+            g.fillText(t('board.empty.noTexture'), w / 2, h / 2);
             drawCursor(dpr);
             return;
         }
@@ -918,7 +941,7 @@ export function mount(el, ctx) {
     function beginStroke(e) {
         const img = texture();
         if (!img) {
-            notify('这个时刻还没有纹理：点「纹理」新建一张');
+            notify(t('board.empty.noTexture'));
             return null;
         }
         const g = img.getContext('2d');
@@ -1008,9 +1031,9 @@ export function mount(el, ctx) {
         if (s.moved) {
             const after = captureRegion(s.img, { x: 0, y: 0, w: s.img.width, h: s.img.height });
             if (engine && typeof engine.pushCommand === 'function') {
-                engine.pushCommand(makeRegionCommand(s.img, s.before, after, '画一笔（纹理）'));
+                engine.pushCommand(makeRegionCommand(s.img, s.before, after, t('board.cmd.stroke')));
             }
-            notify('已写入纹理');
+            notify(t('board.stroke.written'));
         }
         draw();
         if (typeof c.requestRender === 'function') c.requestRender();
@@ -1033,14 +1056,14 @@ export function mount(el, ctx) {
         const remember = !(opts && opts.remember === false);
         const img = texture();
         if (!img) {
-            if (!silent) notify('这个时刻还没有纹理，没得取色');
+            if (!silent) notify(t('board.pick.noTexture'));
             return false;
         }
         const p = toTexture(e);
         const x = Math.floor(p.x);
         const y = Math.floor(p.y);
         if (x < 0 || y < 0 || x >= img.width || y >= img.height) {
-            if (!silent) notify('点在纹理外面了，没取到色');
+            if (!silent) notify(t('board.pick.outside'));
             return false;
         }
         let d;
@@ -1050,16 +1073,16 @@ export function mount(el, ctx) {
             d = g.getImageData(x, y, 1, 1).data;
         } catch (err) {
             // 纹理可能刚好被撤销 / 换成了 detached 画布：这次没取到，别让它炸掉整个 pointerdown
-            if (!silent) notify('这张纹理现在读不了，没取到色');
+            if (!silent) notify(t('board.pick.unreadable'));
             return false;
         }
         if (d[3] < 8) {
-            if (!silent) notify('这个像素是透明的，没取到色');
+            if (!silent) notify(t('board.pick.transparent'));
             return false;
         }
         applyColor(toHex(d[0], d[1], d[2]), remember);
         setPickMode(false);
-        if (!silent) notify('取色 ' + color);
+        if (!silent) notify(t('board.pick.ok', { color }));
         return true;
     }
 
@@ -1072,7 +1095,7 @@ export function mount(el, ctx) {
         rightPick = true;
         const ok = sampleAt(e, { silent: true });
         pickDownHex = ok ? color : '';
-        if (ok) notify('取色 ' + color);
+        if (ok) notify(t('board.pick.ok', { color }));
         else sampleAt(e); // 让 sampleAt 自己解释为什么没取到
         scheduleCursor();
         if (!ok) {
@@ -1086,7 +1109,7 @@ export function mount(el, ctx) {
             window.removeEventListener('pointerup', up);
             window.removeEventListener('pointercancel', up);
             rightPick = false;
-            if (color !== pickDownHex) notify('取色 ' + color);
+            if (color !== pickDownHex) notify(t('board.pick.ok', { color }));
             scheduleCursor();
         };
         window.addEventListener('pointermove', move);
@@ -1119,12 +1142,12 @@ export function mount(el, ctx) {
     function fillAt(e) {
         const { kind, img } = textureForFill();
         if (kind === 'none') {
-            notify('这个时刻还没有纹理：点「纹理」新建一张');
+            notify(t('board.empty.noTexture'));
             return false;
         }
         if (kind === 'bitmap') {
             // 导入位图是 ImageBitmap，没有 getContext —— 不许偷偷画到临时画布上再丢回去
-            notify('这张纹理是导入位图，暂不支持填充');
+            notify(t('board.bucket.imported'));
             return false;
         }
         const g = img.getContext('2d', { willReadFrequently: true });
@@ -1142,23 +1165,23 @@ export function mount(el, ctx) {
             frame = g.getImageData(0, 0, W, H);
         } catch (err) {
             // 纹理可能刚好被撤销/换成 detached 画布：这一次填不了，别让它炸掉整个 pointerdown
-            notify('这张纹理现在读不了，没法填充');
+            notify(t('board.bucket.unreadable'));
             return false;
         }
         const res = floodFillRegion(frame.data, W, H, x, y, color);
         if (!res.changed) {
-            if (x < 0 || y < 0 || x >= W || y >= H) notify('点在纹理外面了，没法填充');
-            else notify('这块已经是当前色，不用再填');
+            if (x < 0 || y < 0 || x >= W || y >= H) notify(t('board.bucket.outside'));
+            else notify(t('board.bucket.filled'));
             return false;
         }
         g.putImageData(frame, 0, 0);
         const after = captureRegion(img, { x: 0, y: 0, w: W, h: H });
         if (engine && typeof engine.pushCommand === 'function' && before && after) {
-            engine.pushCommand(makeRegionCommand(img, before, after, '填充（纹理）'));
+            engine.pushCommand(makeRegionCommand(img, before, after, t('board.cmd.fill')));
         }
         draw();
         if (typeof c.requestRender === 'function') c.requestRender();
-        notify('填充 ' + res.painted + ' 个像素');
+        notify(t('board.bucket.done', { n: res.painted }));
         return true;
     }
 
@@ -1235,7 +1258,7 @@ export function mount(el, ctx) {
         lsDel(LS_BRUSH + brushId);
         syncParams();
         scheduleCursor();
-        notify('已恢复「' + brushById(brushId).name + '」默认参数');
+        notify(t('board.param.reset', { name: brushById(brushId).name }));
     }
 
     /* ── 工具条：统一点击委托（bar / pal / pop 都在 root 里） ── */
@@ -1284,22 +1307,22 @@ export function mount(el, ctx) {
         const img = texture();
         const ready = sizeCmdReady();
         const why = !ready
-            ? '尺寸命令尚未接线（W19 task-29 落地后可用）'
+            ? t('board.size.notWired')
             : !img
-                ? '当前时刻还没有纹理：先点「纹理」新建一张'
+                ? t('board.size.noTexture')
                 : '';
-        const cropTitle = why || '把纹理裁到内容包围盒（去掉四周透明）';
+        const cropTitle = why || t('board.size.cropTitle');
         cropBtn.disabled = !!why;
         cropBtn.title = cropTitle;
         cropBtn.setAttribute('aria-label', cropTitle);
-        const applyTitle = why || '按当前尺寸重设纹理画布';
+        const applyTitle = why || t('board.size.applyTitle');
         applySizeBtn.disabled = !!why;
         applySizeBtn.title = applyTitle;
         applySizeBtn.setAttribute('aria-label', applyTitle);
         alignSel.disabled = !ready;
         alignSel.title = ready
-            ? '重设尺寸时旧内容放在新画布的位置'
-            : '尺寸命令尚未接线（W19 task-29 落地后可用）';
+            ? t('board.size.alignTitle')
+            : t('board.size.notWired');
         alignSel.setAttribute('aria-label', alignSel.title);
         sizeW.disabled = !!why;
         sizeH.disabled = !!why;
@@ -1318,29 +1341,30 @@ export function mount(el, ctx) {
     });
 
     root.addEventListener('click', (e) => {
-        const t = e.target && e.target.closest ? e.target : null;
-        if (!t) return;
+        // 变量名不能叫 t —— 那是本模块从 i18n 导入的翻译函数，会被遮蔽
+        const tgt = e.target && e.target.closest ? e.target : null;
+        if (!tgt) return;
 
-        const chip = t.closest('.bd-brush');
+        const chip = tgt.closest('.bd-brush');
         if (chip) {
             selectBrush(chip.dataset.brush);
             return;
         }
 
-        const cell = t.closest('.bd-pal-cell');
+        const cell = tgt.closest('.bd-pal-cell');
         if (cell) {
             applyColor(cell.dataset.color);
             closePal();
             return;
         }
 
-        if (t.closest('.bd-swatch')) {
+        if (tgt.closest('.bd-swatch')) {
             if (pal.hidden) openPal();
             else closePal();
             return;
         }
 
-        const a = t.closest('[data-act]');
+        const a = tgt.closest('[data-act]');
         if (!a) return;
         switch (a.dataset.act) {
             case 'pick':
@@ -1395,15 +1419,15 @@ export function mount(el, ctx) {
                 const placed = made && obj && typeof c.placeDrawing === 'function'
                     ? c.placeDrawing(obj.id, timeNow(), made)
                     : false;
-                if (!made) notify('新建纹理失败');
-                else if (placed) notify('已新建纹理并绑定到当前时刻');
-                else notify('已新建纹理（进了纹理库，这个时刻还没放上去）');
+                if (!made) notify(t('board.new.failed'));
+                else if (placed) notify(t('board.new.placed'));
+                else notify(t('board.new.only'));
                 afterDocChange();
                 return;
             }
             case 'unique': {
                 const ok = typeof c.makeUniqueCel === 'function' ? c.makeUniqueCel(null, timeNow()) : null;
-                if (ok === false) notify('当前时刻没有可独特化的纹理');
+                if (ok === false) notify(t('board.unique.none'));
                 afterDocChange();
                 return;
             }
@@ -1430,6 +1454,13 @@ export function mount(el, ctx) {
     });
     mirrorSel.addEventListener('change', () => setMirror(mirrorSel.value));
 
+    /** 稳定器按钮的 title：档位是读数，随语言换词但数字始终来自 stabLevel。 */
+    function stabTitle() {
+        return stabLevel === 0
+            ? t('board.stab.titleOff')
+            : t('board.stab.titleOn', { level: stabLevel });
+    }
+
     /**
      * 改稳定器档位：写 localStorage（刷新后还在）、同步给进行中的笔画、刷工具条。
      * 稳定器只影响"往哪落笔"，不进 setDoc，也不进撤销栈。
@@ -1439,7 +1470,7 @@ export function mount(el, ctx) {
         lsSet(LS_STAB, stabLevel);
         if (stab) stab.setLevel(stabLevel);
         paintChrome();
-        notify(stabLevel === 0 ? '笔迹稳定器：关（0）' : '笔迹稳定器：' + stabLevel + ' 档');
+        notify(stabLevel === 0 ? t('board.stab.notifyOff') : t('board.stab.notifyOn', { level: stabLevel }));
     }
     stabBtn.addEventListener('click', () => setStabLevel((stabLevel + 1) % (MAX_LEVEL + 1)));
 
@@ -1587,7 +1618,7 @@ export function mount(el, ctx) {
     function paintChrome() {
         for (const [id, btn] of brushBtns) btn.classList.toggle('is-on', id === brushId);
         swatch.style.background = color;
-        swatch.title = '当前颜色 ' + color + '（点击打开色板）';
+        swatch.title = t('board.swatch.titleColor', { color });
         sizeRange.value = String(Math.round(size));
         if (sizeNum.value !== String(Math.round(size))) sizeNum.value = String(Math.round(size));
         opacityRange.value = String(Math.round(opacity * 100));
@@ -1596,18 +1627,17 @@ export function mount(el, ctx) {
         const stabNum = stabBtn.querySelector('.bd-stab-n');
         if (stabNum && stabNum.textContent !== String(stabLevel)) stabNum.textContent = String(stabLevel);
         stabBtn.classList.toggle('is-on', stabLevel > 0);
-        stabBtn.title = '笔迹稳定器：' + (stabLevel === 0 ? '关（0）' : stabLevel + ' 档')
-            + '（点击切换 0–5 档，Ctrl+滚轮 也能调）';
+        stabBtn.title = stabTitle();
         pickBtn.classList.toggle('is-on', pickMode);
         pickBtn.setAttribute('aria-pressed', pickMode ? 'true' : 'false');
         pickBtn.title = pickMode
-            ? '取色器已开：点画布取色（E 取消）· 右键 / Alt+左键也可临时取色'
-            : '取色器：点画布取一个像素（E）· 画布上右键或 Alt+左键随时取色';
+            ? t('board.pick.titleOn')
+            : t('board.pick.title');
         bucketBtn.classList.toggle('is-on', bucketMode);
         bucketBtn.setAttribute('aria-pressed', bucketMode ? 'true' : 'false');
         bucketBtn.title = bucketMode
-            ? '填充已开：点画布填满同色连通区（G 取消）'
-            : '填充：点画布把同色连通区一次填满（G）';
+            ? t('board.bucket.titleOn')
+            : t('board.bucket.title');
         mirrorSel.value = mirror;
         if (engine && typeof engine.canUndo === 'function') undoBtn.disabled = !engine.canUndo();
         if (engine && typeof engine.canRedo === 'function') redoBtn.disabled = !engine.canRedo();

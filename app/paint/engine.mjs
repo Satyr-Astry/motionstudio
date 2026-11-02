@@ -14,11 +14,11 @@
  */
 
 import { createHistory } from '../core/history.mjs';
-import { ensureCelAt, imageAt, objectById, objectsOf } from '../core/doc-model.mjs';
+import { ensureCelAt, imageAt, objectById, objectsOf, setImageAt } from '../core/doc-model.mjs';
 import { compositeFrame } from './composite.mjs';
 import { createEvaluator, drawEvaluated } from '../core/evaluator.mjs';
-import { createSurface } from './surface.mjs';
-import { captureRegion, restoreRegion, makeRegionCommand, cropFromFull } from './patch.mjs';
+import { createSurface, cloneSurface } from './surface.mjs';
+import { captureRegion, makeRegionCommand, cropFromFull } from './patch.mjs';
 import { makeTip, brushById, tipDiameter, spacingPx, BRUSH_DEFAULTS } from './brush.mjs';
 import { point, spacingPoints, bounds, snapPixel, pressureCurve } from './stroke.mjs';
 import { drawOnion } from './onion.mjs';
@@ -435,12 +435,24 @@ export function createEngine(opts) {
             return null;
         }
 
-        const { obj: nextObj, cel } = ensureCelAt(obj, t, { inherit: true });
-        if (!cel) return null;
+        const res = ensureCelAt(obj, t, { inherit: true });
+        if (!res.cel) return null;
 
         const { w, h } = docSize();
-        if (!cel.image) cel.image = createSurface(w, h);
-        else if (cel.image.width !== w || cel.image.height !== h) fitCanvas(cel.image, w, h);
+        let nextObj = res.obj;
+        let image = res.cel.image;
+
+        if (res.created) {
+            // 新建的这一格继承来的是**上一格的位图引用**（doc-model 里 addDrawing 不克隆，
+            // 同 id 直接复用），在这个引用上落笔会同时改坏上一格。所以先拷一份，
+            // 再用 setImageAt 把新图登记进纹理库、让新关键帧的 drawing 指向它。
+            // 只改 cels 镜像是不行的：cels 是投影，渲染侧读的是 key.drawing。
+            image = image ? cloneSurface(image) : createSurface(Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
+            if (image.width !== w || image.height !== h) fitCanvas(image, w, h);
+            nextObj = setImageAt(nextObj, res.cel.at, image);
+        } else if (image && (image.width !== w || image.height !== h)) {
+            fitCanvas(image, w, h);
+        }
 
         if (nextObj !== obj) {
             // 新建了纹理：把新对象交回外壳写进文档，否则这一格无处安放
@@ -451,7 +463,7 @@ export function createEngine(opts) {
                 warnOnce('no-commit', '新建纹理无法回写文档：外壳需注入 replaceObject(obj)');
             }
         }
-        return { cel, image: cel.image };
+        return { cel: Object.assign({}, res.cel, { image }), image };
     }
 
     function brushDef() {

@@ -2,14 +2,15 @@
 // 这里一个可写控件都没有：时长去「时间与时长」组改，对象的时间通道在对象列表与时间图里改。
 // 信息组只回答一个问题：「这个工程现在有多大」，所以不再放按钮和第二份重复统计。
 import { objectsOf } from '../core/cel.mjs';
+import { t } from '../i18n/index.mjs';
 import { makeGroup, makeValue, totalCels, totalKeys } from './prop-kit.mjs';
 
 export function mount(el, ctx) {
-    const infoBody = makeGroup(el, '信息', 'info');
-    const infoCanvas = makeValue(infoBody, '画布尺寸', '—');
-    const infoLayers = makeValue(infoBody, '对象数', '—');
-    const infoCels = makeValue(infoBody, '纹理数', '—');
-    const infoKeys = makeValue(infoBody, '关键帧数', '—');
+    const infoBody = makeGroup(el, t('props.info.group'), 'info');
+    const infoCanvas = makeValue(infoBody, t('props.info.canvas'), '—');
+    const infoLayers = makeValue(infoBody, t('props.info.objects'), '—');
+    const infoCels = makeValue(infoBody, t('props.info.textures'), '—');
+    const infoKeys = makeValue(infoBody, t('props.info.keys'), '—');
     infoKeys.classList.add('prop-kf-count'); // panels.css：强调色 + 小字号
 
     function refresh() {

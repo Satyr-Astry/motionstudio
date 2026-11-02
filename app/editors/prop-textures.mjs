@@ -13,6 +13,7 @@ import { icon } from '../core/icons.mjs';
 import { drawingsOf } from '../core/doc-model.mjs';
 import { textureAt, textureIndexOfTime, textureTimes } from '../core/textures.mjs';
 import { activeObj, makeGroup, makeNumPair, makeRow, nowTime } from './prop-kit.mjs';
+import { t } from '../i18n/index.mjs';
 
 /**
  * 纹理画布的单边上限。与 shell 侧 `resizeTexture` 的钳制口径（app/shell/app.mjs:859
@@ -21,36 +22,40 @@ import { activeObj, makeGroup, makeNumPair, makeRow, nowTime } from './prop-kit.
  */
 export const TEXTURE_SIZE_MAX = 4096;
 
-/** 对齐三档：重设尺寸时旧内容落在新画布的位置。值名与 shell 的 alignOffset 一致。 */
+/**
+ * 对齐三档：重设尺寸时旧内容落在新画布的位置。值名与 shell 的 alignOffset 一致；
+ * 第二项是**词条键**，取词在渲染处（模块级的表在 import 时就求值了，不能在这里调 t）。
+ */
 export const TEXTURE_ALIGN = [
-    ['nw', '左上'],
-    ['c', '居中'],
-    ['se', '右下'],
+    ['nw', 'props.tex.align.nw'],
+    ['c', 'props.tex.align.c'],
+    ['se', 'props.tex.align.se'],
 ];
 
-/** 没有纹理时的说明行（空态只说明下一步，不解释概念）。 */
-export const EMPTY_TEXTURE_TEXT = '这个对象还没有纹理，点「新建纹理」开始画';
+/** 没有纹理时的说明行（空态只说明下一步，不解释概念）。这里是词条键，取词在渲染处。 */
+export const EMPTY_TEXTURE_KEY = 'props.tex.empty';
 
 /**
  * 四个动作。图标名必须存在于 core/icons.mjs 的 ICON_NAMES（测试守这一点），
  * 否则真机上是一个空按钮 —— data-icon-missing 只在控制台里喊，用户看不见。
+ * `titleKey` 同理是词条键。
  */
 export const TEXTURE_ACTIONS = [
-    { id: 'new', icon: 'image-plus', title: '新建纹理' },
-    { id: 'unique', icon: 'copy', title: '独特化成新图' },
-    { id: 'delete', icon: 'trash', title: '删除这张纹理' },
-    { id: 'trim', icon: 'crop-content', title: '裁到内容' },
+    { id: 'new', icon: 'image-plus', titleKey: 'props.tex.action.new' },
+    { id: 'unique', icon: 'copy', titleKey: 'props.tex.action.unique' },
+    { id: 'delete', icon: 'trash', titleKey: 'props.tex.action.delete' },
+    { id: 'trim', icon: 'crop-content', titleKey: 'props.tex.action.trim' },
 ];
 
-/** 动作的悬停说明（无纹理/无对象时会被「为什么不能点」替换掉）。 */
+/** 动作的悬停说明（无纹理/无对象时会被「为什么不能点」替换掉）。值同样是词条键。 */
 export const ACTION_HINTS = {
-    new: '在当前时刻绑定一张新纹理',
-    unique: '复制当前这张：之后改它不影响别的时刻',
-    delete: '从纹理库里删掉当前这张（至少保留一张）',
-    trim: '把纹理裁到内容包围盒，去掉四周透明',
+    new: 'props.tex.hint.new',
+    unique: 'props.tex.hint.unique',
+    delete: 'props.tex.hint.delete',
+    trim: 'props.tex.hint.trim',
 };
 
-/** 「共 N 张 · 当前第 k 张 · 曝光 M 处」里的量：一次算清，DOM 侧只负责排版。 */
+/** 「共 N 张 · 当前第 k 张 · 曝光 M 处」里的量：一次算清，DOM 侧只负责排版（key + vars，取词在渲染处）。 */
 export function textureSummary(obj, t) {
     const list = obj ? textureTimes(obj) : [];
     const exposures = list.length;
@@ -59,7 +64,7 @@ export function textureSummary(obj, t) {
     const count = obj ? drawingsOf(obj).length : 0;
     const index = obj ? textureIndexOfTime(obj, t) : -1;
     if (!count) {
-        return { count: 0, exposures, index: -1, empty: true, text: EMPTY_TEXTURE_TEXT };
+        return { count: 0, exposures, index: -1, empty: true, key: EMPTY_TEXTURE_KEY, vars: {} };
     }
     const image = textureAt(obj, t);
     if (!image) {
@@ -69,7 +74,8 @@ export function textureSummary(obj, t) {
             exposures,
             index: -1,
             empty: true,
-            text: '共 ' + count + ' 张 · 曝光 ' + exposures + ' 处 · 当前时刻没有曝光',
+            key: 'props.tex.summary.noExposure',
+            vars: { count, exposures },
         };
     }
     // index 是 0 起；用户看到的「第 k 张」从 1 起。命中不到时按第 1 张说。
@@ -79,7 +85,8 @@ export function textureSummary(obj, t) {
         exposures,
         index: k - 1,
         empty: false,
-        text: '共 ' + count + ' 张 · 当前第 ' + k + ' 张 · 曝光 ' + exposures + ' 处',
+        key: 'props.tex.summary.count',
+        vars: { count, k, exposures },
     };
 }
 
@@ -106,18 +113,18 @@ export function trimPayload() {
 }
 
 /**
- * 动作的「为什么现在点了没结果」：返回空串表示可以走正路。
+ * 动作的「为什么现在点了没结果」：返回空串表示可以走正路，否则返回**词条键**（取词在调用处）。
  * 这里只判与文档结构有关的原因；尺寸命令是否接线由尺寸控件自己的 why 负责。
- * 注意：动作按钮**不置灰成不可点**（不可用动作只做视觉置灰、仍可点，让守卫路径报中文提示
+ * 注意：动作按钮**不置灰成不可点**（不可用动作只做视觉置灰、仍可点，让守卫路径报提示
  * —— 这是 layers.mjs:879 立下的原则，同一条规则在这里复用）。
  */
 export function actionBlocked(id, state) {
     const hasObj = !!(state && state.hasObj);
     const count = (state && state.count) || 0;
-    if (!hasObj) return '还没有可编辑的对象';
-    if (id === 'unique' && !count) return '当前时刻没有可独特化的纹理';
-    if (id === 'delete' && !count) return '至少要保留一张纹理';
-    if (id === 'trim' && !count) return '当前时刻还没有纹理：先点「新建纹理」新建一张';
+    if (!hasObj) return 'props.tex.block.noObject';
+    if (id === 'unique' && !count) return 'props.tex.block.unique';
+    if (id === 'delete' && !count) return 'props.tex.block.delete';
+    if (id === 'trim' && !count) return 'props.tex.block.trim';
     return '';
 }
 
@@ -146,7 +153,9 @@ export function workspaceSwitchTarget(ctx) {
 }
 
 export function mount(el, ctx) {
-    const body = makeGroup(el, '纹理', 'textures');
+    // runNew/runUnique/runDelete 的第二个参数叫 `t`（时间），与词条函数撞名；挂载内部统一走 tr。
+    const tr = t;
+    const body = makeGroup(el, tr('props.tex.group'), 'textures');
     const has = (name) => typeof ctx[name] === 'function';
     const say = (msg) => {
         if (typeof ctx.notify === 'function') ctx.notify(msg);
@@ -154,65 +163,65 @@ export function mount(el, ctx) {
 
     /* ① 缩略图：40×40，双击进画板。canvas 的 CSS 尺寸由 textures.css 钉死，
        内部分辨率跟 CSS 同尺寸 —— 它是缩略图，不需要 hidpi 重建。 */
-    const thumbField = makeRow(body, '缩略图');
+    const thumbField = makeRow(body, tr('props.tex.thumb'));
     const thumb = document.createElement('canvas');
     thumb.className = 'ptx-thumb';
     thumb.width = 40;
     thumb.height = 40;
-    thumb.title = '双击进画板：把这张纹理画下去';
+    thumb.title = tr('props.tex.thumbTitle');
     thumbField.appendChild(thumb);
 
     /* ② 一张 / 第几张 / 几处曝光 —— 三件事在同一行里说清，不拆成三行数值。 */
-    const countField = makeRow(body, '数量');
+    const countField = makeRow(body, tr('props.tex.count'));
     const summary = document.createElement('span');
     summary.className = 'ptx-summary';
     summary.textContent = '—';
     countField.appendChild(summary);
 
     /* ③ 四个动作。图标按钮沿用 .ms-icon-btn 的房子样式，title/aria-label 一律带中文全称。 */
-    const actField = makeRow(body, '动作');
+    const actField = makeRow(body, tr('props.tex.actions'));
     const actBtns = new Map();
     for (const act of TEXTURE_ACTIONS) {
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'ms-icon-btn ptx-act';
         b.dataset.act = act.id;
-        b.innerHTML = icon(act.icon, { label: act.title });
-        b.title = act.title + '：' + (ACTION_HINTS[act.id] || '');
-        b.setAttribute('aria-label', act.title);
+        b.innerHTML = icon(act.icon, { label: tr(act.titleKey) });
+        b.title = tr('props.tex.actionTitle', { action: tr(act.titleKey), hint: tr(ACTION_HINTS[act.id]) });
+        b.setAttribute('aria-label', tr(act.titleKey));
         actField.appendChild(b);
         actBtns.set(act.id, b);
     }
 
     /* ④ 画布尺寸两个数字框（1–4096）。宽度用 prop-kit 的等分写法，68px 两个并排会顶出面板。 */
-    const sizePair = makeNumPair(body, '画布尺寸', { min: 1, max: TEXTURE_SIZE_MAX, step: 1, key: 'ptx-size' });
+    const sizePair = makeNumPair(body, tr('props.tex.size'), { min: 1, max: TEXTURE_SIZE_MAX, step: 1, key: 'ptx-size' });
     const sizeW = sizePair.w;
     const sizeH = sizePair.h;
     // 审计抓「空值且无 placeholder/aria-label 的输入框」；这两个框天然可能为空（无纹理时）
-    sizeW.setAttribute('aria-label', '纹理宽度（像素）');
-    sizeH.setAttribute('aria-label', '纹理高度（像素）');
+    sizeW.setAttribute('aria-label', tr('props.tex.widthAria'));
+    sizeH.setAttribute('aria-label', tr('props.tex.heightAria'));
 
     /* ⑤ 尺寸重设 + 对齐三档同一行：44px 标签 + 「应用」按钮 + 三个分段在 292px 面板里放得下
        （行标签叫「重设」、按钮叫「应用」—— v11 前两处都叫「重设」，一行动词重复读着别扭）
        （.prop-row 自带 flex-wrap，真挤了也是换行，不会横向溢出）。 */
-    const applyField = makeRow(body, '重设');
+    const applyField = makeRow(body, tr('props.tex.resize'));
     const applyBtn = document.createElement('button');
     applyBtn.type = 'button';
     applyBtn.className = 'prop-seg ptx-apply';
-    applyBtn.textContent = '应用';
-    applyBtn.title = '按上面的宽 × 高重设纹理画布（旧内容按对齐档落位）';
+    applyBtn.textContent = tr('props.tex.apply');
+    applyBtn.title = tr('props.tex.applyTitle');
     applyBtn.setAttribute('aria-label', applyBtn.title);
     applyField.appendChild(applyBtn);
     let align = 'c';
     let syncedSig = '';
     const alignBtns = new Map();
-    for (const [val, text] of TEXTURE_ALIGN) {
+    for (const [val, key] of TEXTURE_ALIGN) {
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'prop-seg ptx-align';
         b.dataset.val = val;
-        b.textContent = text;
-        b.title = '对齐：' + text;
+        b.textContent = tr(key);
+        b.title = tr('props.tex.alignTitle', { align: tr(key) });
         b.setAttribute('aria-label', b.title);
         applyField.appendChild(b);
         alignBtns.set(val, b);
@@ -254,25 +263,31 @@ export function mount(el, ctx) {
             // 只做视觉置灰，不 disabled：点下去仍会走守卫并报中文原因（layers.mjs:879 的原则）
             b.classList.toggle('is-off', !!blocked);
             const full = TEXTURE_ACTIONS.find((a) => a.id === id);
-            b.title = blocked || (full ? full.title + '：' + (ACTION_HINTS[id] || '') : id);
-            b.setAttribute('aria-label', blocked || (full ? full.title : id));
+            b.title = blocked
+                ? tr(blocked)
+                : full
+                    ? tr('props.tex.actionTitle', { action: tr(full.titleKey), hint: tr(ACTION_HINTS[id]) })
+                    : id;
+            b.setAttribute('aria-label', blocked ? tr(blocked) : full ? tr(full.titleKey) : id);
         }
     }
 
     function syncSize(img) {
         const ready = has('resizeTexture');
         const why = !ready
-            ? '尺寸命令尚未接线（W19 task-29 落地后可用）'
+            ? tr('props.tex.block.notWired')
             : !img
-                ? '当前时刻还没有纹理：先点「新建纹理」新建一张'
+                ? tr('props.tex.block.trim')
                 : '';
-        const applyTitle = why || '按上面的宽 × 高重设纹理画布（旧内容按对齐档落位）';
+        const applyTitle = why || tr('props.tex.applyTitle');
         applyBtn.disabled = !!why;
         applyBtn.title = applyTitle;
         applyBtn.setAttribute('aria-label', applyTitle);
         for (const [val, b] of alignBtns) {
-            const lbl = (TEXTURE_ALIGN.find(([k]) => k === val) || [val, val])[1];
-            const title = ready ? '对齐：' + lbl : '尺寸命令尚未接线（W19 task-29 落地后可用）';
+            const lblKey = (TEXTURE_ALIGN.find(([k]) => k === val) || [val, val])[1];
+            const title = ready
+                ? tr('props.tex.alignTitle', { align: tr(lblKey) })
+                : tr('props.tex.block.notWired');
             b.disabled = !ready;
             b.title = title;
             b.setAttribute('aria-label', title);
@@ -295,8 +310,8 @@ export function mount(el, ctx) {
         const img = currentImage();
         const sum = textureSummary(obj, typeof ctx.time === 'function' ? nowTime(ctx) : 0);
         paintThumb(img);
-        summary.textContent = obj ? sum.text : '—';
-        summary.title = obj ? sum.text : '还没有对象';
+        summary.textContent = obj ? tr(sum.key, sum.vars) : '—';
+        summary.title = obj ? tr(sum.key, sum.vars) : tr('props.tex.noObject');
         syncActions(sum);
         syncSize(img);
     }
@@ -305,26 +320,26 @@ export function mount(el, ctx) {
 
     function runNew(obj, t) {
         if (!has('newDrawing')) {
-            say('新建纹理命令尚未接线');
+            say(tr('props.tex.say.newNotWired'));
             return false;
         }
         const made = ctx.newDrawing(obj.id);
         if (!made) {
-            say('新建纹理失败');
+            say(tr('props.tex.say.fail'));
             return false;
         }
         const placed = has('placeDrawing') && ctx.placeDrawing(obj.id, t, made) === true;
-        say(placed ? '已新建纹理并绑定到当前时刻' : '已新建纹理（进了纹理库，这个时刻还没放上去）');
+        say(placed ? tr('props.tex.say.created') : tr('props.tex.say.createdLib'));
         return true;
     }
 
     function runUnique(obj, t) {
         if (!has('makeUniqueCel')) {
-            say('独特化命令尚未接线');
+            say(tr('props.tex.say.uniqueNotWired'));
             return false;
         }
         if (ctx.makeUniqueCel(obj.id, t) !== true) {
-            say('当前时刻没有可独特化的纹理');
+            say(tr('props.tex.block.unique'));
             return false;
         }
         return true;
@@ -335,11 +350,11 @@ export function mount(el, ctx) {
         const cur = has('currentDrawingId') ? ctx.currentDrawingId(obj.id) : null;
         const id = deleteCandidateId(ids, cur, null);
         if (!id) {
-            say('至少要保留一张纹理');
+            say(tr('props.tex.block.delete'));
             return false;
         }
         if (!has('removeDrawing') || ctx.removeDrawing(obj.id, id) !== true) {
-            say('至少要保留一张纹理');
+            say(tr('props.tex.block.delete'));
             return false;
         }
         return true;
@@ -347,7 +362,7 @@ export function mount(el, ctx) {
 
     function runTrim(obj) {
         if (!has('resizeTexture')) {
-            say('尺寸命令尚未接线（W19 task-29 落地后可用）');
+            say(tr('props.tex.block.notWired'));
             return false;
         }
         // 成功/失败文案由 shell 的 resizeTexture 自己 flash（'已裁到内容：W × H' 等），这里不重复
@@ -356,7 +371,7 @@ export function mount(el, ctx) {
 
     function runSize(obj, payload) {
         if (!has('resizeTexture')) {
-            say('尺寸命令尚未接线（W19 task-29 落地后可用）');
+            say(tr('props.tex.block.notWired'));
             return false;
         }
         return ctx.resizeTexture(obj.id, payload) === true;
@@ -365,12 +380,12 @@ export function mount(el, ctx) {
     function applySizeFromInputs() {
         const payload = resizePayload(sizeW.value, sizeH.value, align);
         if (!payload) {
-            say('尺寸必须是 1–4096 之间的数字');
+            say(tr('props.tex.say.sizeInvalid'));
             return false;
         }
         const obj = targetObj();
         if (!obj) {
-            say('还没有可编辑的对象');
+            say(tr('props.tex.block.noObject'));
             return false;
         }
         return runSize(obj, payload);
@@ -385,7 +400,7 @@ export function mount(el, ctx) {
         const via = workspaceSwitchTarget(ctx);
         if (via === 'ctx') ctx.setWorkspace('draw');
         else if (via === 'motionStudio') globalThis.motionStudio.setWorkspace('draw');
-        else say('没法切到画板：外壳没有暴露 setWorkspace');
+        else say(tr('props.tex.say.noWorkspace'));
     });
 
     for (const [id, b] of actBtns) {
@@ -395,7 +410,7 @@ export function mount(el, ctx) {
             const sum = textureSummary(obj, t);
             const blocked = actionBlocked(id, { hasObj: !!obj, count: sum.count });
             if (blocked) {
-                say(blocked);
+                say(tr(blocked));
                 return;
             }
             if (id === 'new') runNew(obj, t);

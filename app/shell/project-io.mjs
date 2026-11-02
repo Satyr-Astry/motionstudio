@@ -32,15 +32,19 @@ import {
     draftName,
 } from '../core/project-guard.mjs';
 import * as store from './project-store.mjs';
-import { buildSpritesheet, buildSpritesheets, phaserJSON, sheetToDataURLAsync } from './spritesheet.mjs';
+import { asepriteJSON, buildSpritesheets, phaserJSON, sheetToDataURLAsync } from './spritesheet.mjs';
 import { icon } from '../core/icons.mjs';
 import { pickVideoMime, videoBitrate, videoCanvasSize, videoFps, videoFrameCount, videoSeconds } from './video-plan.mjs';
+import { t } from '../i18n/index.mjs';
 import {
     EXPORT_CHUNK,
     chunkPlan,
+    effectiveFps,
     normalizeExportOptions,
     sampleTimesFor,
 } from '../core/export-options.mjs';
+import { encodeGif } from '../core/gif.mjs';
+import { canEncodeApng, encodeApng } from '../core/apng.mjs';
 import {
     DEFAULT_W,
     DEFAULT_H,
@@ -57,7 +61,6 @@ import {
     updateChrome,
     markDirty,
     notifyProjects,
-    onProjectsChange,
     project,
     engine,
     prefSnapshot,
@@ -88,6 +91,38 @@ let savedAtMs = 0;
  * 不挡一下的话，用户在三选面板上按 Esc 会把整个项目库也一起关掉。
  */
 let askDepth = 0;
+
+/* ───────────── 动作结果的三件套：做成了 / 失败了 / 用户取消 ───────────── */
+
+/**
+ * 导出与存档的每条路都返回这个形状，而不是 null/true 混着来。
+ *
+ * 为什么值得统一：调用方（项目库面板、导出对话框、命令面板）拿到的若是裸
+ * null，就只能猜「是取消了？是桥不在？还是失败了？」—— 猜错的两种结果都很糟：
+ * 把失败当取消（用户以为是自己点的取消，其实是没存下来），
+ * 或把失败当成功（弹「已导出」，磁盘上什么都没有）。
+ */
+function okResult(extra) {
+    return Object.assign({ ok: true }, extra || {});
+}
+
+function failResult(text, extra) {
+    return Object.assign({ ok: false, error: String(text || t('shell.result.failed')) }, extra || {});
+}
+
+function canceledResult(text) {
+    return { ok: false, canceled: true, error: String(text || t('shell.result.canceled')) };
+}
+
+/**
+ * 报一条「没做成」，并统一走错误档提示（停留更久、不被下一条普通消息顶掉）。
+ * 文案规矩：先说没存下来/没导出，再说为什么，最后说补救动作。
+ */
+function fail(text) {
+    const msg = String(text || t('shell.result.failed'));
+    flash(msg, 'error');
+    return failResult(msg);
+}
 
 /**
  * 逐帧 PNG 导出。
@@ -124,7 +159,7 @@ async function exportWithDialog(kind, preset) {
         mod = await import('../editors/export-dialog.mjs');
     } catch (err) {
         console.error('[shell] 导出对话框加载失败：', err);
-        flash('导出对话框加载失败');
+        flash(t('shell.export.dialogFailed'), 'error');
         return null;
     }
     const opened = await mod.openExportDialog({
@@ -144,9 +179,46 @@ async function exportWithDialog(kind, preset) {
                 if (ui && typeof ui.progress === 'function') ui.progress(0, 1);
                 const r = await exportSpritesheet({ dir: opts.dir, scale: opts.scale, background: opts.background, bgColor: opts.bgColor });
                 if (ui && typeof ui.progress === 'function') ui.progress(1, 1);
-                return r ? { ok: true, res: r } : { ok: false, error: '导出精灵图失败' };
+                if (r && r.ok) return { ok: true, message: t('shell.sheet.done'), res: r };
+                return { ok: false, canceled: !!(r && r.canceled), error: (r && r.error) || t('shell.sheet.failed') };
             }
-            const r = await recordVideo({
+            if (which === 'gif') {
+                // 量化 + LZW 是一次性的（没有分帧进度可比），进度条只报「开始 / 完成」
+                if (ui && typeof ui.progress === 'function') ui.progress(0, 1);
+                const r = await exportGif({
+                    scale: opts.scale,
+                    fps: opts.fps,
+                    from: opts.from,
+                    to: opts.to,
+                    background: opts.background,
+                    bgColor: opts.bgColor,
+                    shouldCancel: ui && ui.canceled,
+                });
+                if (ui && typeof ui.progress === 'function') ui.progress(1, 1);
+                if (r && r.ok) return { ok: true, message: r.message || t('export.gif.done', { n: r.count || 0, size: Math.round((r.size || 0) / 1024) }), res: r };
+                return { ok: false, canceled: !!(r && r.canceled), error: (r && r.error) || t('export.gif.saveFailedNoReason') };
+            }
+            if (which === 'apng') {
+                // 编码是流式 deflate，也没有分帧进度可言：同样只报「开始 / 完成」
+                if (ui && typeof ui.progress === 'function') ui.progress(0, 1);
+                const r = await exportApng({
+                    scale: opts.scale,
+                    fps: opts.fps,
+                    from: opts.from,
+                    to: opts.to,
+                    background: opts.background,
+                    bgColor: opts.bgColor,
+                    shouldCancel: ui && ui.canceled,
+                });
+                if (ui && typeof ui.progress === 'function') ui.progress(1, 1);
+                if (r && r.ok) return { ok: true, message: r.message || t('export.apng.done', { n: r.count || 0, size: Math.round((r.size || 0) / 1024) }), res: r };
+                return { ok: false, canceled: !!(r && r.canceled), error: (r && r.error) || t('export.apng.saveFailedNoReason') };
+            }
+            // WebM：录完必须**真的存下来**。以前这里只把字节留在内存里，却回了一句
+            // 「已录制 N 帧（WebM 在内存里）」当成功 —— 对话框一关字节就没了，
+            // 但用户看到的是「导出完成」。现在统一走 exportVideo：它录完弹保存对话框，
+            // 并把「存下来了 / 用户取消 / 没存下来」三种结局分别带回来。
+            const r = await exportVideo({
                 fps: opts.fps || 0,
                 seconds: Math.max(0, opts.to - opts.from),
                 from: opts.from,
@@ -154,8 +226,18 @@ async function exportWithDialog(kind, preset) {
                     if (ui && typeof ui.progress === 'function') ui.progress(done, total);
                 },
             });
-            if (!r || r.ok === false) return { ok: false, error: (r && r.error) || '录制失败' };
-            return { ok: true, message: '已录制 ' + (r.frames || 0) + ' 帧（WebM 在内存里，另存由上层决定）', res: r };
+            if (!r || r.ok === false) {
+                return { ok: false, canceled: !!(r && r.canceled), error: (r && r.error) || t('shell.video.recordFailed') };
+            }
+            if (!r.file) {
+                // 回到了 ok:true 却没路径 = 没落盘。不能当成功。
+                return { ok: false, error: t('shell.video.noPath') };
+            }
+            return {
+                ok: true,
+                message: t('shell.video.done', { frames: r.frames || 0, kb: Math.round((r.size || 0) / 1024), path: r.file }),
+                res: r,
+            };
         },
     });
     return opened;
@@ -186,29 +268,29 @@ function exportFramesLegacy(name) {
         frames.push(cv.toDataURL('image/png'));
     }
     const label = String(name == null ? 'motionstudio' : name);
+    if (!ipc.available()) {
+        return fail(t('shell.frames.noBridge', { n: frames.length }));
+    }
     const res = ipc.exportFrames(label, frames);
     if (res == null) {
-        flash('导出接口不可用（非桌面环境）');
-        updateChrome();
-        return null;
+        return fail(t('shell.frames.noResponsePreload', { n: frames.length }));
     }
+    // 主进程回了 ok:false 也是失败：老代码只看 null，把「写了 0 个文件」当成了导出成功
+    const judge = (r) => {
+        if (r == null) return fail(t('shell.frames.noResponse', { n: frames.length }));
+        if (r.ok === false) {
+            return fail(r.canceled ? t('shell.export.canceledNoFile') : (r.error || t('shell.export.failedNoFile')));
+        }
+        flash(t('shell.frames.done', { n: frames.length }));
+        return okResult({ frames: frames.length, dir: r.dir });
+    };
     if (res && typeof res.then === 'function') {
-        res.then(
-            () => {
-                flash('已导出 ' + frames.length + ' 帧');
-                updateChrome();
-            },
-            (err) => {
-                console.error('[shell] 导出失败：', err);
-                flash('导出失败');
-                updateChrome();
-            }
-        );
-    } else {
-        flash('已导出 ' + frames.length + ' 帧');
-        updateChrome();
+        return res.then(judge, (err) => {
+            console.error('[shell] 导出失败：', err);
+            return fail(t('shell.export.failedWithMsg', { msg: (err && err.message) || err }));
+        });
     }
-    return res;
+    return judge(res);
 }
 
 /**
@@ -223,9 +305,10 @@ async function exportFramesChunked(raw) {
     if (!doc || typeof document === 'undefined') return null;
     const opts = normalizeExportOptions(raw, doc);
     if (!opts.count) {
-        flash('时间范围为空，没有可导出的帧');
-        updateChrome();
-        return null;
+        return fail(t('shell.frames.emptyRange'));
+    }
+    if (!ipc.available()) {
+        return fail(t('shell.frames.noBridgeShort'));
     }
     const cv = document.createElement('canvas');
     cv.width = opts.width;
@@ -238,7 +321,7 @@ async function exportFramesChunked(raw) {
     for (let c = 0; c < plans.length; c++) {
         if (typeof raw.shouldCancel === 'function' && raw.shouldCancel()) {
             finishExport({ dir, written, total: opts.count, canceled: true });
-            return { ok: false, canceled: true, written, total: opts.count, dir };
+            return Object.assign(canceledResult(t('shell.export.canceledWritten', { written })), { written, total: opts.count, dir });
         }
         const plan = plans[c];
         const frames = [];
@@ -251,14 +334,12 @@ async function exportFramesChunked(raw) {
             ipc.exportFrames(projectLabel(), frames, { dir, startIndex: plan.start, total: opts.count })
         );
         if (!res) {
-            flash('导出接口不可用（非桌面环境）');
-            updateChrome();
-            return null;
+            return fail(t('shell.frames.partialNoResponse', { written }));
         }
         if (res.ok === false) {
-            flash(res.error || '导出失败');
-            updateChrome();
-            return null;
+            return fail(res.canceled
+                ? t('shell.export.canceledWritten', { written })
+                : t('shell.export.failedWritten', { msg: res.error || t('shell.export.failed'), written }));
         }
         if (res.dir) dir = res.dir;
         written += Number(res.count) || 0;
@@ -269,7 +350,7 @@ async function exportFramesChunked(raw) {
         await new Promise((resolve) => setTimeout(resolve, 0));
     }
     finishExport({ dir, written, total: opts.count, canceled: false, openAfter: opts.openAfter });
-    return { ok: true, dir, written, total: opts.count };
+    return okResult({ dir, written, total: opts.count });
 }
 
 /** 背景色：合成完成后在底下垫一层（`destination-over` 不会盖住已画的内容）。 */
@@ -285,9 +366,12 @@ function fillBehind(cv, color) {
 
 function finishExport(res) {
     if (res.canceled) {
-        flash('已取消导出（已写出 ' + res.written + ' 帧）');
+        flash(t('shell.export.canceledWritten', { written: res.written }));
+    } else if (!res.written) {
+        // 主进程回 ok:true 但一个文件都没写：不能报「已导出 0 帧」了事
+        flash(t('shell.export.zeroWritten'), 'error');
     } else {
-        flash('已导出 ' + res.written + ' 帧（共 ' + res.total + '）');
+        flash(t('shell.frames.doneTotal', { n: res.written, total: res.total }));
         // 勾了「完成后打开所在文件夹」才开；浏览器里 ipc 没桥，openFolder 自己返回 null
         if (res.openAfter && res.dir) ipc.openFolder(res.dir);
     }
@@ -295,13 +379,139 @@ function finishExport(res) {
     if (CTX && typeof CTX.requestRender === 'function') CTX.requestRender();
 }
 
+/**
+ * 导出 GIF：**一张能直接发出去的透明动图**。
+ *
+ * 存在的理由（定位问题）：帧序列要打包、精灵图要写代码才能播、WebM 是实时录制且大概率
+ * 掉帧 —— 这三样都不是「把它发给朋友看看」能用的东西。GIF 是唯一一个「双击就能播、
+ * 贴进聊天框会动」的格式，代价是三条硬限制（都已写进 `app/core/gif.mjs` 的文件头）：
+ * 透明只有 1 位、最多 256 色、比 WebM 大得多。
+ *
+ * 与其它三条通道共用同一套选项（缩放 / 帧率 / 时间范围 / 背景），所以「导出对话框里
+ * 调好的参数」对 GIF 一样生效；`dither` 是 GIF 独有的一项。
+ *
+ * 全程在本地做（量化 + LZW 都是纯函数），不经过主进程的编码器 —— 主进程只负责
+ * 把字节落盘（`ms:save-binary`），所以浏览器里也能用。
+ */
+async function exportGif(raw) {
+    const o = raw || {};
+    const doc = state.doc;
+    if (!doc || typeof document === 'undefined') return null;
+    const opts = normalizeExportOptions(o, doc);
+    if (!opts.count) {
+        return fail(t('export.gif.emptyRange'));
+    }
+    if (!ipc.available()) {
+        return fail(t('export.gif.noBridge'));
+    }
+    const cv = document.createElement('canvas');
+    cv.width = opts.width;
+    cv.height = opts.height;
+    const g = cv.getContext('2d');
+    if (!g || typeof g.getImageData !== 'function') {
+        return fail(t('export.gif.noCanvas'));
+    }
+    const times = sampleTimesFor(opts);
+    const solid = opts.background === 'solid';
+    const frames = [];
+    for (let i = 0; i < opts.count; i++) {
+        if (typeof o.shouldCancel === 'function' && o.shouldCancel()) {
+            return canceledResult(t('export.gif.canceled'));
+        }
+        compositeFrame(cv, doc, times[i], { clear: true });
+        if (solid) fillBehind(cv, opts.bgColor);
+        frames.push(g.getImageData(0, 0, opts.width, opts.height));
+    }
+    // 帧率取「与帧序列同一口径」的有效帧率，别让 GIF 的播放速度和帧序列不一致
+    const fps = effectiveFps(opts, doc);
+    let bytes = null;
+    try {
+        bytes = encodeGif(frames, {
+            delayMs: Math.max(2, Math.round(1000 / Math.max(1, fps))),
+            dither: !!o.dither,
+        });
+    } catch (err) {
+        // 编码器对坏输入抛 RangeError / TypeError；不能让它冒到 IPC 层（那样只会看到「没反应」）
+        return fail(t('export.gif.encodeFailed', { msg: (err && err.message) || err }));
+    }
+    const saved = await ipc.saveBinaryChecked(projectLabel(), bytes, 'gif', t('export.gif.label'));
+    if (!saved || saved.ok !== true) {
+        if (saved && saved.canceled) return canceledResult(t('export.gif.canceledSave'));
+        return fail(t('export.gif.saveFailed', { msg: (saved && saved.error) || t('export.gif.saveFailedNoReason') }));
+    }
+    flash(t('export.gif.done', { n: opts.count, size: Math.round(saved.size / 1024) }));
+    return okResult({ file: saved.file, count: opts.count, size: saved.size });
+}
+
+/**
+ * 导出 APNG（动画 PNG）。
+ *
+ * 与 GIF 的关系：同一份逐帧采样、同一套合成，区别只在编码器。APNG 是
+ * **全彩 + 8 位 alpha**，所以没有 GIF 那三条限制（透明 1 位 / 256 色 / 体积大），
+ * 代价是环境必须有 `CompressionStream`（Node 18+ 与所有现代浏览器都有，
+ * 但 Electron 之外的旧环境不一定 —— 所以先问 `canEncodeApng()` 再动手）。
+ *
+ * 编码是异步的（流式 deflate），所以这个函数是 async；进度没有细分，
+ * 调用方只能看到 0 → 1。
+ */
+async function exportApng(raw) {
+    const o = raw || {};
+    const doc = state.doc;
+    if (!doc || typeof document === 'undefined') return null;
+    const opts = normalizeExportOptions(o, doc);
+    if (!opts.count) {
+        return fail(t('export.apng.emptyRange'));
+    }
+    if (!ipc.available()) {
+        return fail(t('export.apng.noBridge'));
+    }
+    if (!canEncodeApng()) {
+        return fail(t('export.apng.noSupport'));
+    }
+    const cv = document.createElement('canvas');
+    cv.width = opts.width;
+    cv.height = opts.height;
+    const g = cv.getContext('2d');
+    if (!g || typeof g.getImageData !== 'function') {
+        return fail(t('export.apng.noCanvas'));
+    }
+    const times = sampleTimesFor(opts);
+    const solid = opts.background === 'solid';
+    const frames = [];
+    for (let i = 0; i < opts.count; i++) {
+        if (typeof o.shouldCancel === 'function' && o.shouldCancel()) {
+            return canceledResult(t('export.apng.canceled'));
+        }
+        compositeFrame(cv, doc, times[i], { clear: true });
+        if (solid) fillBehind(cv, opts.bgColor);
+        const img = g.getImageData(0, 0, opts.width, opts.height);
+        frames.push({ width: opts.width, height: opts.height, data: img.data });
+    }
+    const fps = effectiveFps(opts, doc);
+    let bytes = null;
+    try {
+        bytes = await encodeApng(frames, {
+            delayMs: Math.max(1, Math.round(1000 / Math.max(1, fps))),
+        });
+    } catch (err) {
+        // 编码器对坏输入抛 RangeError / TypeError；不能让它冒到 IPC 层（那样只会看到「没反应」）
+        return fail(t('export.apng.encodeFailed', { msg: (err && err.message) || err }));
+    }
+    const saved = await ipc.saveBinaryChecked(projectLabel(), bytes, 'png', t('export.apng.label'));
+    if (!saved || saved.ok !== true) {
+        if (saved && saved.canceled) return canceledResult(t('export.apng.canceledSave'));
+        return fail(t('export.apng.saveFailed', { msg: (saved && saved.error) || t('export.apng.saveFailedNoReason') }));
+    }
+    flash(t('export.apng.done', { n: opts.count, size: Math.round(saved.size / 1024) }));
+    return okResult({ file: saved.file, count: opts.count, size: saved.size });
+}
+
 /** 导出精灵图（图片 + 帧表），落盘由主进程 ms:export-sheet 负责。 */
 async function exportSpritesheet(opts) {
     const o = opts || {};
     if (!state.doc || typeof document === 'undefined') return null;
     if (typeof buildSpritesheets !== 'function') {
-        flash('精灵图模块未加载');
-        return null;
+        return fail(t('shell.sheet.moduleMissing'));
     }
 
     const n = normalizeExportOptions(o, state.doc);
@@ -322,59 +532,61 @@ async function exportSpritesheet(opts) {
     });
     if (!built.ok) {
         // 预检失败要把原因说清楚（比如「单帧 5000px 超过图集上限」），不能只说「失败」
-        flash(built.reason || '导出精灵图失败');
-        return null;
+        return fail(t('shell.sheet.failedNoFiles', { reason: built.reason || t('shell.sheet.failed') }));
     }
     if (format === 'jpeg' && n.background !== 'color') {
-        flash('JPEG 不支持透明，已用 ' + jpegFill + ' 填底');
+        flash(t('shell.sheet.jpegFill', { fill: jpegFill }));
     }
 
     const images = [];
     for (const one of built.sheets) {
         const dataUrl = await sheetToDataURLAsync(one, mime);
         if (!dataUrl) {
-            flash('精灵图编码失败（' + format + '）');
-            return null;
+            return fail(t('shell.sheet.encodeFailed', { format }));
         }
         images.push({ file: one.file, png: dataUrl });
     }
 
-    // 帧表：自家格式永远写；engine 选 phaser/both 时再写一份 Phaser JSON Hash
+    // 帧表：自家格式永远写；engine 选 phaser / aseprite / both 时再各写一份。
+    // 两种引擎帧表的分张写法完全同构（每张一份、每份只描述自己那张的帧），
+    // 所以抽成一个局部函数，只有生成函数与文件名后缀不同。
     const jsons = [{ file: projectLabel() + '.json', text: JSON.stringify(built.json, null, 2) }];
-    if (n.engine === 'phaser' || n.engine === 'both') {
-        // 分张时每张一份 Phaser 帧表（每份只描述自己那张的帧）
-        const per = built.sheets.map((one) => phaserJSON(Object.assign({}, one, {
+    const pushEngineSheets = (makeJson, suffix) => {
+        const per = built.sheets.map((one) => makeJson(Object.assign({}, one, {
             sheets: [{ file: one.file, width: one.width, height: one.height }],
         }), { image: one.file }));
         if (per.length === 1) {
-            jsons.push({ file: projectLabel() + '.phaser.json', text: JSON.stringify(per[0], null, 2) });
+            jsons.push({ file: projectLabel() + suffix + '.json', text: JSON.stringify(per[0], null, 2) });
         } else {
             per.forEach((json, i) => {
                 jsons.push({
-                    file: projectLabel() + '.phaser-' + (i + 1) + '.json',
+                    file: projectLabel() + suffix + '-' + (i + 1) + '.json',
                     text: JSON.stringify(json, null, 2),
                 });
             });
         }
-    }
+    };
+    if (n.engine === 'phaser' || n.engine === 'both') pushEngineSheets(phaserJSON, '.phaser');
+    if (n.engine === 'aseprite' || n.engine === 'both') pushEngineSheets(asepriteJSON, '.aseprite');
 
+    if (!ipc.available()) {
+        return fail(t('shell.sheet.noBridge'));
+    }
     const res = await Promise.resolve(ipc.exportSheet(projectLabel(), images[0] && images[0].png, jsons[0].text, {
         dir: n.dir || '',
         sheets: images,
         jsons: jsons,
     }));
     if (!res) {
-        flash('导出接口不可用（非桌面环境）');
-        return null;
+        return fail(t('shell.sheet.noResponse'));
     }
     if (res.ok === false) {
-        flash(res.error || (res.canceled ? '已取消导出' : '导出精灵图失败'));
-        return null;
+        return fail(res.canceled ? t('shell.sheet.canceled') : (res.error || t('shell.sheet.failed')));
     }
     const count = built.json && built.json.frames ? built.json.frames.length : 0;
-    const extra = built.sheets.length > 1 ? '，' + built.sheets.length + ' 张图集' : '';
-    flash('已导出精灵图 ' + count + ' 帧' + extra);
-    return res;
+    const extra = built.sheets.length > 1 ? t('shell.sheet.multi', { n: built.sheets.length }) : '';
+    flash(t('shell.sheet.countDone', { n: count, extra }));
+    return okResult({ count, dir: res.dir || n.dir || '', res });
 }
 
 /**
@@ -386,9 +598,10 @@ async function exportSpritesheet(opts) {
 async function exportCurrentFrame(opts) {
     const o = opts || {};
     if (!state.doc || typeof document === 'undefined') return null;
-    if (!ipc || typeof ipc.saveBinary !== 'function') {
-        flash('导出接口不可用（非桌面环境）');
-        return null;
+    // 这里以前写的是 `typeof ipc.saveBinary !== 'function'` —— ipc 是命名空间对象，
+    // 它的每个成员都是函数，这个判断恒为假，等于没判。要问的是「有没有桥」。
+    if (!ipc.available()) {
+        return fail(t('shell.frame.noSaveChannel'));
     }
     const n = normalizeExportOptions(o, state.doc);
     const format = n.format;
@@ -399,8 +612,7 @@ async function exportCurrentFrame(opts) {
     cv.height = Math.max(1, Math.round(state.doc.height || 1));
     const g = cv.getContext('2d');
     if (!g) {
-        flash('取不到画布上下文');
-        return null;
+        return fail(t('shell.frame.noContext'));
     }
     if (format === 'jpeg' || n.background === 'color') {
         g.fillStyle = format === 'jpeg' ? (n.bgColor || '#000000') : n.bgColor;
@@ -412,16 +624,21 @@ async function exportCurrentFrame(opts) {
         : cv.toDataURL(mime);
     const bytes = dataUrlToBytes(dataUrl);
     if (!bytes) {
-        flash('这一帧是空的，导不出图片');
-        return null;
+        return fail(t('shell.frame.empty'));
     }
-    const saved = await ipc.saveBinary(projectLabel() + '-frame-' + String(Math.round(state.time * 1000)) + '.' + ext, bytes, ext, 'PNG 图片');
-    if (!saved) {
-        flash('已取消');
-        return null;
+    const saved = await ipc.saveBinaryChecked(
+        projectLabel() + '-frame-' + String(Math.round(state.time * 1000)) + '.' + ext, bytes, ext, t('shell.frame.dialogLabel')
+    );
+    if (!saved.ok) {
+        // 取消是取消，失败是失败：以前 null 一律说「已取消」，用户就以为是自己点了取消
+        if (saved.canceled) {
+            flash(t('shell.frame.canceled'));
+            return canceledResult(t('shell.frame.canceled'));
+        }
+        return fail(t('shell.frame.saveFailed', { msg: saved.error }));
     }
-    flash('已导出当前帧');
-    return saved;
+    flash(t('shell.frame.done', { path: saved.file }));
+    return okResult({ file: saved.file, size: saved.size, bytes: bytes.byteLength });
 }
 
 /** dataURL → Uint8Array（base64 解码，浏览器里用 atob）。 */
@@ -474,31 +691,33 @@ async function currentFrameBlob() {
  */
 async function copyFrameToClipboard(opts) {
     const fallback = async (msg) => {
-        // 注意顺序：`exportCurrentFrame` 自己会 flash（「已取消」/「导出接口不可用」），
-        // 必须**在它之后**再 flash 一次，否则用户只看到最后那句，不知道为什么要改走文件。
+        // 顺序有讲究：`exportCurrentFrame` 自己会 flash（失败走错误档、停留更久），
+        // 所以这里只在**成功**或**用户取消**时补一句「为什么改走文件」；
+        // 真失败时那句补救建议已经在顶栏上了，再叠一句只会把原因盖掉。
         const out = await exportCurrentFrame(opts);
-        flash(out ? msg + '，已改为导出文件' : msg + '；导成文件也没成功');
+        if (out && out.ok) flash(t('shell.clip.savedAsFile', { msg }));
+        else if (out && out.canceled) flash(t('shell.clip.exportCanceled', { msg }));
         return out;
     };
     if (typeof document === 'undefined' || !state.doc) return null;
     if (typeof window === 'undefined' || typeof ClipboardItem !== 'function' || !navigator.clipboard || typeof navigator.clipboard.write !== 'function') {
-        return await fallback('浏览器不支持写剪贴板');
+        return await fallback(t('shell.clip.noWrite'));
     }
     const blob = await currentFrameBlob();
-    if (!blob) return await fallback('当前帧是空的');
+    if (!blob) return await fallback(t('shell.clip.emptyFrame'));
     try {
         const job = navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
         const timeout = new Promise((resolve) => setTimeout(() => resolve('timeout'), 3000));
         const result = await Promise.race([job.then(() => 'ok'), timeout]);
-        if (result === 'timeout') return await fallback('剪贴板写入超时');
+        if (result === 'timeout') return await fallback(t('shell.clip.timeout'));
     } catch (err) {
         const name = err && err.name ? String(err.name) : '';
         if (name === 'NotAllowedError' || name === 'SecurityError') {
-            return await fallback('窗口没有焦点');
+            return await fallback(t('shell.clip.noFocus'));
         }
-        return await fallback('剪贴板写入失败');
+        return await fallback(t('shell.clip.writeFailed'));
     }
-    flash('已复制当前帧到剪贴板');
+    flash(t('shell.clip.copied'));
     return true;
 }
 
@@ -521,7 +740,7 @@ function stamp(d) {
 }
 
 function defaultProjectName() {
-    return '项目-' + stamp();
+    return t('shell.project.defaultName', { stamp: stamp() });
 }
 
 function baseName(path) {
@@ -532,7 +751,7 @@ function baseName(path) {
 
 /** 顶栏显示的当前项目名。 */
 function projectLabel() {
-    return project.name || '未命名项目';
+    return project.name || t('shell.project.untitled');
 }
 
 /** 有改动就标脏：只在 false → true 时刷一次顶栏，避免每笔都刷新。 */
@@ -592,7 +811,7 @@ async function saveProject(name) {
         label = await askProjectName(defaultProjectName());
         label = String(label || '').trim();
         if (!label) {
-            flash('已取消保存');
+            flash(t('shell.save.canceled'));
             return false;
         }
     }
@@ -611,22 +830,30 @@ async function saveProject(name) {
         project.name = label;
         project.dirty = false;
         store.setCurrentProjectId(project.id);
-        flash('已保存 ' + label);
+        flash(t('shell.save.done', { label }));
         updateChrome();
         notifyProjects();
         return true;
     } catch (err) {
         console.error('[shell] 保存失败：', err);
-        flash('保存失败：' + ((err && err.message) || err));
+        flash(t('shell.save.failed', { msg: (err && err.message) || err }), 'error');
         return false;
     } finally {
         saveBusy = false;
     }
 }
 
-/** 把库里的项目（或当前文档）写成一个 .json 文件；返回主进程的结果或 null。 */
+/**
+ * 把库里的项目（或当前文档）写成一个 .json/.msp 文件。
+ *
+ * @returns {Promise<{ok:true,file:string}|{ok:false,canceled?:true,error?:string}>}
+ *   「写没写成」必须由返回值说清：老版本 ok:true 但 file 为空时什么都不说，
+ *   界面上「存为文件」看起来成功了，磁盘上却没有东西。
+ */
 async function writeProjectFile(id, opts) {
     const o = opts || {};
+    // quiet 只压「提示」，不压结果：静默调用方仍要能从返回值分辨成功与失败
+    const report = (text) => (o.quiet ? failResult(text) : fail(text));
     let payload = null;
     if (id) {
         const rec = await store.getProject(id);
@@ -650,44 +877,47 @@ async function writeProjectFile(id, opts) {
     try {
         json = JSON.stringify(payload);
     } catch (err) {
-        flash('序列化失败');
-        return null;
+        return report(t('shell.saveFile.serializeFailed'));
+    }
+    if (!ipc.available()) {
+        return report(t('shell.saveFile.noBridge'));
     }
     let out = null;
     try {
         out = await Promise.resolve(ipc.saveProject(projectLabel(), json));
     } catch (err) {
         console.error('[shell] 保存文件失败：', err);
-        out = null;
+        return report(t('shell.saveFile.threw', { msg: (err && err.message) || err }));
     }
     if (!out) {
-        if (!o.quiet) flash('保存对话框不可用（非桌面环境）');
-        return null;
+        return report(t('shell.saveFile.noResponse'));
     }
     if (out.ok === false) {
-        if (!o.quiet) flash(out.canceled ? '已取消保存' : '保存文件失败');
-        return null;
+        if (out.canceled) return o.quiet ? canceledResult(t('shell.saveFile.canceled')) : Object.assign(canceledResult(t('shell.saveFile.canceled')), {});
+        return report(t('shell.saveFile.failed', { msg: out.error || t('shell.saveFile.failedBase') }));
     }
-    if (out.file) {
-        project.file = out.file;
-        if (id) {
-            const rec = await store.getProject(id);
-            if (rec) {
-                rec.file = out.file;
-                await store.putProject(rec);
-            }
+    if (!out.file) {
+        // 回了成功却不给路径：主进程那一步一定没走完。宁可报失败，也不替它签收。
+        return report(t('shell.saveFile.noPath'));
+    }
+    project.file = out.file;
+    if (id) {
+        const rec = await store.getProject(id);
+        if (rec) {
+            rec.file = out.file;
+            await store.putProject(rec);
         }
-        if (!o.quiet) flash('已保存文件：' + out.file);
-        updateChrome();
-        notifyProjects();
     }
-    return out;
+    if (!o.quiet) flash(t('shell.saveFile.done', { path: out.file }));
+    updateChrome();
+    notifyProjects();
+    return okResult({ file: out.file });
 }
 
 /** 从 .json 导入：读文件 → 校验 → 入库 → 打开。 */
 async function importProjectFile() {
     // 先问后选文件：让用户选完文件再告诉他「当前文档有改动」是浪费他的时间
-    if (!(await beforeSwitch('导入'))) return false;
+    if (!(await beforeSwitch(t('shell.switch.import')))) return false;
     let out = null;
     try {
         out = await Promise.resolve(ipc.loadProject());
@@ -696,11 +926,12 @@ async function importProjectFile() {
         out = null;
     }
     if (!out) {
-        flash('打开对话框不可用（非桌面环境）');
+        flash(t('shell.openDialog.noBridge'), 'error');
         return false;
     }
     if (out.ok === false) {
-        flash(out.canceled ? '已取消打开' : '打开文件失败');
+        if (out.canceled) flash(t('shell.openDialog.canceled'));
+        else flash(out.error ? t('shell.openDialog.failedReason', { msg: out.error }) : t('shell.openDialog.failed'), 'error');
         return false;
     }
     let payload = out.json;
@@ -708,26 +939,26 @@ async function importProjectFile() {
         try {
             payload = JSON.parse(payload);
         } catch (err) {
-            flash('文件不是合法 JSON');
+            flash(t('shell.importFile.badJson'), 'error');
             return false;
         }
     }
     if (!store.isProjectPayload(payload)) {
-        flash('不是 MotionStudio 项目文件');
+        flash(t('shell.importFile.notProject'), 'error');
         return false;
     }
     // jsonToDoc 同时接受 v2 扁平文件、老信封 {doc:…} 与 v1 节点
     const doc = await store.jsonToDoc(payload);
     if (!doc) {
-        flash('项目内容损坏');
+        flash(t('shell.importFile.corrupt'), 'error');
         return false;
     }
-    const name = String(payload.name || baseName(out.file) || '导入的项目');
+    const name = String(payload.name || baseName(out.file) || t('shell.importFile.fallbackName'));
     const rec = store.makeRecord({ name, doc, thumb: frameThumb(doc), file: out.file || '' });
     const saved = await store.putProject(rec);
     savedAtMs = (saved && saved.savedAt) || Date.now();
     applyDoc(doc, { id: (saved && saved.id) || rec.id, name: rec.name, file: rec.file });
-    flash('已导入 ' + rec.name);
+    flash(t('shell.importFile.done', { name: rec.name }));
     notifyProjects();
     return true;
 }
@@ -740,23 +971,23 @@ async function loadProject(entry) {
         else if (entry && entry.project) source = entry;
         else if (entry && entry.id) source = await store.getProject(entry.id);
         if (!source || !source.project) {
-            flash('项目不存在');
+            flash(t('shell.load.missing'), 'error');
             return false;
         }
         // 载入会整份换掉当前文档：有未保存改动时先处理，别静默丢掉
-        if (!(await beforeSwitch('载入'))) return false;
+        if (!(await beforeSwitch(t('shell.switch.load')))) return false;
         const doc = await store.jsonToDoc(source.project.doc);
         if (!doc) {
-            flash('项目内容损坏');
+            flash(t('shell.load.corrupt'), 'error');
             return false;
         }
         const ok = applyDoc(doc, { id: source.id, name: source.name, file: source.file });
         if (ok) savedAtMs = Number(source.savedAt) || 0;
-        if (ok) flash('已载入 ' + (source.name || '项目'));
+        if (ok) flash(t('shell.load.done', { name: source.name || t('shell.project.fallbackName') }));
         return ok;
     } catch (err) {
         console.error('[shell] 载入项目失败：', err);
-        flash('载入失败：' + ((err && err.message) || err));
+        flash(t('shell.load.failed', { msg: (err && err.message) || err }), 'error');
         return false;
     }
 }
@@ -764,16 +995,19 @@ async function loadProject(entry) {
 /** 新建空白项目（默认沿用 900×640 / 12 fps / 12 帧）。 */
 async function newProject(opts) {
     const o = opts || {};
-    if (!(await beforeSwitch('新建'))) return false;
+    if (!(await beforeSwitch(t('shell.switch.new')))) return false;
     const width = clampInt(o.width == null ? DEFAULT_W : o.width, 16, 8192);
     const height = clampInt(o.height == null ? DEFAULT_H : o.height, 16, 8192);
     const fps = Math.max(1, Math.min(120, Number(o.fps) > 0 ? Number(o.fps) : DEFAULT_FPS));
     const frames = clampInt(o.frames == null ? DEFAULT_FRAMES : o.frames, 1, 1200);
     // v6：没有帧数组，「帧数」只是「时长 = 帧数 / fps」的便捷说法
-    const doc = createDocument({ width, height, fps, duration: frames / fps, layerName: o.layerName || '对象 1' });
+    // layerName 是**用户数据**（写进文档、进层级面板、落 .msp），不取词条 —— 见
+    // app/shell/app.mjs 的 DEFAULT_OBJECT_NAME 注释：跟界面语言走会让同一份文档
+    // 混两种语言的对象名。
+    const doc = createDocument({ width, height, fps, duration: frames / fps, layerName: o.layerName || 'Object 1' });
     const ok = applyDoc(enrichDoc(doc), { id: '', name: '', file: '', dirty: false });
     if (ok) savedAtMs = 0;
-    if (ok) flash('已新建 ' + width + '×' + height + ' · ' + frames + ' 帧 / ' + (frames / fps).toFixed(2) + ' s');
+    if (ok) flash(t('shell.newProject.done', { w: width, h: height, frames, sec: (frames / fps).toFixed(2) }));
     return ok;
 }
 
@@ -798,14 +1032,14 @@ function askProjectName(def) {
         box.style.color = '#e6e8ee';
         box.style.font = '12px/1.4 system-ui, sans-serif';
 
-        box.appendChild(el('span', 'ms-ask-label', '项目名称'));
+        box.appendChild(el('span', 'ms-ask-label', t('shell.ask.name')));
         const input = el('input', 'ms-ask-input');
         input.type = 'text';
         input.value = String(def || '');
         input.style.minWidth = '220px';
-        const ok = el('button', 'ms-ask-ok', '保存');
+        const ok = el('button', 'ms-ask-ok', t('shell.ask.save'));
         ok.type = 'button';
-        const cancel = el('button', 'ms-ask-cancel', '取消');
+        const cancel = el('button', 'ms-ask-cancel', t('shell.ask.cancel'));
         cancel.type = 'button';
         box.appendChild(input);
         box.appendChild(ok);
@@ -936,7 +1170,7 @@ async function beforeSwitch(what) {
     if (d.action === 'proceed') return true;
     if (d.action === 'save-then-proceed') {
         const ok = await saveProject(project.name);
-        if (!ok) flash('保存失败，已取消' + (what || '操作'));
+        if (!ok) flash(t('shell.switch.saveFailed', { what: what || t('shell.switch.action') }), 'error');
         return ok;
     }
     /**
@@ -948,13 +1182,13 @@ async function beforeSwitch(what) {
     let choice = null;
     try {
         choice = await askChoice(
-            '当前文档有未保存的改动',
+            t('shell.guard.title'),
             [
-                { label: '保存并继续', value: 'save' },
-                { label: '丢弃改动', value: 'discard' },
-                { label: '取消', value: 'cancel' },
+                { label: t('shell.guard.save'), value: 'save' },
+                { label: t('shell.guard.discard'), value: 'discard' },
+                { label: t('shell.ask.cancel'), value: 'cancel' },
             ],
-            (what || '继续') + '之前先处理一下它。'
+            t('shell.guard.detail', { what: what || t('shell.switch.continue') })
         );
     } finally {
         if (modalRoot) modalRoot.inert = false;
@@ -988,9 +1222,9 @@ function holdUndoBar(rec) {
     bar.style.borderTop = '1px solid var(--line-2)';
     bar.style.background = 'var(--panel-2)';
     bar.style.font = '12px/1.4 system-ui, sans-serif';
-    const text = el('span', 'ms-undo-text', '已删除「' + (rec.name || '未命名项目') + '」');
+    const text = el('span', 'ms-undo-text', t('shell.undoBar.deleted', { name: rec.name || t('shell.project.untitled') }));
     text.style.color = 'var(--ink-dim)';
-    const btn = el('button', 'ms-undo-btn', '撤销删除');
+    const btn = el('button', 'ms-undo-btn', t('shell.undoBar.undoDeleted'));
     btn.type = 'button';
     btn.style.border = '1px solid var(--accent)';
     btn.style.borderRadius = 'var(--r-1)';
@@ -1018,7 +1252,7 @@ function holdUndoBar(rec) {
             project.name = rec.name || '';
             store.setCurrentProjectId(rec.id);
         }
-        flash('已恢复「' + (rec.name || '未命名项目') + '」');
+        flash(t('shell.undoBar.restored', { name: rec.name || t('shell.project.untitled') }));
         updateChrome();
         notifyProjects();
     });
@@ -1053,18 +1287,18 @@ async function removeProjectWithGuard(id) {
         rec = null;
     }
     if (!rec) {
-        flash('项目不存在');
+        flash(t('shell.remove.missing'), 'error');
         return false;
     }
     const isCurrent = project.id === id;
     const choice = await askChoice(deleteConfirmText(rec.name, isCurrent), [
-        { label: '删除', value: 'delete', danger: true },
-        { label: '取消', value: 'cancel' },
+        { label: t('shell.ask.delete'), value: 'delete', danger: true },
+        { label: t('shell.ask.cancel'), value: 'cancel' },
     ]);
     if (choice !== 'delete') return false;
     const ok = await store.deleteProject(id);
     if (!ok) {
-        flash('删除失败');
+        flash(t('shell.remove.failed'), 'error');
         return false;
     }
     if (isCurrent) {
@@ -1074,9 +1308,9 @@ async function removeProjectWithGuard(id) {
         project.name = '';
         store.setCurrentProjectId('');
         updateChrome();
-        flash('已从库中删除；当前文档还在内存，Ctrl+S 可重新入库');
+        flash(t('shell.remove.outOfLibrary'));
     } else {
-        flash('已删除「' + (rec.name || '未命名项目') + '」');
+        flash(t('shell.undoBar.deleted', { name: rec.name || t('shell.project.untitled') }));
     }
     notifyProjects();
     holdUndoBar(rec);
@@ -1104,9 +1338,27 @@ export function installProjectSafety() {
 /* ─────────────────── 自动保存拍子（跟应用活，不跟面板活） ─────────────────── */
 
 const AUTO_TICK_MS = 1000;
+/**
+ * 未命名文档的草稿节奏（秒）。
+ *
+ * 为什么不跟 `prefs.autoSave` 走：那个偏好默认是 0（关）。草稿不是「入项目库」，
+ * 是刷新/崩溃之后唯一的找回路径 —— 挂在一个默认关掉的开关后面，等于没有保护
+ * （Web 里刷新一下，整份未命名文档就没了）。所以草稿有自己的固定节奏，
+ * 有名字的文档才听用户的「自动保存间隔」。
+ */
+const DRAFT_SEC = 3;
 let autoTimer = 0;
 let autoDirtyAt = 0;
 let autoWasDirty = false;
+let draftNoticed = false; // 草稿只在「这一轮变脏」说一次，别每 3 秒刷一遍顶栏
+/**
+ * 上一份草稿的内容签名。
+ *
+ * 为什么需要：命名项目存完会 `dirty = false`，草稿路径不会（文档确实还没进库），
+ * 于是「已保存但没人动」的文档会一直脏着 —— 没有这道签名，拍子会每 3 秒重写一次
+ * 完整文档 + 缩略图，闲置时白烧 CPU 和磁盘。签名一样就当作「草稿已是当前内容」。
+ */
+let draftSig = '';
 
 /**
  * 1s 一拍的自动保存。
@@ -1131,8 +1383,14 @@ function autoSaveTick() {
     if (dirty && !autoWasDirty) autoDirtyAt = now; // 由净转脏：从这一下开始算间隔
     if (!dirty) autoDirtyAt = 0;
     autoWasDirty = dirty;
-    const sec = Number(prefSnapshot().autoSave) || 0;
-    if (!sec || !dirty || !autoDirtyAt) return;
+    if (!dirty || !autoDirtyAt) {
+        draftNoticed = false;
+        return;
+    }
+    // 有名字：听用户的「自动保存间隔」（0 = 关，用户明确不要静默入库）
+    // 没名字：走固定草稿节奏，草稿是刷新之后唯一的底
+    const sec = project.name ? (Number(prefSnapshot().autoSave) || 0) : DRAFT_SEC;
+    if (!sec) return;
     if (now - autoDirtyAt < sec * 1000) return;
     autoDirtyAt = now; // 先记账再存：保存期间的每一拍都不会重入
     void autoSaveProject();
@@ -1150,12 +1408,25 @@ function onBeforeUnload(ev) {
     if (ev && typeof ev.preventDefault === 'function') ev.preventDefault();
     if (ev) {
         try {
-            ev.returnValue = '当前文档还有未保存的改动，确定离开？';
+            ev.returnValue = t('shell.unload.confirm');
         } catch (err) {
             /* 有的实现里 returnValue 只读，preventDefault 已经够 */
         }
     }
-    return '当前文档还有未保存的改动，确定离开？';
+    return t('shell.unload.confirm');
+}
+
+/**
+ * 草稿内容签名：`savedAt` 固定成 0，只比内容不比「什么时候写的」，否则每次都不同。
+ * 序列化不了就返回一个每次都不一样的东西 —— 让 putProject 去抛、让 catch 去报，
+ * 别在这儿把错误悄悄变成「没变化，所以不写」。
+ */
+function draftSignature(doc) {
+    try {
+        return JSON.stringify(store.docToFile(doc, { savedAt: 0 }));
+    } catch (err) {
+        return '!' + Date.now();
+    }
 }
 
 /** 未命名文档的自动保存：落一条草稿记录（列表里不显示），崩溃/误关之后能找回。 */
@@ -1183,11 +1454,12 @@ export async function restoreDraft() {
     }
     if (!rec || !rec.project || !isDraftRecord(rec)) return false;
     const choice = await askChoice(draftPromptText(rec.savedAt), [
-        { label: '恢复', value: 'restore' },
-        { label: '忽略', value: 'skip' },
+        { label: t('shell.draft.restore'), value: 'restore' },
+        { label: t('shell.draft.skip'), value: 'skip' },
     ]);
     if (choice !== 'restore') {
         await store.deleteProject(DRAFT_ID);
+        draftSig = ''; // 草稿行了删了，签名不能还留着，否则下次会以为「已经写过」
         return false;
     }
     let doc = null;
@@ -1197,12 +1469,13 @@ export async function restoreDraft() {
         doc = null;
     }
     await store.deleteProject(DRAFT_ID);
+    draftSig = ''; // 同上：草稿记录没了，签名随之作废
     if (!doc) {
-        flash('草稿内容损坏，已丢弃');
+        flash(t('shell.draft.corrupt'), 'error');
         return false;
     }
     const ok = applyDoc(doc, { id: '', name: '', file: '', dirty: true });
-    if (ok) flash('已恢复草稿（未命名项目，Ctrl+S 入库）');
+    if (ok) flash(t('shell.draft.restored'));
     return ok;
 }
 
@@ -1244,11 +1517,11 @@ function syncProjectsCta(m) {
             const cta = el('div', 'ms-modal-cta');
             const iconBox = el('div', 'ms-modal-cta-icon');
             iconBox.innerHTML = icon('folder-open', { size: 'lg' });
-            const tip = el('div', 'ms-modal-cta-tip', '项目库还是空的');
-            const sub = el('div', 'ms-modal-cta-sub', '新建一个项目开始画；也可以把 .msp 存档或 PSD 拖进窗口导入');
+            const tip = el('div', 'ms-modal-cta-tip', t('shell.library.empty'));
+            const sub = el('div', 'ms-modal-cta-sub', t('shell.library.emptyHint'));
             const btn = el('button', 'ms-modal-cta-btn');
             btn.type = 'button';
-            btn.innerHTML = icon('plus') + '<span>新建项目</span>';
+            btn.innerHTML = icon('plus') + '<span>' + t('shell.library.newProject') + '</span>';
             btn.addEventListener('click', () => {
                 // 先建后关：新建被取消（未保存改动的三选里点了取消）时浮层该留着
                 void (async () => {
@@ -1314,11 +1587,11 @@ function openProjectsPanel() {
     head.style.gap = '8px';
     head.style.padding = '10px 12px';
     head.style.borderBottom = '1px solid var(--line-2)';
-    const title = el('strong', 'ms-modal-title', '项目库');
+    const title = el('strong', 'ms-modal-title', t('shell.library.title'));
     title.style.flex = '1 1 auto';
     const closeBtn = el('button', 'ms-modal-close', '✕');
     closeBtn.type = 'button';
-    closeBtn.title = '关闭（Esc）';
+    closeBtn.title = t('shell.library.close');
     closeBtn.style.cursor = 'pointer';
     head.appendChild(title);
     head.appendChild(closeBtn);
@@ -1418,12 +1691,12 @@ function commitImportedDoc(next, before) {
 function importSummary(report) {
     const r = report || {};
     const doc = state.doc;
-    let msg = '已导入 ' + (Number(r.imported) || 0) + ' 个对象';
+    let msg = t('shell.importResult.objects', { n: Number(r.imported) || 0 });
     if (r.kind === 'psd') {
         if (r.psdWidth && doc && (doc.width !== r.psdWidth || doc.height !== r.psdHeight)) {
-            msg += '（PSD ' + r.psdWidth + '×' + r.psdHeight + '，画布 ' + doc.width + '×' + doc.height + '）';
+            msg += t('shell.importResult.psd', { w: r.psdWidth, h: r.psdHeight, cw: doc.width, ch: doc.height });
         }
-        if (r.hidden) msg += ' · 跳过 ' + r.hidden + ' 个隐藏图层';
+        if (r.hidden) msg += t('shell.importResult.hidden', { n: r.hidden });
     }
     return msg;
 }
@@ -1442,16 +1715,16 @@ async function importFileObjects(scope) {
         res = await pickAndImport({ doc: before, exts });
     } catch (err) {
         console.error('[shell] 导入失败：', err);
-        flash('导入失败：' + ((err && err.message) || err));
+        flash(t('shell.import.failedNoChange', { msg: (err && err.message) || err }), 'error');
         return false;
     }
     if (!res || !res.ok) {
         // 用户点了取消不算错误，不打扰
-        if (!(res && res.canceled)) flash((res && res.error) || '导入失败');
+        if (!(res && res.canceled)) flash(t('shell.import.failedNoChange', { msg: (res && res.error) || t('shell.import.failed') }), 'error');
         return false;
     }
     if (!commitImportedDoc(res.doc, before)) {
-        flash('导入失败：当前文档不可用');
+        flash(t('shell.import.noDoc'), 'error');
         return false;
     }
     // 选中新导入的最上层对象：用户立刻能拖动、看属性、按 Ctrl+Z 撤回
@@ -1471,11 +1744,11 @@ async function importFileObjects(scope) {
 async function importDropped(files) {
     const list = Array.isArray(files) ? files.filter((f) => f && f.data) : [];
     if (!list.length) {
-        flash('拖进来的文件读不出来');
+        flash(t('shell.import.unreadable'), 'error');
         return false;
     }
     if (!state.doc) {
-        flash('导入失败：当前文档不可用');
+        flash(t('shell.import.noDoc'), 'error');
         return false;
     }
     let next = state.doc;
@@ -1492,7 +1765,7 @@ async function importDropped(files) {
             continue;
         }
         if (!res || !res.ok) {
-            errors.push((res && res.error) || '导入失败');
+            errors.push((res && res.error) || t('shell.import.failed'));
             continue;
         }
         next = res.doc;
@@ -1501,16 +1774,16 @@ async function importDropped(files) {
         if (res.activeId) lastId = res.activeId;
     }
     if (!imported) {
-        flash(errors[0] || '导入失败');
+        flash(errors[0] || t('shell.import.failed'), 'error');
         return false;
     }
     if (!commitImportedDoc(next)) {
-        flash('导入失败：当前文档不可用');
+        flash(t('shell.import.noDoc'), 'error');
         return false;
     }
     if (lastId && CTX && typeof CTX.setActiveLayer === 'function') CTX.setActiveLayer(lastId);
     flash(list.length > 1
-        ? '拖入 ' + list.length + ' 个文件 · 共 ' + imported + ' 个对象'
+        ? t('shell.import.dropped', { files: list.length, n: imported })
         : importSummary(lastReport));
     markDirty();
     updateChrome();
@@ -1566,11 +1839,11 @@ export async function recordVideo(opts) {
     const o = opts || {};
     // project-io 不直接持有 ctx：它由 app.mjs 在 boot 时 setCtx 注入（见文件头 CTX）
     const doc = CTX && typeof CTX.doc === 'function' ? CTX.doc() : null;
-    if (!doc) return { ok: false, error: '没有文档' };
-    if (typeof MediaRecorder !== 'function') return { ok: false, error: '当前环境不支持录制（没有 MediaRecorder）' };
-    if (typeof document === 'undefined' || !document.createElement) return { ok: false, error: '当前环境不支持录制（没有 DOM）' };
+    if (!doc) return { ok: false, error: t('shell.video.err.noDoc') };
+    if (typeof MediaRecorder !== 'function') return { ok: false, error: t('shell.video.err.noRecorder') };
+    if (typeof document === 'undefined' || !document.createElement) return { ok: false, error: t('shell.video.err.noDom') };
     const mime = pickVideoMime((m) => typeof MediaRecorder === 'function' && MediaRecorder.isTypeSupported(m));
-    if (!mime) return { ok: false, error: '当前环境不支持 WebM 录制' };
+    if (!mime) return { ok: false, error: t('shell.video.err.noMime') };
 
     const fps = videoFps(o.fps, doc.fps);
     const total = videoSeconds(o.seconds, totalSeconds(doc));
@@ -1583,7 +1856,7 @@ export async function recordVideo(opts) {
     cv.width = w;
     cv.height = h;
     const g = cv.getContext('2d');
-    if (!g) return { ok: false, error: '拿不到 2d 上下文' };
+    if (!g) return { ok: false, error: t('shell.video.err.noContext') };
 
     let stream;
     let rec;
@@ -1594,7 +1867,7 @@ export async function recordVideo(opts) {
             videoBitsPerSecond: videoBitrate(w, h, fps),
         });
     } catch (err) {
-        return { ok: false, error: '无法开始录制：' + ((err && err.message) || err) };
+        return { ok: false, error: t('shell.video.err.startFailed', { msg: (err && err.message) || err }) };
     }
     const track = stream.getVideoTracks()[0] || null;
     const chunks = [];
@@ -1637,31 +1910,44 @@ export async function recordVideo(opts) {
     await stopped;
     const blob = new Blob(chunks, { type: mime });
     const bytes = await blob.arrayBuffer();
-    if (!bytes.byteLength) return { ok: false, error: '录制结果为空（可能是窗口不可见时 Chromium 停掉了合成）' };
+    if (!bytes.byteLength) return { ok: false, error: t('shell.video.err.empty') };
     return { ok: true, bytes, size: bytes.byteLength, mime, frames, fps, seconds: total };
 }
 
 /**
- * 导出 WebM：录完弹保存对话框。用户取消时不提示错误。
- * @param {object} [opts] 同 recordVideo
+ * 导出 WebM：录完**必须**落盘。
+ *
+ * @returns {Promise<{ok:true,saved:true,file:string,size:number,frames:number,fps:number,seconds:number}
+ *   | {ok:false,canceled?:true,error?:string}>}
+ *   ok:true 代表「磁盘上真的有一个 WebM」，不是「内存里录了一段」。
  */
 export async function exportVideo(opts) {
     // 录制依赖墙上时钟：窗口切到后台时 Chromium 会节流计时器，录出来会变慢甚至掉帧
-    flash('开始录制 WebM，请保持窗口在前台…');
+    flash(t('shell.video.recording'));
     const r = await recordVideo(opts);
     if (!r.ok) {
-        flash(r.error || '导出视频失败');
-        return r;
+        return fail(r.error || t('shell.video.failed'));
     }
-    const saved = await ipc.saveBinary(projectLabel(), r.bytes, 'webm', 'WebM 视频');
-    if (saved && saved.ok) {
-        flash('已导出 WebM（' + r.frames + ' 帧 · ' + Math.round(r.size / 1024) + ' KB）');
-    } else if (saved && saved.canceled) {
-        flash('已取消导出视频');
-    } else {
-        flash('视频已录制（' + Math.round(r.size / 1024) + ' KB），但没找到保存通道');
+    // 录制结果只在内存里：没有保存这一下，字节随函数返回就没了 —— 以前这里报「成功」，
+    // 用户去找文件却发现什么都没有。落盘失败就是失败。
+    const saved = await ipc.saveBinaryChecked(projectLabel(), r.bytes, 'webm', t('shell.video.dialogLabel'));
+    if (!saved.ok) {
+        if (saved.canceled) {
+            flash(t('shell.video.saveCanceled', { n: r.frames }));
+            return canceledResult(t('shell.video.saveCanceledShort'));
+        }
+        return fail(t('shell.video.saveFailed', { msg: saved.error }));
     }
-    return Object.assign({ saved: !!(saved && saved.ok) }, r);
+    flash(t('shell.video.done', { frames: r.frames, kb: Math.round(saved.size / 1024), path: saved.file }));
+    return okResult({
+        saved: true,
+        file: saved.file,
+        size: saved.size,
+        bytes: null,
+        frames: r.frames,
+        fps: r.fps,
+        seconds: r.seconds,
+    });
 }
 
 /** 注入给 projects.mjs 的接口（面板不认识存储细节）。 */
@@ -1726,7 +2012,7 @@ async function restoreLastProject() {
         const ok = applyDoc(doc, { id: rec.id, name: rec.name, file: rec.file });
         if (ok) {
             savedAtMs = Number(rec.savedAt) || 0;
-            flash('已恢复项目 ' + (rec.name || ''));
+            flash(t('shell.restore.done', { name: rec.name || '' }));
         }
         return ok;
     } catch (err) {
@@ -1738,6 +2024,8 @@ async function restoreLastProject() {
 
 export {
     exportFrames,
+    exportGif,
+    exportApng,
     exportSpritesheet,
     project,
     projectLabel,
@@ -1770,8 +2058,15 @@ export async function autoSaveProject() {
     try {
         if (!name) {
             // 命名要用户决定，但内容不能就这么悬在内存里
+            const sig = draftSignature(doc);
+            if (sig === draftSig) return true; // 内容没变：磁盘上那份草稿就是当前内容
             await saveDraft(doc);
-            flash('已保存草稿（未命名项目，Ctrl+S 入库）');
+            draftSig = sig;
+            // 草稿每几秒写一次：只在变脏后第一次说，否则顶栏会被同一句话占满
+            if (!draftNoticed) {
+                draftNoticed = true;
+                flash(t('shell.draft.saved'));
+            }
             return true;
         }
         const rec = store.makeRecord({
@@ -1786,12 +2081,14 @@ export async function autoSaveProject() {
         savedAtMs = (saved && saved.savedAt) || Date.now();
         project.dirty = false;
         store.setCurrentProjectId(project.id);
-        flash('已自动保存 ' + name);
+        flash(t('shell.autosave.done', { name }));
         updateChrome();
         notifyProjects();
         return true;
     } catch (err) {
+        // 以前这里只 console.error：用户以为在自动保存，实际上一次都没成 —— 必须说出来
         console.error('[shell] 自动保存失败：', err);
+        flash(t('shell.autosave.failed', { msg: (err && err.message) || err }), 'error');
         return false;
     } finally {
         saveBusy = false;

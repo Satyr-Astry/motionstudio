@@ -47,11 +47,54 @@ export function normAt(t) {
 /* ───────────────────────────── 对象 ───────────────────────────── */
 
 /**
+ * 骨骼外观的缺省值（仅 `kind === 'bone'` 的对象用）。
+ * 单位是 doc 像素，所以 120 在 1080p 画布上只是一根短骨。
+ */
+export const BONE_DEFAULTS = Object.freeze({ len: 120, width: 14, color: '#7d8fa8' });
+
+/**
+ * 骨骼的缺省锚点：左端中点。
+ * 旋转与缩放都围绕锚点进行（见 `element.mjs` 的 `elementMatrix`），
+ * 骨骼的直觉是「根部钉住、整根摆动」，所以锚点必须在根部而不是中心。
+ * 单独导出是为了让「造对象」「读存档」「锚点缺失时的兜底」三处共用同一个真源。
+ */
+export const BONE_ANCHOR = Object.freeze({ x: 0, y: 0.5 });
+
+/** 骨骼长度合法区间，上限与文档尺寸上限 4096 对齐 */
+const BONE_LEN_MIN = 8;
+const BONE_LEN_MAX = 4096;
+/** 骨骼粗细合法区间 */
+const BONE_WIDTH_MIN = 2;
+const BONE_WIDTH_MAX = 256;
+/** 只认 #rgb / #rrggbb：rgb()、具名色、rgba() 在画布填充里语义各不相同，一律退回缺省 */
+const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/**
+ * 归一骨骼字段 `{ len, width, color }`。
+ *
+ * 返回 `null` 表示「这个对象根本没有骨骼字段」——调用方据此决定是否给对象挂 `bone` 键。
+ * 数值越界一律**夹取**而不是丢弃：骨骼是可视对象，宁可画成极短 / 极细也不该整个消失。
+ * 只有颜色不合法时才退回缺省色，因为非法颜色没法定量地「夹」。
+ * 颜色统一小写，避免 `#ABC` 与 `#abc` 在存档里成为两个不同的字符串。
+ */
+export function normalizeBone(v) {
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+    const len = isNum(v.len) ? clampNum(v.len, BONE_LEN_MIN, BONE_LEN_MAX) : BONE_DEFAULTS.len;
+    const width = isNum(v.width) ? clampNum(v.width, BONE_WIDTH_MIN, BONE_WIDTH_MAX) : BONE_DEFAULTS.width;
+    const raw = typeof v.color === 'string' ? v.color.trim() : '';
+    const color = HEX_COLOR.test(raw) ? raw.toLowerCase() : BONE_DEFAULTS.color;
+    return { len: len, width: width, color: color };
+}
+
+/**
  * 造一个对象（原「图层」）。
  * cels 至少要有一个纹理，否则它没有任何可绘制的内容。
  */
 export function makeObject(o) {
     const src = o && typeof o === 'object' ? o : {};
+    // kind 三分支白名单。存档里写的就是这三个值，这里是「读回来世界长什么样」的唯一真源：
+    // 未知 kind 一律收敛成 'paint'，不让脏存档造出模型层不认识的第四种对象。
+    const kind = src.kind === 'bone' ? 'bone' : src.kind === 'image' ? 'image' : 'paint';
     const obj = {
         id: src.id ? String(src.id) : uid('obj'),
         name: src.name || '对象',
@@ -59,12 +102,26 @@ export function makeObject(o) {
         locked: !!src.locked,
         opacity: isNum(src.opacity) ? src.opacity : 1,
         mixMode: typeof src.mixMode === 'string' ? src.mixMode : 'source-over',
-        kind: src.kind === 'image' ? 'image' : 'paint',
-        anchor: src.anchor && typeof src.anchor === 'object' ? { x: Number(src.anchor.x) || 0, y: Number(src.anchor.y) || 0 } : { x: 0, y: 0 },
+        kind: kind,
+        // 骨骼的缺省锚点在**根部**（左端中点）：旋转围绕根部才是骨骼的直觉。
+        // 图片 / 手绘仍以原点为锚，行为不变。
+        anchor: src.anchor && typeof src.anchor === 'object'
+            ? { x: Number(src.anchor.x) || 0, y: Number(src.anchor.y) || 0 }
+            : (kind === 'bone' ? { x: BONE_ANCHOR.x, y: BONE_ANCHOR.y } : { x: 0, y: 0 }),
         cels: [],
         transform: src.transform && typeof src.transform === 'object' ? src.transform : { keys: [] },
         effects: Array.isArray(src.effects) ? src.effects : [],
     };
+    // 只有骨骼对象才挂 bone。反过来的话，一个曾经是骨骼的对象改回手绘后，
+    // 残留的 bone 会一直跟着它进存档，读回来还得再判一次 kind —— 白白多出一层噪声。
+    if (kind === 'bone') obj.bone = normalizeBone(src.bone) || { ...BONE_DEFAULTS };
+    // 蒙皮：挂在被蒙皮的对象上（骨骼不带皮肤）。这里**只挂不归一** —— 归一由
+    // project-store 的两个白名单与求值侧的 skinOf() 各做一次，doc-model 因此
+    // 不必 import skin.mjs（否则 doc-model ↔ skin 循环依赖）。
+    if (kind !== 'bone' && src.skin && typeof src.skin === 'object' && !Array.isArray(src.skin)) obj.skin = src.skin;
+    // IK 约束：挂在骨骼上（链尾），只挂不归一 —— 归一同样在 project-store 的两个
+    // 白名单与求值侧（ik.mjs 的 ikChains 会再过一遍 normalizeIk）各做一次。
+    if (kind === 'bone' && src.ik && typeof src.ik === 'object' && !Array.isArray(src.ik)) obj.ik = src.ik;
     if (src.onionIgnore === true) obj.onionIgnore = true;
     // v5 字段：父子层级与时间通道（恒等不落字段，保持对象形状干净）
     if (src.parentId != null) obj.parentId = String(src.parentId);
@@ -95,13 +152,8 @@ export function makeObject(o) {
         absorbed.cels = projectCels(absorbed);
         return absorbed;
     }
-    if (cels && cels.length) {
-        for (const c of cels) {
-            const rec = normCel(c);
-            if (rec) obj.cels.push(rec);
-        }
-        obj.cels.sort((a, b) => a.at - b.at);
-    }
+    // 走到这里 cels 必为空：有内容时已在上面的吸收分支提前 return，cels 只迁移一次。
+    // （原先这里还有一段同条件的「再收一遍 cels」，因上面的 return 永远走不到，已删。）
     // 一个纹理都没有时给一个 at=0 的空纹理，保证「对象存在即有内容槽」
     if (!obj.cels.length) obj.cels.push({ at: 0, image: null });
     return obj;

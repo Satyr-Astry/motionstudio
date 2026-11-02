@@ -19,8 +19,9 @@ test('空输入 / 非对象输入都拿到完整缺省值', () => {
 
 test('未知键一律丢掉，不会混进快照', () => {
     const p = cleanPrefs({ undoLimit: 200, evil: 'x', __proto__: { hacked: 1 } });
-    // playSpeed 是 v10 起的新字段：白名单要随「真的有这一个键」一起长，否则手改的速度会被丢
-    assert.deepEqual(Object.keys(p).sort(), ['autoSave', 'bg', 'objectH', 'objectW', 'playSpeed', 'snapGrid', 'undoLimit']);
+    // playSpeed 是 v10 起的新字段、locale 是 v17 起的：白名单要随「真的有这一个键」一起长，
+    // 否则手改的速度 / 语言会被悄悄丢掉
+    assert.deepEqual(Object.keys(p).sort(), ['autoSave', 'bg', 'locale', 'objectH', 'objectW', 'playSpeed', 'snapGrid', 'undoLimit']);
     assert.equal(p.undoLimit, 200);
     assert.equal(p.evil, undefined);
 });

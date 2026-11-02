@@ -308,12 +308,10 @@ input::placeholder {
  */
 
 .area-btn,
-.top-tr-btn,
 .top-file-btn,
 .tbar-btn,
 .lyr-btn,
-.tline-btn,
-.cv-ob-btn {
+.tline-btn {
     height: var(--h-btn);
     border: 1px solid transparent;
     border-radius: var(--r-1);
@@ -322,11 +320,9 @@ input::placeholder {
 }
 
 .area-btn:hover,
-.top-tr-btn:hover,
 .tbar-btn:hover,
 .lyr-btn:hover,
-.tline-btn:hover,
-.cv-ob-btn:hover {
+.tline-btn:hover {
     background: var(--surface);
     border-color: var(--line);
     color: var(--ink);
@@ -335,12 +331,10 @@ input::placeholder {
 /* 按下态：86 个 :hover 里原本只有 3 个有 :active。
  * 图标按钮不做按下反馈，连点两次时看不出「第一下到底发生了没有」。 */
 .area-btn:active,
-.top-tr-btn:active,
 .top-file-btn:active,
 .tbar-btn:active,
 .lyr-btn:active,
-.tline-btn:active,
-.cv-ob-btn:active {
+.tline-btn:active {
     background: var(--line);
     border-color: var(--line-2);
 }

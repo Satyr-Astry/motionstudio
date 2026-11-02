@@ -6,6 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { applyTime, isIdentityTime, normalizeTime, describeTime, TIME_EASES } from '../app/core/timegraph.mjs';
+import { t } from '../app/i18n/index.mjs';
 
 const near = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps;
 
@@ -78,7 +79,8 @@ test('holding / scale=0 优先级高于 ease', () => {
 });
 
 test('describeTime 会提到缓动档位', () => {
-    assert.match(describeTime({ ease: 'in' }), /缓动/);
-    assert.match(describeTime({ ease: 'out' }), /缓动/);
-    assert.equal(describeTime({ ease: 'linear' }), '无时间变换');
+    // 文案走词条：期望值按当前语言现取，不再写死中文。
+    assert.equal(describeTime({ ease: 'in' }), t('time.ease.in'));
+    assert.equal(describeTime({ ease: 'out' }), t('time.ease.out'));
+    assert.equal(describeTime({ ease: 'linear' }), t('time.none'));
 });

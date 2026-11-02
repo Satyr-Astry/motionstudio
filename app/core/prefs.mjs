@@ -18,7 +18,27 @@ export const FALLBACK_PREFS = Object.freeze({
     objectH: 640,
     bg: 'checker',
     playSpeed: 1,
+    locale: 'en',
 });
+
+/**
+ * 支持的语言标识。
+ *
+ * 刻意在这里**再写一份**而不是 import `app/i18n/index.mjs`：本文件是纯函数、零依赖，
+ * 要能被任意单测直接拉起（`tests/prefs.test.mjs` 就是这么用的）。两份名单由
+ * `_check-i18n.mjs` 对齐，漂移会被它报出来。
+ */
+const LOCALES = Object.freeze(['en', 'zh-Hans']);
+
+/** 归一语言标识：认 'zh' / 'zh-CN' / 'cn' 等常见写法，其余一律回缺省英文。 */
+function localeId(v) {
+    const raw = typeof v === 'string' ? v.trim() : '';
+    if (LOCALES.includes(raw)) return raw;
+    const low = raw.toLowerCase().replace('_', '-');
+    if (low === 'zh' || low === 'zh-cn' || low === 'zh-hans' || low === 'cn' || low === 'chs') return 'zh-Hans';
+    if (low.startsWith('en')) return 'en';
+    return 'en';
+}
 
 /**
  * 把任意来源的偏好过一遍白名单 + 类型/范围校验，坏值**逐项**退回缺省。
@@ -65,5 +85,7 @@ export function cleanPrefs(raw, defaults) {
         // 预览播放速度：夹到 0.25–4（与 core/playback.mjs 的 SPEEDS 两端一致）。
         // 不限制成「表里的档位」：手改一个 1.25 也该能跑，面板上的换档会就近落档。
         playSpeed: num(src.playSpeed, 0.25, 4, dflt.playSpeed),
+        // 界面语言：值会进分支与 `<html lang>`，只放行白名单（含常见别名归一）。
+        locale: localeId(src.locale !== undefined ? src.locale : dflt.locale),
     };
 }

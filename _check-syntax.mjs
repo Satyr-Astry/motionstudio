@@ -20,6 +20,11 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const TARGETS = ['app'];
+// 仓库根的工具脚本：`npm run serve` 跑的 `tools-serve.mjs` 以前没人查语法，
+// 写坏了只有到真去跑的时候才知道。它不属于 app/，不在 `_check-static.mjs` 的扫描范围里，只能在这里兜。
+// （`tools-smoke.cjs` 是 CommonJS，`node --check` 也能查，但它要求 electron 环境才能跑，
+//   这里只查语法、不执行，所以一并纳入是安全的。）
+const ROOT_TOOLS = ['tools-serve.mjs', 'tools-smoke.cjs'];
 
 function walk(dir, out) {
     for (const name of readdirSync(dir)) {
@@ -30,7 +35,16 @@ function walk(dir, out) {
     return out;
 }
 
-const files = TARGETS.flatMap((t) => walk(join(ROOT, t), []));
+const files = [
+    ...TARGETS.flatMap((t) => walk(join(ROOT, t), [])),
+    ...ROOT_TOOLS.map((f) => join(ROOT, f)).filter((f) => {
+        try {
+            return statSync(f).isFile();
+        } catch {
+            return false;
+        }
+    }),
+];
 const failures = [];
 
 for (const file of files) {

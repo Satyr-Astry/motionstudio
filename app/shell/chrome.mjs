@@ -19,15 +19,19 @@
  */
 
 import { icon, escapeAttr } from '../core/icons.mjs';
+import { t } from '../i18n/index.mjs';
 
 /** 三个工作区：id 与外壳共用（app.mjs 直接 import 这份清单做校验）。 */
+// title 写成 getter：语言是运行时才定的（默认识别 en），模块级常量不能提前把译文烤死。
+// 读 `.title` 的地方照旧，只是每次读出来的是当前语言。
 export const WS_TABS = Object.freeze([
-    { id: 'animate', title: '编排' },
-    { id: 'draw', title: '画板' },
-    { id: 'free', title: '设置' },
+    { id: 'animate', get title() { return t('shell.ws.animate'); } },
+    { id: 'draw', get title() { return t('shell.ws.draw'); } },
+    { id: 'free', get title() { return t('shell.ws.free'); } },
 ]);
 
-export const WS_IDS = WS_TABS.map((t) => t.id);
+// 回调参数叫 tab 不叫 t：t 是词条函数，同名参数读起来像「拿函数当工作区」
+export const WS_IDS = WS_TABS.map((tab) => tab.id);
 
 /**
  * 文件按钮：[act, 图标名, 按钮文字（null = 纯图标）, 中文标题（带快捷键）]。
@@ -36,15 +40,16 @@ export const WS_IDS = WS_TABS.map((t) => t.id);
  * 纯图标只用在「＋ / 撤销 / 重做」这种全行业已有共识的动作上。
  * 放在品牌与工作区 tab 之间：左边「文件」是项目级操作，右边才是视图级切换。
  */
+// 第 3/4 项是词条键：文字与 title 在 buildTopbar 里按当前语言解析（切语言时能重写）
 const FILE_ACTIONS = [
-    ['new', 'plus', null, '新建项目'],
-    ['save', 'save', '保存', '保存项目（Ctrl+S）'],
-    ['open', 'folder-open', '打开', '打开项目库（Ctrl+O）'],
-    ['import', 'import', '导入', '导入 PSD / PNG / JPG / WebP 到当前项目'],
-    ['export', 'export', '导出', '导出 PNG 序列（Ctrl+Shift+E）'],
+    ['new', 'plus', null, 'shell.file.newTitle'],
+    ['save', 'save', 'shell.file.saveLabel', 'shell.file.saveTitle'],
+    ['open', 'folder-open', 'shell.file.openLabel', 'shell.file.openTitle'],
+    ['import', 'import', 'shell.file.importLabel', 'shell.file.importTitle'],
+    ['export', 'export', 'shell.file.exportLabel', 'shell.file.exportTitle'],
     // 撤销/重做原本在「工具」区里，编排模式不显示工具条后它们会消失，所以上移到这里。
-    ['undo', 'undo', null, '撤销（Ctrl+Z）'],
-    ['redo', 'redo', null, '重做（Ctrl+Shift+Z）'],
+    ['undo', 'undo', null, 'shell.file.undoTitle'],
+    ['redo', 'redo', null, 'shell.file.redoTitle'],
 ];
 
 function el(tag, cls, text) {
@@ -92,18 +97,15 @@ export function buildTopbar(host, api) {
 
     // 文件组：新建 / 保存 / 打开 / 导入 / 导出。act 由外壳的 onFileAct 分发。
     const file = el('div', 'top-file');
-    for (const [act, iconName, text, title] of FILE_ACTIONS) {
+    const fileButtons = [];
+    for (const [act, iconName, textKey, titleKey] of FILE_ACTIONS) {
         const b = document.createElement('button');
         b.type = 'button';
-        // 纯图标 → ms-icon-btn（22×22 方按钮 + 20×20 热区）；图标 + 文字 → ms-icon-label
-        b.className = 'top-file-btn ' + (text ? 'ms-icon-label' : 'ms-icon-btn');
-        b.innerHTML = icon(iconName) + (text ? '<span>' + escapeAttr(text) + '</span>' : '');
         b.dataset.act = act;
-        b.title = title;
-        b.setAttribute('aria-label', title);
         b.addEventListener('click', () => {
             if (typeof a.file === 'function') a.file(act);
         });
+        fileButtons.push({ b: b, iconName: iconName, textKey: textKey, titleKey: titleKey, text: null, title: null });
         file.appendChild(b);
     }
 
@@ -117,32 +119,28 @@ export function buildTopbar(host, api) {
     const projectText = el('span', 'top-project-text', '');
     const projectDot = el('span', 'top-project-dot', '•');
     projectDot.setAttribute('role', 'img');
-    projectDot.setAttribute('aria-label', '有未保存的改动');
-    projectDot.title = '有未保存的改动';
     projectDot.hidden = true;
     project.append(projectIcon, projectText, projectDot);
 
     // 返回编排：画板 / 设置是从编排「进去」的子视图，必须有一条显眼的回路。
     const back = el('button', 'top-back ms-icon-label');
     back.type = 'button';
-    back.innerHTML = icon('arrow-left') + '<span>编排</span>';
-    back.title = '回到编排工作区（Esc 也可以）';
-    back.setAttribute('aria-label', back.title);
+    back.innerHTML = icon('arrow-left') + '<span></span>';
+    const backText = back.querySelector('span');
     back.addEventListener('click', () => {
         if (typeof a.setWorkspace === 'function') a.setWorkspace('animate');
     });
 
     const ws = el('div', 'top-ws');
     const tabs = new Map();
-    for (const t of WS_TABS) {
-        const b = el('button', 'top-ws-tab', t.title);
+    for (const tab of WS_TABS) {
+        const b = el('button', 'top-ws-tab', '');
         b.type = 'button';
-        b.dataset.ws = t.id;
-        b.title = t.title + '工作区';
+        b.dataset.ws = tab.id;
         b.addEventListener('click', () => {
-            if (typeof a.setWorkspace === 'function') a.setWorkspace(t.id);
+            if (typeof a.setWorkspace === 'function') a.setWorkspace(tab.id);
         });
-        tabs.set(t.id, b);
+        tabs.set(tab.id, b);
         ws.appendChild(b);
     }
 
@@ -173,18 +171,61 @@ export function buildTopbar(host, api) {
 
     function projectTitle(f) {
         const bits = [];
-        if (f.inLibrary) bits.push('当前项目：' + f.pname);
-        else bits.push('尚未保存到项目库（Ctrl+S 命名并入库）');
-        if (f.dirty) bits.push('有未保存改动');
+        if (f.inLibrary) bits.push(t('shell.topbar.currentProject', { name: f.pname }));
+        else bits.push(t('shell.topbar.notInLibrary'));
+        if (f.dirty) bits.push(t('shell.topbar.dirtyShort'));
         // 这两项要存储层提供（app.mjs 的 api 里还没有），拿不到就整段省略，
         // 不猜时间、也不猜介质 —— 缺字段时 title 依然每句为真。
         const clock = fmtClock(f.savedAt);
-        if (clock) bits.push('上次保存 ' + clock);
-        if (f.storeKind) bits.push('存储：' + f.storeKind);
+        if (clock) bits.push(t('shell.topbar.savedAt', { time: clock }));
+        if (f.storeKind) bits.push(t('shell.topbar.storeKind', { kind: f.storeKind }));
         return bits.join(' · ');
     }
 
+    /**
+     * 静态文案（按钮文字 / title / tab 名 / 脏点标签）按当前语言重写。
+     * 为什么不在 build 时写死：切语言只重挂工作区面板，顶栏是 boot 建的一次性 DOM，
+     * 不重写就会出现「面板英文、顶栏中文」。赋值前都比一遍，避免每次 flash 都动 DOM。
+     */
+    function syncLabels() {
+        for (const f of fileButtons) {
+            const text = f.textKey ? t(f.textKey) : null;
+            const title = t(f.titleKey);
+            if (f.text !== text) {
+                f.text = text;
+                f.b.className = 'top-file-btn ' + (text ? 'ms-icon-label' : 'ms-icon-btn');
+                f.b.innerHTML = icon(f.iconName) + (text ? '<span>' + escapeAttr(text) + '</span>' : '');
+            }
+            if (f.title !== title) {
+                f.title = title;
+                f.b.title = title;
+                f.b.setAttribute('aria-label', title);
+            }
+        }
+        const backLabel = t('shell.topbar.backLabel');
+        if (backText.textContent !== backLabel) backText.textContent = backLabel;
+        const backTitle = t('shell.topbar.backTitle');
+        if (back.title !== backTitle) {
+            back.title = backTitle;
+            back.setAttribute('aria-label', backTitle);
+        }
+        for (const tab of WS_TABS) {
+            const b = tabs.get(tab.id);
+            if (!b) continue;
+            const name = tab.title;
+            if (b.textContent !== name) b.textContent = name;
+            const tabTitle = t('shell.topbar.tabTitle', { title: name });
+            if (b.title !== tabTitle) b.title = tabTitle;
+        }
+        const dirtyLabel = t('shell.topbar.dirty');
+        if (projectDot.title !== dirtyLabel) {
+            projectDot.title = dirtyLabel;
+            projectDot.setAttribute('aria-label', dirtyLabel);
+        }
+    }
+
     function update() {
+        syncLabels();
         const cur = call(a.workspace, WS_IDS[0]);
         for (const [id, b] of tabs) b.classList.toggle('is-on', id === cur);
 
@@ -195,12 +236,12 @@ export function buildTopbar(host, api) {
         const dirty = !!call(a.dirty, false);
         const inLibrary = pname.length > 0;
         // 「未命名且未入库」与「有名字但没保存」以前看起来一模一样，这里把前者说清。
-        const label = inLibrary ? pname : '未命名项目（未入库）';
+        const label = inLibrary ? pname : t('shell.topbar.untitled');
         const justSaved = prevDirty === true && dirty === false;
         if (justSaved) armSaveFlash();
 
         projectIcon.innerHTML = icon(inLibrary ? 'save' : 'folder-open', { size: 'sm' });
-        projectText.textContent = (justSaved || flashOn) ? label + ' · 已保存' : label;
+        projectText.textContent = (justSaved || flashOn) ? t('shell.topbar.justSaved', { label: label }) : label;
         projectDot.hidden = !dirty;
         project.classList.toggle('is-dirty', dirty);
         project.classList.toggle('is-just-saved', justSaved || flashOn);
@@ -218,6 +259,10 @@ export function buildTopbar(host, api) {
         const text = h == null ? '' : String(h);
         if (hint.textContent !== text) hint.textContent = text;
         hint.classList.toggle('is-empty', !text);
+        // 单行 + ellipsis（见 styles/shell.css 的 .top-hint）：错误消息里有补救动作，
+        // 被截掉就等于没说。整句挂在 title 上，悬停可读、不动既有布局。
+        if (text) hint.title = text;
+        else hint.removeAttribute('title');
     }
 
     update();
@@ -248,16 +293,18 @@ export function buildStatusbar(host, api) {
 
     const onSel = (e) => {
         const ids = e && e.detail && Array.isArray(e.detail.ids) ? e.detail.ids : [];
-        selCount.textContent = ids.length > 1 ? '已选 ' + ids.length + ' 个对象' : '';
+        selCount.textContent = ids.length > 1 ? t('shell.status.selObjects', { n: ids.length }) : '';
     };
     if (typeof document !== 'undefined') document.addEventListener('ms:layer-selection', onSel);
 
     const onKeySel = (e) => {
         const d = (e && e.detail) || {};
         const n = Number(d.count) || 0;
-        const t = Number(d.primaryT);
-        keySel.textContent =
-            n > 1 ? '已选 ' + n + ' 颗 · 主键 t=' + (Number.isFinite(t) ? t.toFixed(2) : '—') + ' s' : '';
+        // 局部量叫 pt 不叫 t：t 是词条函数
+        const pt = Number(d.primaryT);
+        keySel.textContent = n > 1
+            ? t('shell.status.selKeys', { n: n, t: Number.isFinite(pt) ? pt.toFixed(2) : '—' })
+            : '';
     };
     if (typeof document !== 'undefined') document.addEventListener('ms:key-selection', onKeySel);
 

@@ -19,14 +19,24 @@
 import { applyTime, isIdentityTime, normalizeTime } from './timegraph.mjs';
 import { matrixOf, stateAt } from './transform.mjs';
 import {
+    BONE_ANCHOR,
+    BONE_DEFAULTS,
     celAt as celAtOf,
     docDuration,
     imageAt,
-    objectById,
+    normalizeBone,
     objectsOf,
     stateOf,
 } from './doc-model.mjs';
 import { createLattice, latticeOffset, normalizeLattice } from './lattice.mjs';
+// 蒙皮求值：骨骼驱动的网格形变。skin.mjs 为了不反过来 import 本模块（会成环），
+// 自己沿 parentId 算骨骼世界矩阵（公式与本模块 matrixOfChain 相同，两边由
+// tests/skin.test.mjs 的对拍钉住）。这里只负责在 evalLayer 末尾调用它。
+import { applySkin, skinOf } from './skin.mjs';
+// IK：解算结果是一张「骨 id → 世界矩阵」的覆盖表。本模块与 skin.mjs 各自在遍历里
+// 查同一张表（solveIk 内部有单槽缓存，同一帧两次调用拿到同一个 Map），
+// 所以「骨架弯了、皮肤不弯」这类分裂在结构上不可能发生。见 docs/IK设计-2026-11-02.md。
+import { solveIk } from './ik.mjs';
 // 绘制顺序的唯一真源（docs/层级与叠放-2026-10.md §4）：只用在 drawEvaluated
 // 的遍历上；本模块内部的 objIndex（按 id 查对象）与它无关，别混。
 import { drawOrderOf } from './draw-order.mjs';
@@ -200,7 +210,10 @@ export function createEvaluator(doc, opts = {}) {
      */
     function elementMatrixOf(el, ltime, size) {
         const base = matrixOf(trackState(el, ltime)) || { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
-        const an = el && el.anchor && typeof el.anchor === 'object' ? el.anchor : { x: 0.5, y: 0.5 };
+        // 缺省锚点按 kind 分：骨骼是「根部」，其余是中心。与 element.anchorPoint 同口径，
+        // 否则一根没有 anchor 字段的骨骼会绕中心旋转，蒙皮绑定时整块皮肤跟着偏半个身位。
+        const dflt = el && el.kind === 'bone' ? BONE_ANCHOR : { x: 0.5, y: 0.5 };
+        const an = el && el.anchor && typeof el.anchor === 'object' ? el.anchor : dflt;
         const ax = num(an.x, 0) * num(size && size.w, 0);
         const ay = num(an.y, 0) * num(size && size.h, 0);
         if (!ax && !ay) return base;
@@ -210,11 +223,17 @@ export function createEvaluator(doc, opts = {}) {
         );
     }
 
-    /** 该时刻生效位图的尺寸；取不到退回文档尺寸，绝不抛。 */
+    /** 该时刻生效位图的尺寸；骨骼取 bone，取不到退回文档尺寸，绝不抛。 */
     function sizeOf(layer, t) {
         const d = current;
         const fallback = { w: num(d && d.width, 0), h: num(d && d.height, 0) };
         if (!layer || typeof layer !== 'object') return fallback;
+        // 骨骼没有纹理，也不能落进「回退文档尺寸」——那会让 120px 的骨头变成整张画布，
+        // 与 element.elementSize 的骨骼分支差出一个画布大小的平移，蒙皮结果必定错位。
+        if (layer.kind === 'bone') {
+            const b = normalizeBone(layer.bone) || BONE_DEFAULTS;
+            return { w: b.len, h: b.width };
+        }
         let img = null;
         try {
             img = imageAt(layer, timeOf(t));
@@ -288,13 +307,21 @@ export function createEvaluator(doc, opts = {}) {
         return Math.max(0, Math.min(1, a));
     }
 
-    function matrixOfChain(chain, t) {
+    function matrixOfChain(chain, t, sol) {
         let m = IDENTITY_MATRIX.slice();
         for (let i = chain.length - 1; i >= 0; i--) {
             const el = chain[i];
+            // 被 IK 覆盖的骨：用覆盖表里的**绝对**世界矩阵替换累乘结果
+            const hit = sol && el && el.id != null ? sol.get(el.id) : null;
+            if (hit) { m = matrixTuple(hit); continue; }
             m = mulMatrix(m, elementMatrixOf(el, localTime(el, t), sizeOf(el, t)));
         }
         return m;
+    }
+
+    /** 本帧的 IK 覆盖表；没有文档时给 null（矩阵路径退化为原样）。 */
+    function solFor(t) {
+        return current ? solveIk(current, t) : null;
     }
 
     /**
@@ -304,7 +331,7 @@ export function createEvaluator(doc, opts = {}) {
      * 需要 {a..f} 对象的地方用 matrixObject() 转一次。
      */
     function worldMatrix(layer, t) {
-        return matrixOfChain(chainOf(layer), t);
+        return matrixOfChain(chainOf(layer), t, solFor(t));
     }
 
     /** 祖先链矩阵（不含自身，六元组）：叠加层用它换算世界↔局部，保持与渲染一致。 */
@@ -312,7 +339,7 @@ export function createEvaluator(doc, opts = {}) {
         if (!layer || typeof layer !== 'object') return IDENTITY_MATRIX.slice();
         const chain = chainOf(layer);
         if (chain.length <= 1) return IDENTITY_MATRIX.slice();
-        return matrixOfChain(chain.slice(1), t);
+        return matrixOfChain(chain.slice(1), t, solFor(t));
     }
 
     // ---- 效果器 -----------------------------------------------------------
@@ -336,10 +363,16 @@ export function createEvaluator(doc, opts = {}) {
         const size = sizeOf(layer, tt);
         const matrix = worldMatrix(layer, tt);
         const lattice = normalizeLattice(st.warp) || createLattice(1, 1);
+        // 蒙皮接缝（docs/骨骼动画方案-2026-11-02.md §4.3，唯一一处）：
+        // 骨骼驱动的偏移与用户 warp 逐顶点相加，st.warp 本身一个字节都不改。
+        // skin.mjs 自己沿 parentId 算骨骼世界矩阵（不能反过来 import 本模块）；
+        // 两侧口径由 tests/skin.test.mjs 的 map(u,v) 对拍钉住。
+        // 无 skin 的对象走原路径，求值结果逐字段不变。
+        const skinned = skinOf(layer) ? applySkin(current, layer, lattice, matrix, size, tt) : lattice;
 
         // map 已含世界矩阵：局部 (u, v) → 文档坐标。
         const map = (u, v) => {
-            const off = latticeOffset(lattice, u, v);
+            const off = latticeOffset(skinned, u, v);
             return transformPoint(matrix, u * size.w + off.x, v * size.h + off.y);
         };
 
@@ -349,7 +382,7 @@ export function createEvaluator(doc, opts = {}) {
             state: st,
             effects: effectsAt(layer, ltime),
             matrix,
-            lattice: { lattice, size, matrix, map },
+            lattice: { lattice: skinned, size, matrix, map },
             // quad 的角是 [x, y] 数组（契约见 tests/evaluator.test.mjs）；
             // element.mjs 的 elementQuad 走另一条路，返回 {x,y} 对象。
             quad: { tl: map(0, 0), tr: map(1, 0), br: map(1, 1), bl: map(0, 1) },

@@ -140,7 +140,7 @@ export const ONION_DEFAULTS = Object.freeze({
 
 /**
  * 洋葱皮配置 → 完整、已夹取的配置对象。
- * before/after 是「前后各几个纹理切换点」，0~12；opacity 0~1；mode 只认 tint / fade。
+ * before/after 是「前后各几个纹理切换点」，0~12；opacity 0~1；mode 是 tint / dim（'fade' 作老值并入 dim）。
  */
 export function normalizeOnion(input) {
     const src = input && typeof input === 'object' ? input : {};
@@ -156,7 +156,10 @@ export function normalizeOnion(input) {
         enabled: src.enabled === true,
         before: int(src.before, ONION_DEFAULTS.before),
         after: int(src.after, ONION_DEFAULTS.after),
-        mode: src.mode === 'fade' ? 'fade' : 'tint',
+        // 落盘值只有 tint / dim（面板见 app/editors/prop-onion.mjs:8）。
+        // 'fade' 是 v8 之前的老值，含义与 'dim' 相同，读到时归一成 'dim' ——
+        // 以前这里只认 'fade'，于是面板写进去的 'dim' 被静默吃成 'tint'，洋葱皮永远退回着色。
+        mode: src.mode === 'dim' || src.mode === 'fade' ? 'dim' : 'tint',
         past: typeof src.past === 'string' ? src.past : ONION_DEFAULTS.past,
         next: typeof src.next === 'string' ? src.next : ONION_DEFAULTS.next,
         opacity: unit(src.opacity, ONION_DEFAULTS.opacity),

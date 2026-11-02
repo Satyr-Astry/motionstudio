@@ -4,18 +4,19 @@
 // 约定：工厂的第一个参数是「要挂进去的父节点」，返回被 append 的那个子节点。
 
 import { objectsOf, objectById, celTimes } from '../core/cel.mjs';
+import { t } from '../i18n/index.mjs';
 
 /** 建一个 .prop-group（.prop-title + .prop-body[data-k=key]）接到 parent 上，返回 body。 */
 export function makeGroup(parent, title, key) {
     const group = document.createElement('div');
     group.className = 'prop-group';
-    const t = document.createElement('div');
-    t.className = 'prop-title';
-    t.textContent = title;
+    const titleEl = document.createElement('div'); // 局部名不叫 t：module 级已有 i18n 的 t
+    titleEl.className = 'prop-title';
+    titleEl.textContent = title;
     const body = document.createElement('div');
     body.className = 'prop-body';
     body.dataset.k = key;
-    group.append(t, body);
+    group.append(titleEl, body);
     parent.appendChild(group);
     return body;
 }
@@ -88,13 +89,13 @@ export function makeNumPair(body, labelText, opts) {
         field.appendChild(input);
         return input;
     };
-    const w = mk(o.key ? o.key + '-w' : null, (o.titleW || labelText) + '（宽）');
+    const w = mk(o.key ? o.key + '-w' : null, t('props.kit.wide', { label: o.titleW || labelText }));
     // 中间的 × 只是个分隔符：复用 .prop-val，跟「不透明度 %」那个后缀同一套文字样式
     const sep = document.createElement('span');
     sep.className = 'prop-val';
     sep.textContent = '×';
     field.appendChild(sep);
-    const h = mk(o.key ? o.key + '-h' : null, (o.titleH || labelText) + '（高）');
+    const h = mk(o.key ? o.key + '-h' : null, t('props.kit.tall', { label: o.titleH || labelText }));
     return { w, h, sep };
 }
 
@@ -134,7 +135,7 @@ export function makeSeg(body, labelText, items, current) {
         b.textContent = text;
         // 两字的选项（循环 / 往返 / 淡化）本身没有更多文字可读，
         // 悬停给一条「分组名：选项」的完整说法 —— 零行为变更，只是补信息。
-        b.title = labelText + '：' + text;
+        b.title = t('props.kit.segTitle', { label: labelText, option: text });
         b.classList.toggle('is-on', val === current);
         field.appendChild(b);
         btns.set(val, b);

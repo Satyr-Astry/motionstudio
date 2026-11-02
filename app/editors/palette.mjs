@@ -19,6 +19,8 @@
  * 常见色由画板内的当前色块入口负责（见计划 §4），这里只做进阶取色。
  */
 
+import { t } from '../i18n/index.mjs';
+
 /* ── 颜色换算（纯函数，导出给测试参考） ─────────────────── */
 
 function clamp01(n) {
@@ -161,14 +163,14 @@ export function mount(el, ctx) {
     /* 顶部：当前色块 + 十六进制 */
     const top = mk('div', 'pal-top');
     const chip = mk('span', 'pal-chip');
-    chip.title = '当前颜色';
+    chip.title = t('color.current');
     const hexInput = document.createElement('input');
     hexInput.type = 'text';
     hexInput.className = 'pal-hex';
     hexInput.spellcheck = false;
     hexInput.maxLength = 7;
     hexInput.placeholder = '#rrggbb';
-    hexInput.setAttribute('aria-label', '十六进制颜色');
+    hexInput.setAttribute('aria-label', t('color.hex'));
     top.append(chip, hexInput);
 
     /* 饱和度 / 明度二维面板：竖向弹性，空间不足时压缩到 64px 而不是溢出 */
@@ -196,8 +198,8 @@ export function mount(el, ctx) {
     val.max = '100';
     val.step = '1';
     val.value = '0';
-    val.title = '明度 0–100';
-    val.setAttribute('aria-label', '明度');
+    val.title = t('color.valueTitle');
+    val.setAttribute('aria-label', t('color.value'));
     // 尺寸全交给 CSS 的 input.pal-hue（18px 换成 20px 时不该有第二处要改）；
     // 只有 UA 的 2px 外边距必须在这里清掉——否则 width:100% 会顶出内容盒，被面板裁掉右侧。
     val.style.margin = '0';
@@ -210,15 +212,15 @@ export function mount(el, ctx) {
     hue.max = '359';
     hue.step = '1';
     hue.value = '0';
-    hue.title = '色相 0–359';
-    hue.setAttribute('aria-label', '色相');
+    hue.title = t('color.hueTitle');
+    hue.setAttribute('aria-label', t('color.hue'));
     hue.style.margin = '0'; // 同上：清掉 UA 外边距，100% 才不会被顶出内容盒
 
     /* 最近用色 */
     const recentRow = mk('div', 'pal-recent');
     recentRow.style.flex = '0 0 auto';
     const recentLabel = mk('span', 'pal-label');
-    recentLabel.textContent = '最近';
+    recentLabel.textContent = t('color.recent');
     const recents = mk('span', 'pal-recents');
     recents.style.flexWrap = 'wrap';
     recentRow.append(recentLabel, recents);

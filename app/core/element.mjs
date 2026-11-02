@@ -1,8 +1,8 @@
 // 对象（部件）几何层：内容尺寸、变换矩阵（含锚点）、世界/局部换算、手柄位置、点击命中。
 // 依赖：doc-model.mjs（按时间取纹理位图）、transform.mjs（取轨道状态 / 矩阵 / warp 四角）。
 // 约定：doc 空间 = 画布像素坐标；变换在 doc 空间内进行；屏幕换算留给画布叠加层。
-import { imageAt, objectById } from './doc-model.mjs';
-import { stateAt, matrixOf, warpQuad } from './transform.mjs';
+import { imageAt, objectById, normalizeBone, BONE_DEFAULTS, BONE_ANCHOR } from './doc-model.mjs';
+import { stateAt, matrixOf } from './transform.mjs';
 import { normalizeLattice, createLattice, latticeOffset, latticeInverse, latticeInverseRaw } from './lattice.mjs';
 import { alphaMaskOf } from './hit-mask.mjs';
 
@@ -23,8 +23,14 @@ export function elementState(el, time) {
     return stateAt(trk, time) || {};
 }
 
-/** 对象内容矩形尺寸：优先该时间生效的纹理位图尺寸，回退文档尺寸 */
+/** 对象内容矩形尺寸：骨骼取 bone，其余优先该时间生效的纹理位图尺寸，回退文档尺寸 */
 export function elementSize(doc, el, t) {
+    // 骨骼没有纹理，也绝不能落进下面的「回退文档尺寸」——那会让一根 120px 的骨头
+    // 变成整张画布，选框、手柄、命中测试全都跟着错位。
+    if (el && el.kind === 'bone') {
+        const b = normalizeBone(el.bone) || BONE_DEFAULTS;
+        return { w: b.len, h: b.width };
+    }
     const img = el ? imageAt(el, typeof t === 'number' && Number.isFinite(t) ? t : 0) : null;
     if (img && img.width && img.height) return { w: img.width, h: img.height };
     return { w: doc.width, h: doc.height };
@@ -32,7 +38,10 @@ export function elementSize(doc, el, t) {
 
 /** 锚点在局部坐标里的像素位置 */
 export function anchorPoint(el, size) {
-    const a = (el && el.anchor) || { x: 0.5, y: 0.5 };
+    // 骨骼没有 anchor 字段时按根部算：与 makeObject / elementShell 的缺省保持一致，
+    // 否则一个手搓出来的骨骼会围绕中心旋转，跟界面里新建的那根长得完全不一样。
+    const dflt = el && el.kind === 'bone' ? BONE_ANCHOR : { x: 0.5, y: 0.5 };
+    const a = (el && el.anchor) || dflt;
     return { x: size.w * a.x, y: size.h * a.y };
 }
 
@@ -421,6 +430,17 @@ export function hitTest(doc, time, x, y, opts) {
         // 1e-6 的浮点余量：旋转后世界 → 局部的往返误差在 1e-16 量级，
         // 少了它，容差恰好等于 tolerance 的点会随机变成「越界 4e-16 像素」而被挡掉。
         const eps = 1e-6;
+        // 骨骼单独放行：它没有纹理（`drawOne` 对无图对象直接 false），但在画布上
+        // 是一条**看得见的骨头** —— 看得见却点不中，用户会以为工具坏了。
+        // 命中带按粗细方向各放宽 `threshold`：骨头默认只有 14px 粗，按像素精确判
+        // 几乎点不中。只对 `kind === 'bone'` 生效，不碰通用降级（空的手绘对象仍然
+        // 整块不可点，那是刻意行为，见下面那句注释）。
+        if (el.kind === 'bone') {
+            const pad = Math.max(threshold, h / 2);
+            if (loc.x < -pad - eps || loc.x > w + pad + eps) continue;
+            if (loc.y < -pad - eps || loc.y > h + pad + eps) continue;
+            return { id: el.id, local: { x: loc.x, y: loc.y }, alpha: 255 };
+        }
         if (loc.x < -tol - eps || loc.x > w + tol + eps) continue;
         if (loc.y < -tol - eps || loc.y > h + tol + eps) continue;
         // 夹进像素范围：uv 恰为 1 时 floor 得到 width（越界），

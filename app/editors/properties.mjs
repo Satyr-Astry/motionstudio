@@ -10,16 +10,18 @@ import { mount as mountDoc } from './prop-doc.mjs';
 import { mount as mountOnion } from './prop-onion.mjs';
 import { mount as mountInfo } from './prop-info.mjs';
 import { mount as mountTextures } from './prop-textures.mjs';
+import { t } from '../i18n/index.mjs';
 
 /** 固定的分组顺序，按 .prop-body[data-k] 认组（标题文案可以改，顺序靠这个锁死）。 */
 const ORDER = ['object', 'textures', 'xform', 'effects', 'time', 'onion', 'info'];
 /** 无选中对象时隐藏的组：对象元信息与效果链都只属于「某一个对象」。 */
 const OBJECT_KEYS = ['object', 'effects'];
 
-/** 两段：段一依附当前对象，段二全是全局参数。段标题与组标题同高（--h-bar），靠字号/描边分层级。 */
+/** 两段：段一依附当前对象，段二全是全局参数。段标题与组标题同高（--h-bar），靠字号/描边分层级。
+ *  标题走词典（`props.section.*`），`key` 同时是 `.prop-section[data-sec]` 的值，不许改。 */
 const SECTIONS = [
-    { key: 'object', title: '对象', keys: ['object', 'textures', 'xform', 'effects'] },
-    { key: 'doc', title: '工程', keys: ['time', 'onion', 'info'] },
+    { key: 'object', keys: ['object', 'textures', 'xform', 'effects'] },
+    { key: 'doc', keys: ['time', 'onion', 'info'] },
 ];
 const SEC_BOX = 'display:flex;flex-direction:column;flex:0 0 auto;';
 const SEC_SPLIT = 'border-top:1px solid var(--line-2);'; // 段间分隔线画在段二上边
@@ -36,7 +38,7 @@ function makeSection(sec, split) {
     box.style.cssText = split ? SEC_BOX + SEC_SPLIT : SEC_BOX;
     const head = document.createElement('div');
     head.className = 'prop-section-title';
-    head.textContent = sec.title;
+    head.textContent = t('props.section.' + sec.key);
     head.style.cssText = SEC_TITLE;
     box.appendChild(head);
     return box;
@@ -62,7 +64,7 @@ export function mount(el, ctx) {
 
     const emptyHint = document.createElement('div');
     emptyHint.className = 'prop-empty';
-    emptyHint.textContent = '等待文档…';
+    emptyHint.textContent = t('props.shell.waitingDoc');
     emptyHint.style.cssText = 'padding:12px;color:var(--ink-faint, #6b7280);';
     emptyHint.hidden = true;
     root.appendChild(emptyHint);

@@ -17,39 +17,42 @@ import {
 import { normalizeLattice, createLattice, latticeToQuad } from '../core/lattice.mjs';
 import { layerById, objectsOf } from '../core/cel.mjs';
 import { icon } from '../core/icons.mjs';
+import { t } from '../i18n/index.mjs';
 
 // 关键帧时间比对容差：1e-6 s ≈ 0.001px。比 core 的 1e-9 宽松一点，
 // 免得「拖到纹理切换点后再输数值」因为末位浮点误差又生成一个几乎重合的关键帧。
 const T_EPS = 1e-6;
 
-// 标量字段定义：[字段, 显示名, step, min, max]
+// 标量字段定义：[字段, 显示名词条, step, min, max]（词条在挂面板时现取，语言切了就重挂）
 const FIELDS = [
-    ['x', '位移 X', 1, null, null],
-    ['y', '位移 Y', 1, null, null],
-    ['scaleX', '缩放 X', 0.05, null, null],
-    ['scaleY', '缩放 Y', 0.05, null, null],
-    ['rotate', '旋转 °', 1, null, null],
-    ['skewX', '斜切 X °', 1, null, null],
-    ['skewY', '斜切 Y °', 1, null, null],
-    ['opacity', '不透明度', 0.05, 0, 1],
+    ['x', 'xform.field.x', 1, null, null],
+    ['y', 'xform.field.y', 1, null, null],
+    ['scaleX', 'xform.field.scaleX', 0.05, null, null],
+    ['scaleY', 'xform.field.scaleY', 0.05, null, null],
+    ['rotate', 'xform.field.rotate', 1, null, null],
+    ['skewX', 'xform.field.skewX', 1, null, null],
+    ['skewY', 'xform.field.skewY', 1, null, null],
+    ['opacity', 'xform.field.opacity', 0.05, 0, 1],
 ];
 
 const CORNERS = [
-    ['tl', '左上'],
-    ['tr', '右上'],
-    ['br', '右下'],
-    ['bl', '左下'],
+    ['tl', 'xform.corner.tl'],
+    ['tr', 'xform.corner.tr'],
+    ['br', 'xform.corner.br'],
+    ['bl', 'xform.corner.bl'],
 ];
 
 const EASES = [
-    ['linear', '线性'],
-    ['bezier', '贝塞尔'],
-    ['hold', '保持'],
+    ['linear', 'xform.ease.linear'],
+    ['bezier', 'xform.ease.bezier'],
+    ['hold', 'xform.ease.hold'],
 ];
 
 const ZERO_WARP = { tl: [0, 0], tr: [0, 0], br: [0, 0], bl: [0, 0] };
 
 export function createXformPanel(ctx) {
+    // 本文件里 `t` 常被当作「时间」（`const t = nowTime()`），那些作用域里词条函数改用 tr。
+    const tr = t;
     const root = document.createElement('div');
     root.className = 'xf';
 
@@ -78,7 +81,7 @@ export function createXformPanel(ctx) {
     head.className = 'xf-head';
     const layerSel = document.createElement('select');
     layerSel.className = 'xf-layer';
-    layerSel.title = '选择要变换的对象';
+    layerSel.title = t('xform.head.pick');
     const keysEl = document.createElement('span');
     keysEl.className = 'xf-keys';
     keysEl.textContent = '—';
@@ -88,7 +91,8 @@ export function createXformPanel(ctx) {
     const grid = document.createElement('div');
     grid.className = 'xf-grid';
     const fieldInput = new Map();
-    for (const [key, label, step, min, max] of FIELDS) {
+    for (const [key, labelKey, step, min, max] of FIELDS) {
+        const label = t(labelKey);
         const row = document.createElement('div');
         row.className = 'xf-row';
         const lb = document.createElement('span');
@@ -119,9 +123,9 @@ export function createXformPanel(ctx) {
     const warpBtn = document.createElement('button');
     warpBtn.type = 'button';
     warpBtn.className = 'xf-warp-btn ms-icon-label';
-    warpBtn.innerHTML = icon('grid') + '<span>网格变形</span>';
-    warpBtn.title = '进入网格变形：在画布上拖顶点，曲线编辑器里调它们的缓动';
-    warpBtn.setAttribute('aria-label', '网格变形');
+    warpBtn.innerHTML = icon('grid') + '<span>' + t('xform.warp.button') + '</span>';
+    warpBtn.title = t('xform.warp.title');
+    warpBtn.setAttribute('aria-label', t('xform.warp.button'));
     warpBtn.setAttribute('aria-pressed', 'false');
 
     // 密度：1×1 就是四角，2×2 起是真正的网格
@@ -130,7 +134,7 @@ export function createXformPanel(ctx) {
     divRow.hidden = true;
     const divLabel = document.createElement('span');
     divLabel.className = 'xf-label';
-    divLabel.textContent = '网格';
+    divLabel.textContent = t('xform.warp.density');
     divRow.appendChild(divLabel);
     const divBtns = new Map();   // 'cols:rows' → button
     for (const [c, r, label] of [
@@ -143,7 +147,7 @@ export function createXformPanel(ctx) {
         b.textContent = label;
         b.dataset.cols = String(c);
         b.dataset.rows = String(r);
-        b.title = c + '×' + r + ' 网格（' + (c + 1) * (r + 1) + ' 个顶点）';
+        b.title = t('xform.warp.densityTitle', { cols: c, rows: r, n: (c + 1) * (r + 1) });
         b.addEventListener('click', () => {
             if (typeof ctx.setLatticeDiv === 'function') ctx.setLatticeDiv(c, r);
             refresh();
@@ -165,13 +169,13 @@ export function createXformPanel(ctx) {
         inp.title = title;
         return inp;
     };
-    const colsIn = mkNum(2, '列数（1–12）');
-    const rowsIn = mkNum(2, '行数（1–12）');
+    const colsIn = mkNum(2, t('xform.warp.cols'));
+    const rowsIn = mkNum(2, t('xform.warp.rows'));
     const applyBtn = document.createElement('button');
     applyBtn.type = 'button';
     applyBtn.className = 'xf-div-btn is-apply';
-    applyBtn.textContent = '应用';
-    applyBtn.title = '按自定义行列重建网格';
+    applyBtn.textContent = t('xform.warp.apply');
+    applyBtn.title = t('xform.warp.applyTitle');
     applyBtn.addEventListener('click', () => {
         const clampDiv = (v) => Math.max(1, Math.min(12, Math.round(Number(v) || 1)));
         const c = clampDiv(colsIn.value);
@@ -189,8 +193,8 @@ export function createXformPanel(ctx) {
     const resetBtn = document.createElement('button');
     resetBtn.type = 'button';
     resetBtn.className = 'xf-div-btn is-reset';
-    resetBtn.textContent = '重置';
-    resetBtn.title = '清掉当前时间的所有顶点偏移';
+    resetBtn.textContent = t('xform.reset');
+    resetBtn.title = t('xform.warp.resetTitle');
     resetBtn.addEventListener('click', () => {
         if (typeof ctx.resetLattice === 'function') ctx.resetLattice();
         refresh();
@@ -201,20 +205,21 @@ export function createXformPanel(ctx) {
     corners.className = 'xf-corners';
     corners.hidden = true;
     const cornerInput = new Map(); // 'tl:x' → input
-    for (const [ck, cname] of CORNERS) {
+    for (const [ck, nameKey] of CORNERS) {
+        const cname = t(nameKey);
         for (const axis of ['x', 'y']) {
             const row = document.createElement('div');
             row.className = 'xf-corner';
             const lb = document.createElement('span');
             lb.className = 'xf-label';
-            lb.textContent = cname + ' ' + axis.toUpperCase();
+            lb.textContent = t('xform.corner.label', { corner: cname, axis: axis.toUpperCase() });
             const input = document.createElement('input');
             input.className = 'xf-num';
             input.type = 'number';
             input.step = '1';
             input.dataset.corner = ck;
             input.dataset.axis = axis;
-            input.title = cname + '角 ' + axis.toUpperCase() + ' 偏移（像素）';
+            input.title = t('xform.corner.title', { corner: cname, axis: axis.toUpperCase() });
             row.append(lb, input);
             corners.appendChild(row);
             cornerInput.set(ck + ':' + axis, input);
@@ -254,13 +259,14 @@ export function createXformPanel(ctx) {
     const seg = document.createElement('div');
     seg.className = 'xf-seg';
     const easeBtn = new Map();
-    for (const [ease, label] of EASES) {
+    for (const [ease, labelKey] of EASES) {
+        const label = t(labelKey);
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'xf-segbtn';
         b.dataset.ease = ease;
         b.textContent = label;
-        b.title = '插值方式：' + label;
+        b.title = t('xform.ease.title', { name: label });
         b.addEventListener('click', () => writeEase(ease));
         seg.appendChild(b);
         easeBtn.set(ease, b);
@@ -273,12 +279,15 @@ export function createXformPanel(ctx) {
     const actions = document.createElement('div');
     actions.className = 'xf-actions';
     const actBtn = new Map();
-    for (const [act, iconName, label, title] of [
-        ['prev', 'chevron-left', null, '上一个关键帧'],
-        ['next', 'chevron-right', null, '下一个关键帧'],
-        ['del', 'diamond-minus', '删关键帧', '删除当前时间的关键帧'],
-        ['reset', 'rotate-ccw', '重置', '重置为默认变换并打一个关键帧'],
+    // 表里第四格是**词条键**而不是标题原文：文案只活在词典里，这里只留键（与 FIELDS/CORNERS/EASES 同形）。
+    for (const [act, iconName, labelKey, titleKey] of [
+        ['prev', 'chevron-left', null, 'xform.action.prev'],
+        ['next', 'chevron-right', null, 'xform.action.next'],
+        ['del', 'diamond-minus', 'xform.action.del', 'xform.action.delTitle'],
+        ['reset', 'rotate-ccw', 'xform.reset', 'xform.action.resetTitle'],
     ]) {
+        const label = labelKey ? t(labelKey) : null;
+        const title = t(titleKey);
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'xf-btn ' + (label ? 'ms-icon-label' : 'ms-icon-btn');
@@ -329,7 +338,7 @@ export function createXformPanel(ctx) {
         if (!doc) return;
         const layer = currentLayer(doc);
         if (!layer) {
-            notify('没有可变换的对象');
+            notify(tr('xform.err.noObject'));
             return;
         }
         const t = nowTime();
@@ -403,7 +412,7 @@ export function createXformPanel(ctx) {
 
         if (act === 'del') {
             if (idx < 0) {
-                notify('当前时间没有关键帧');
+                notify(tr('xform.err.noKey'));
                 return;
             }
             ctx.setDoc((d) => {
@@ -431,7 +440,7 @@ export function createXformPanel(ctx) {
                 return replaceTransform(d, target.id, next);
             });
             restoreTime(t);
-            notify('已重置为默认变换');
+            notify(tr('xform.ok.reset'));
             if (typeof ctx.requestRender === 'function') ctx.requestRender();
             refresh();
             return;
@@ -440,7 +449,7 @@ export function createXformPanel(ctx) {
         if (act === 'prev' || act === 'next') {
             const keys = track.keys;
             if (!keys.length) {
-                notify('当前对象没有关键帧');
+                notify(tr('xform.err.layerNoKeys'));
                 return;
             }
             let target = null;
@@ -462,7 +471,7 @@ export function createXformPanel(ctx) {
                 }
             }
             if (!target) {
-                notify(act === 'prev' ? '已经是第一个关键帧' : '已经是最后一个关键帧');
+                notify(act === 'prev' ? tr('xform.err.firstKey') : tr('xform.err.lastKey'));
                 return;
             }
             jumpToTime(target.t);
@@ -528,7 +537,7 @@ export function createXformPanel(ctx) {
         for (const b of actBtn.values()) b.disabled = false;
 
         if (!layer) {
-            keysEl.textContent = '无对象';
+            keysEl.textContent = tr('xform.keys.none');
             return;
         }
 
@@ -540,7 +549,7 @@ export function createXformPanel(ctx) {
         const keyCount = track.keys.length;
 
         // 计数单位统一用「颗」（与时间轴/曲线的报数一致）；「一个关键帧」这类语词不动
-        keysEl.textContent = keyCount + ' 颗关键帧 · 当前 t=' + t.toFixed(2) + 's';
+        keysEl.textContent = tr('xform.keys.count', { n: keyCount, t: t.toFixed(2) });
 
         for (const [key] of FIELDS) {
             const input = fieldInput.get(key);

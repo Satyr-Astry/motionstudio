@@ -12,6 +12,11 @@ import {
     applyMatrix, localUv, anchorPoint, invertMatrix,
 } from '../core/element.mjs';
 import { HIT_PX, pickHandle, pickAnchor, anchorUvFromMatrix, dragPatch, localDelta } from '../core/gizmo.mjs';
+import { skinOf } from '../core/skin.mjs';
+import {
+    brushVertices, cachedSkinVertices, nearestBone, paintWeights, pickSkinVertex,
+} from '../core/weight-paint.mjs';
+import { t as tr } from '../i18n/index.mjs';
 import {
     KLEKS_PATCH_RADIUS, MIN_INFLUENCE_CELLS, hitInside, softPatch, warpOffsetAt, zoneOf,
 } from '../core/warp-drag.mjs';
@@ -39,6 +44,10 @@ export function createInput(deps) {
      * 屏幕距离判断，手柄大小不随缩放变化。
      */
     function hitAt(p, allowMove) {
+        // 权重叠加态：蒙皮顶点比任何手柄都细，先给它让路。
+        // 未激活时 weightVertexAt 直接返回 null，下面所有命中结果一个字都不变。
+        const weightHit = weightVertexAt(p);
+        if (weightHit != null) return { kind: 'weight-vertex', name: 'wv' + weightHit, vertex: weightHit };
         const info = selectionInfo();
         if (!info) return null;
         const { doc, el, sel, time, parentM } = info;
@@ -73,6 +82,175 @@ export function createInput(deps) {
             }
             : false;
         return pickHandle(toScreenQuad(handlePoints(doc, el, time, parentM).quad), { x: p.sx, y: p.sy }, opts);
+    }
+
+    /* ── 权重叠加态（P2-C 步 1） ── */
+
+    /**
+     * 正在编辑的蒙皮对象。未激活 / 对象没了 / skin 没了 一律 null。
+     * 每次现校验（不去监听撤销、解绑、删对象）—— 悬空状态自动失效，不需要同步钩子。
+     */
+    function weightTarget() {
+        if (typeof ctx.weightMode !== 'function' || !ctx.weightMode()) return null;
+        const doc = ctx.doc ? ctx.doc() : null;
+        const layerId = typeof ctx.weightLayerId === 'function' ? ctx.weightLayerId() : null;
+        const el = doc && layerId ? layerById(doc, layerId) : null;
+        if (!el) return null;
+        const time = ctx.time ? ctx.time() : 0;
+        const parentM = typeof ctx.objectParentMatrix === 'function' ? ctx.objectParentMatrix(el.id, time) : null;
+        // 缓存版：一帧里画布绘制、命中、涂抹范围都要这套顶点，applySkin 逐顶点做矩阵乘法，别算三遍
+        const verts = cachedSkinVertices(doc, el, time, parentM);
+        return verts ? { el, verts } : null;
+    }
+
+    /** 屏幕空间顶点命中：返回下标或 null（单选，不做框选）。 */
+    function weightVertexAt(p) {
+        const target = weightTarget();
+        if (!target) return null;
+        const screen = target.verts.pts.map((w) => toScreen(w));
+        return pickSkinVertex(screen, { x: p.sx, y: p.sy }, HIT_PX);
+    }
+
+    /** 涂抹要用的对象 + 归一后的 skin（顶点几何走缓存，skin 走 skinOf 的规范化结果）。 */
+    function weightEditTarget() {
+        const target = weightTarget();
+        if (!target) return null;
+        const skin = skinOf(target.el);
+        if (!skin) return null;
+        return { el: target.el, verts: target.verts, skin };
+    }
+
+    /**
+     * 本次涂抹的目标骨下标（`pts[].b` 同口径，不是骨骼对象的 id —— 落盘存的是下标）。
+     *
+     * 两级取法：① 面板 / 右键设定的 `state.weight.boneId`；② 兜底取「离 `world` 最近的那根骨」。
+     * 兜底不是猜测：用户开了权重态但没挑骨就直接刷，预期是「刷离我最近的这根」，
+     * 而且画布上那根骨会同时加粗，哪个骨在吃这一刷是看得见的。
+     */
+    function weightBoneIndex(skin, world) {
+        const want = typeof ctx.weightBone === 'function' ? ctx.weightBone() : null;
+        if (want) {
+            const hit = skin.bones.findIndex((b) => b && b.id === want);
+            if (hit >= 0) return { index: hit, auto: false };
+        }
+        const near = world ? nearestBone(ctx.doc(), skin, world, ctx.time()) : -1;
+        return near >= 0 ? { index: near, auto: true } : null;
+    }
+
+    /** 指针参数坐标（不夹取：笔刷拖到对象边缘外仍应继续影响最近的顶点） */
+    function weightUvAt(p, el, parentM) {
+        const doc = ctx.doc();
+        if (!doc || !el) return null;
+        return localUv(doc, el, ctx.time(), { x: p.x, y: p.y }, parentM, 0);
+    }
+
+    /** 参数坐标是否落在对象上（留 2% 余量：笔刷圆心压在边缘时仍算对象内） */
+    function uvInside(loc) {
+        return !!loc && loc.u >= -0.02 && loc.u <= 1.02 && loc.v >= -0.02 && loc.v <= 1.02;
+    }
+
+    /**
+     * 起手：记下按下的位置与**整份基准 pts**，之后每帧都从基准重算。
+     * 从上一帧结果继续刷会让衰减系数逐帧累积，手一停就糊成一片。
+     *
+     * @param {object} e 指针事件
+     * @param {{x:number,y:number}} world 起手的世界坐标（兜底取最近骨的判据）
+     */
+    function startWeightDrag(e, world) {
+        const target = weightEditTarget();
+        if (!target) return false;
+        const bone = weightBoneIndex(target.skin, world);
+        if (!bone) return false;
+        const parentM = typeof ctx.objectParentMatrix === 'function'
+            ? ctx.objectParentMatrix(target.el.id, ctx.time()) : null;
+        const loc = weightUvAt(world, target.el, parentM);
+        drag = {
+            pick: { kind: 'weight-paint', name: 'weight-paint' },
+            elId: target.el.id,
+            mode: 'weight',
+            before: ctx.doc(),
+            parentM,
+            weight: {
+                base: target.skin,
+                bone: bone.index,
+                auto: bone.auto,
+                u: loc ? loc.u : null,
+                v: loc ? loc.v : null,
+                moved: false,
+                touched: false,
+            },
+        };
+        preview = null;
+        dragCanceled = false;
+        armDrag(e);
+        if (bone.auto && ctx.notify) {
+            const name = boneNameOf(bone.index);
+            if (name) ctx.notify(tr('props.obj.weightAutoBone', { name }));
+        }
+        return true;
+    }
+
+    /** 骨骼显示名（提示用）。找不到就返回空串，调用方据此跳过提示。 */
+    function boneNameOf(index) {
+        const target = weightEditTarget();
+        const skin = target ? target.skin : null;
+        const slot = skin && skin.bones ? skin.bones[index] : null;
+        if (!slot || !slot.id) return '';
+        const doc = ctx.doc();
+        const el = doc ? layerById(doc, slot.id) : null;
+        return el && el.name ? String(el.name) : '';
+    }
+
+    /**
+     * 一帧的涂抹。圆心跟指针走（连续），强度按参数空间距离线性衰减，逐顶点走补足法。
+     * 写入一律 silent —— 撤销粒度由松手那一步决定，见 onDragEnd。
+     */
+    function applyWeightStroke(e, w) {
+        const doc = ctx.doc();
+        if (!doc) return;
+        const el = layerById(doc, drag.elId);
+        if (!el) return;
+        w.touched = true;
+        const time = ctx.time();
+        const loc = weightUvAt(toDocPoint(e), el, drag.parentM);
+        if (!loc) return;
+        w.u = loc.u;
+        w.v = loc.v;
+        const verts = cachedSkinVertices(doc, el, time, drag.parentM);
+        if (!verts) return;
+        const radius = typeof ctx.weightRadius === 'function' ? ctx.weightRadius() : 0.25;
+        const hits = brushVertices(verts, { u: loc.u, v: loc.v }, radius);
+        if (hits.length === 0) return;
+        // target = 1：笔刷只做「加权重」；target = 0 的减权重留给后续（Alt 语义，见设计稿 §3）
+        const nextSkin = paintWeights(w.base, hits, w.bone, 1, 1);
+        if (!nextSkin) return;
+        if (typeof ctx.writeSkinPoints !== 'function') return;
+        const next = ctx.writeSkinPoints(drag.elId, nextSkin.pts);
+        if (!next || next === doc) return;
+        ctx.setDoc(next, { silent: true, label: tr('props.obj.weightPaint') });
+        w.moved = true;
+    }
+
+    /* 悬停：笔刷圈要跟着指针画，而 pointerdown 只在按下时才有坐标。
+       这里只更新状态，重画由 canvas.mjs 的每帧 rAF 负责，不必再排一次渲染。 */
+    let hover = null;
+
+    function onHover(e) {
+        if (drag) return;
+        const target = weightEditTarget();
+        if (!target) {
+            hover = null;
+            return;
+        }
+        const time = ctx.time();
+        const parentM = typeof ctx.objectParentMatrix === 'function'
+            ? ctx.objectParentMatrix(target.el.id, time) : null;
+        const loc = weightUvAt(toDocPoint(e), target.el, parentM);
+        hover = loc ? { elId: target.el.id, u: loc.u, v: loc.v } : null;
+    }
+
+    function onHoverEnd() {
+        hover = null;
     }
 
     /* ── 拖动状态 ── */
@@ -121,6 +299,23 @@ export function createInput(deps) {
         };
     }
 
+    /**
+     * 拖动手势的公共收尾装置：指针捕获 + 四个 window 监听。
+     * 网格软拖、权重涂抹、平移类拖动手势共用同一套生命周期，
+     * 分开各写一遍的话「某一种拖动忘了摘 keydown」会变成 Esc 失灵。
+     */
+    function armDrag(e) {
+        try {
+            host.setPointerCapture(e.pointerId);
+        } catch (err) {
+            /* 某些指针类型不支持捕获 */
+        }
+        window.addEventListener('pointermove', onDragMove, true);
+        window.addEventListener('pointerup', onDragEnd, true);
+        window.addEventListener('pointercancel', onDragEnd, true);
+        window.addEventListener('keydown', onDragKeyDown, true);
+    }
+
     function startDrag(e, onHandle) {
         const info = selectionInfo();
         if (!info) return;
@@ -140,15 +335,7 @@ export function createInput(deps) {
         };
         preview = null;
         dragCanceled = false;
-        try {
-            host.setPointerCapture(e.pointerId);
-        } catch (err) {
-            /* 某些指针类型不支持捕获 */
-        }
-        window.addEventListener('pointermove', onDragMove, true);
-        window.addEventListener('pointerup', onDragEnd, true);
-        window.addEventListener('pointercancel', onDragEnd, true);
-        window.addEventListener('keydown', onDragKeyDown, true);
+        armDrag(e);
     }
 
     /** 拖动中按 Esc = 放弃这次拖动（锚点回到按下前的样子，不写文档） */
@@ -198,6 +385,11 @@ export function createInput(deps) {
         const el = layerById(doc, drag.elId);
         if (!el) return;
         const t = ctx.time();
+        // 权重涂抹：数学全在 core/weight-paint，这里只管「静默写 + 记状态」。
+        if (drag.pick && drag.pick.kind === 'weight-paint') {
+            if (drag.weight) applyWeightStroke(e, drag.weight);
+            return;
+        }
         // 网格软拖：位移换算到对象局部像素，交给 core/warp-drag 分给附近格点。
         // 逐帧写文档但**不进撤销栈**（silent）：显式 coalesce 的时间窗是 700ms
         //（shell/doc-state.mjs:263），拖到一半手停一下就断成两条记录；
@@ -278,8 +470,37 @@ export function createInput(deps) {
         const elId = drag.elId;
         const pickKind = drag.pick && drag.pick.kind;
         const softState = drag.soft || null;
+        const weightState = drag.weight || null;
         drag = null;
         preview = null;
+
+        /* 权重涂抹：拖动中全是 silent 写入，这里补**唯一**一条命令。
+           Esc 取消时静默回落到按下时的文档；单击不动（没有 touched）什么都不做 ——
+           那只是「选中某个顶点」，不该留撤销记录也不该弹提示。 */
+        if (pickKind === 'weight-paint') {
+            const canceled = dragCanceled;
+            dragCanceled = false;
+            if (canceled) {
+                if (weightState && weightState.moved && before) ctx.setDoc(before, { silent: true });
+                if (typeof ctx.requestRender === 'function') ctx.requestRender();
+                if (ctx.notify) ctx.notify(tr('props.obj.weightCanceled'));
+                return;
+            }
+            const after = ctx.doc();
+            if (weightState && weightState.moved && before && after && before !== after) {
+                const cmd = {
+                    label: tr('props.obj.weightPaint'),
+                    undo: () => ctx.setDoc(before, { silent: true }),
+                    redo: () => ctx.setDoc(after, { silent: true }),
+                };
+                if (ctx.engine && typeof ctx.engine.pushCommand === 'function') ctx.engine.pushCommand(cmd);
+                else if (ctx.engine && ctx.engine.history) ctx.engine.history.push(cmd);
+                if (ctx.notify) ctx.notify(tr('props.obj.weightPainted'));
+            } else if (weightState && weightState.touched && ctx.notify) {
+                ctx.notify(tr('props.obj.weightNoChange'));
+            }
+            return;
+        }
 
         /* 网格软拖：拖动中都是 silent 写入，这里补一条命令。
            Esc 取消时静默回落到按下时的文档——不推命令、也不留空记录。 */
@@ -370,6 +591,36 @@ export function createInput(deps) {
 
         // 手柄在任何工具下都能抓
         const onHandle = hitAt(probe, isSelect);
+        // 权重叠加态：按下蒙皮顶点 = 选中它 **并且** 起手涂抹。
+        // 单击不动只是选中（松手时没 touched，不落撤销、不弹提示），拖动才写权重；
+        // 权重模式没开时 hitAt 根本不会产出 weight-vertex，普通点击的语义完全不变。
+        if (onHandle && onHandle.kind === 'weight-vertex') {
+            e.preventDefault();
+            e.stopPropagation();
+            ctx.setWeightVertex(onHandle.vertex);
+            const target = weightEditTarget();
+            const world = target && target.verts ? target.verts.pts[onHandle.vertex] : p;
+            startWeightDrag(e, world || p);
+            return;
+        }
+        // 权重态下没压住某个顶点、但指针落在对象上：笔刷是「区域」不是「点」，
+        // 落在两个顶点之间照样得刷。这里以最近的顶点作为选中展示，圆心仍跟指针走。
+        if (typeof ctx.weightMode === 'function' && ctx.weightMode()) {
+            const wt = weightEditTarget();
+            if (wt) {
+                const parentM = typeof ctx.objectParentMatrix === 'function'
+                    ? ctx.objectParentMatrix(wt.el.id, ctx.time()) : null;
+                if (uvInside(weightUvAt(p, wt.el, parentM))) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const screen = wt.verts.pts.map((w) => toScreen(w));
+                    const near = pickSkinVertex(screen, { x: probe.sx, y: probe.sy }, Infinity);
+                    if (near != null) ctx.setWeightVertex(near);
+                    startWeightDrag(e, p);
+                    return;
+                }
+            }
+        }
         // 网格模式下落在图像内部（且没压住顶点/手柄/锚点）时，拖动改的是「附近格点」而不是对象位置
         const softAt = onHandle && onHandle.kind === 'move' && isSelect ? softTarget(p) : null;
         if (zoneOf(onHandle, { mode: softAt ? 'warp' : '', inside: !!softAt }) === 'soft') {
@@ -427,5 +678,21 @@ export function createInput(deps) {
         dragCanceled = false;
     }
 
-    return { onDown, dispose, previewAnchor, previewSoftDrag };
+    /**
+     * 笔刷圈要画在哪。拖动中跟 `drag.weight`（指针已出对象也继续跟，涂抹还没结束），
+     * 空闲时跟 `hover`（指针不在对象上就是 null，不画）。
+     * `elId` 给画布用：圈只能画在权重态正在编辑的那个对象上。
+     */
+    function weightBrush() {
+        const target = weightEditTarget();
+        if (!target) return null;
+        const radius = typeof ctx.weightRadius === 'function' ? ctx.weightRadius() : 0.25;
+        const at = drag && drag.weight
+            ? { u: drag.weight.u, v: drag.weight.v }
+            : (hover ? { u: hover.u, v: hover.v } : null);
+        if (!at || !Number.isFinite(at.u) || !Number.isFinite(at.v)) return null;
+        return { elId: target.el.id, verts: target.verts, u: at.u, v: at.v, radius };
+    }
+
+    return { onDown, onHover, onHoverEnd, weightBrush, dispose, previewAnchor, previewSoftDrag };
 }

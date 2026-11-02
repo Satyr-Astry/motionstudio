@@ -16,7 +16,7 @@
  *   { format:'motionstudio-project', version:4, name, savedAt,
  *     width, height, fps, loopMode, duration, onion?, timebase?,
  *     elements:[{ id,name,visible,locked,opacity,mixMode,kind,anchor,parentId?,time?,
- *                 transform?, onionIgnore?, onClickIgnore?,
+ *                 transform?, effects?, onionIgnore?, onClickIgnore?,
  *                 cels:[{ at, image:{ ref, w, h } | { w, h, dataUrl } | null }] }],
  *     assets:{ <对象id>:'data:image/png;base64,…', <对象id>#2:… },
  *     tags:[] }
@@ -38,11 +38,20 @@
  */
 
 import { createKey } from '../core/transform.mjs';
-import { drawingsOf } from '../core/doc-model.mjs';
-import { docDuration, makeObject, migrateFromFrames, objectsOf } from '../core/doc-model.mjs';
+import { defaultEffect, ensureEffectIds } from '../paint/effects.mjs';
+import { drawingsOf, keyHasDrawing } from '../core/doc-model.mjs';
+import { docDuration, makeObject, migrateFromFrames, objectsOf, normalizeBone, BONE_ANCHOR } from '../core/doc-model.mjs';
 import { drawOrderOf, normalizeDrawOrder } from '../core/draw-order.mjs';
+import { normalizeSkin } from '../core/skin.mjs';
+import { normalizeIk } from '../core/ik.mjs';
 
 export const FORMAT = 'motionstudio-project';
+/**
+ * 文件版本。加骨骼（`kind: 'bone'` + `bone` 字段）与蒙皮（`skin` 字段）时**故意不升**：
+ * 两者都是纯增量字段，v4 读入器对没有它们的对象本来就按「无该字段」处理，
+ * 旧版本应用读新文件也只会把骨骼当成不认识的值而收敛回手绘、把 skin 丢掉，不会崩。
+ * 升版本号反而要写迁移、要维护两条读路径，收益为零。
+ */
 export const VERSION = 4;
 /** 旧版本号：v1/v2/v3 读入时按帧模型迁移（migrateFromFrames）。 */
 export const VERSION_V1 = 1;
@@ -116,15 +125,28 @@ function posNumber(v, fallback) {
     return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-/** anchor 归一：`{x,y}`，非有限数一律回 0.5。 */
-function normAnchor(raw) {
-    if (!raw || typeof raw !== 'object') return { x: DEFAULT_ANCHOR.x, y: DEFAULT_ANCHOR.y };
+/**
+ * anchor 归一：`{x,y}`，非有限数一律用缺省值。
+ * 缺省值随 kind 变（骨骼在根部，其余居中），由调用方通过 fallback 传入。
+ */
+function normAnchor(raw, fallback) {
+    const dflt = fallback || DEFAULT_ANCHOR;
+    if (!raw || typeof raw !== 'object') return { x: dflt.x, y: dflt.y };
     const x = Number(raw.x);
     const y = Number(raw.y);
     return {
-        x: Number.isFinite(x) ? x : DEFAULT_ANCHOR.x,
-        y: Number.isFinite(y) ? y : DEFAULT_ANCHOR.y,
+        x: Number.isFinite(x) ? x : dflt.x,
+        y: Number.isFinite(y) ? y : dflt.y,
     };
+}
+
+/**
+ * kind 的落盘白名单：只写 'paint' / 'image' / 'bone' 三值。
+ * 写侧与读侧共用同一个函数，否则「写进去什么」和「认得什么」会各自演化，
+ * 某个值只能写不能读时，存档会静默降级成手绘。
+ */
+function kindOf(raw) {
+    return raw === 'bone' ? 'bone' : raw === 'image' ? 'image' : DEFAULT_KIND;
 }
 
 /* ─────────────────────────── 位图 ⇄ dataURL ─────────────────────────── */
@@ -295,9 +317,86 @@ function trackToJSON(track) {
     return { keys: out };
 }
 
+/**
+ * 效果的一个参数轨道 → 可 JSON 化结构。
+ *
+ * 为什么沿用 `trackToJSON` 的骨架（`{keys:[{t,state,ease,h1,h2}]}`）而不是另造一套格式：
+ * 效果轨道本来就是用 `createTrack()` 造出来的同一个结构，只是值放在 `state.x`
+ * （写入见 `shell/commands.mjs` 的 setEffectParam / keyEffectParam，求值见
+ * `paint/effects.mjs` 的 effectAt）。沿用同一骨架，读回来能直接交给同一个 `stateAt` 求值，
+ * 不必为效果再养第三套轨道解析。差别只有两点：
+ *   ① 每个参数包一层 `{keys}`（对象的 `transform` 是一条轨道，效果是「参数名 → 轨道」字典）；
+ *   ② 只写 `state.x` —— 一个通道只有一个标量，`state` 里其余字段都是 `normState` 补出来的
+ *      变换默认值（y / scaleX / warp …），写进存档纯属噪声，读回时 `stateAt` 会照样兜底。
+ */
+function fxTrackToJSON(track) {
+    const json = trackToJSON(track);
+    if (!json) return null;
+    const keys = [];
+    for (const k of json.keys) {
+        const x = Number(k.state && k.state.x);
+        if (!Number.isFinite(x)) continue;
+        const out = { t: k.t, state: { x: x }, ease: k.ease };
+        if (k.h1) out.h1 = k.h1;
+        if (k.h2) out.h2 = k.h2;
+        keys.push(out);
+    }
+    return keys.length ? { keys: keys } : null;
+}
+
+/** 效果轨道字典 → 可 JSON 化结构；空字典不落盘（与「无效果不写字段」同口径）。 */
+function fxTracksToJSON(tracks) {
+    if (!tracks || typeof tracks !== 'object') return null;
+    const out = {};
+    for (const key of Object.keys(tracks)) {
+        const json = fxTrackToJSON(tracks[key]);
+        if (json) out[key] = json;
+    }
+    return Object.keys(out).length ? out : null;
+}
+
+/**
+ * 效果数组 → 可 JSON 化结构（没有效果时返回 null，字段整个不落下）。
+ *
+ * 落盘形状与运行期对象**同构**：参数扁平写在效果上（`{type, amount, color, tracks}`），
+ * 不再嵌一层 `params`。理由是运行期本来就是扁平的 —— `paint/effects.mjs` 的
+ * defaultEffect / normalizeEffect 产出 `{type, ...参数}`，编辑器读写走 `fx[key]`
+ * （`editors/prop-object.mjs`、`shell/commands.mjs`），多包一层只会让读写两边各搬运一次。
+ * 读入侧两种形状都认（见 effectsFromJSON），将来真要加 `params` 子对象也不会读不进来。
+ */
+function effectsToJSON(list) {
+    if (!Array.isArray(list)) return null;
+    const out = [];
+    for (const raw of list) {
+        if (!raw || typeof raw !== 'object') continue;
+        const type = typeof raw.type === 'string' ? raw.type : '';
+        if (!type) continue;
+        const fx = { type: type };
+        if (typeof raw.id === 'string' && raw.id) fx.id = raw.id;
+        // 参数：只抄标量与字符串（对象 / 函数进不了存档）；`params` 包装存在时一并认
+        const sources = raw.params && typeof raw.params === 'object' ? [raw, raw.params] : [raw];
+        for (const src of sources) {
+            for (const key of Object.keys(src)) {
+                if (key === 'type' || key === 'tracks' || key === 'params' || key === 'id') continue;
+                const v = src[key];
+                if (typeof v === 'number') {
+                    if (Number.isFinite(v)) fx[key] = v;
+                } else if (typeof v === 'string') {
+                    fx[key] = v;
+                }
+            }
+        }
+        const tracks = fxTracksToJSON(raw.tracks);
+        if (tracks) fx.tracks = tracks;
+        out.push(fx);
+    }
+    return out.length ? out : null;
+}
+
 /** 对象（v1 里叫 layer）→ v4 对象节点（cels 由 docToJSON 编码后补上）。 */
 function elementToJSON(l) {
     const src = l || {};
+    const kind = kindOf(src.kind);
     const out = {
         id: src.id,
         name: src.name,
@@ -305,10 +404,23 @@ function elementToJSON(l) {
         locked: !!src.locked,
         opacity: Number.isFinite(src.opacity) ? src.opacity : 1,
         mixMode: src.mixMode || 'source-over',
-        kind: src.kind === 'image' ? 'image' : DEFAULT_KIND,
-        anchor: normAnchor(src.anchor),
+        kind: kind,
+        anchor: normAnchor(src.anchor, kind === 'bone' ? BONE_ANCHOR : DEFAULT_ANCHOR),
         onionIgnore: !!src.onionIgnore,
     };
+    // 骨骼外观只跟着骨骼对象落盘：非骨骼对象写 bone 只是存档噪声，
+    // 还会让「同一份文档存两次得两个形状」。
+    if (kind === 'bone') {
+        const bone = normalizeBone(src.bone);
+        if (bone) out.bone = bone;
+    }
+    // 蒙皮：只有归一后有效才落盘。坏 skin 写进文件只会让下次读入时更难判断
+    // 「到底是没绑过，还是绑坏了」，所以坏数据一律当作没绑。
+    const skin = normalizeSkin(src.skin);
+    if (skin) out.skin = skin;
+    // IK：只有归一后有效才落盘（坏约束写进文件只会让下次读入更难判断）
+    const ik = normalizeIk(src.ik);
+    if (ik) out.ik = ik;
     if (src.onClickIgnore) out.onClickIgnore = true;
     // v5：父子层级与时间通道（恒等值不落盘，老文件读进来也是干净对象）
     if (src.parentId != null) out.parentId = src.parentId;
@@ -316,6 +428,37 @@ function elementToJSON(l) {
     if (time) out.time = time;
     const transform = trackToJSON(src.transform);
     if (transform) out.transform = transform;
+    const effects = effectsToJSON(src.effects);
+    if (effects) out.effects = effects;
+    return out;
+}
+
+/**
+ * 序列化口径：「哪些时刻有纹理」只认**真源** —— 关键帧上的 `drawing` 属性 + 纹理库。
+ *
+ * 为什么不直接读 `obj.cels`：v8 起 `obj.cels` 只是 `makeObject` / `syncLibrary` 里
+ * `projectCels` 现算出来的**镜像**（`core/doc-model.mjs`），而时间轴的移动 / 删除关键帧
+ * 走的是 `editors/timeline-geo.mjs:308` 那个 `setTransform` 浅替换，根本不会重算镜像。
+ * 于是 `obj.cels` 会停在旧时刻：照抄它等于把纹理写回移动前的位置，甚至把用户已经删掉的
+ * 纹理又写进存档 —— 存档往返后纹理静默错位 / 复活。
+ *
+ * 返回值与 `projectCels` 同口径：按时间升序，每颗带 `drawing` 属性的关键帧一条；
+ * `image` 从 `drawingsOf` 取，与 `celAt` / `imageAt` 是同一条取图路径（不另开一套口径）。
+ * 只有对象连关键帧轴都没有（`transform.keys` 不是数组，v7 及更早的裸对象）时才退回 `cels`。
+ */
+function drawingCelsOf(obj) {
+    const track = obj && obj.transform;
+    const keys = track && Array.isArray(track.keys) ? track.keys : null;
+    if (!keys) return Array.isArray(obj && obj.cels) ? obj.cels : [];
+    const lib = new Map();
+    for (const d of drawingsOf(obj)) lib.set(d.id, d.image);
+    const out = [];
+    for (const k of keys) {
+        if (!keyHasDrawing(k)) continue;
+        const id = k.drawing == null ? null : String(k.drawing);
+        out.push({ at: k.t, image: id == null ? null : lib.get(id) || null });
+    }
+    out.sort((a, b) => a.at - b.at);
     return out;
 }
 
@@ -344,7 +487,8 @@ export function docToJSON(doc) {
     for (let i = 0; i < srcObjects.length; i++) {
         const src = srcObjects[i];
         const el = elements[i];
-        const cels = Array.isArray(src && src.cels) ? src.cels : [];
+        // 纹理从真源重算（见 drawingCelsOf）：`src.cels` 是可能过期的镜像，不能当口径用。
+        const cels = drawingCelsOf(src);
         // 位图对象身份 → assets key：该对象第 1 张图用对象 id，第 2、3… 张用 `id#2`、`id#3`
         const refs = new Map();
         const assetKeys = [];
@@ -488,6 +632,86 @@ function trackFromJSON(raw) {
     return { keys: out };
 }
 
+/**
+ * 文件里的效果轨道字典 → 运行期轨道（宽松归一，坏通道丢掉而不是整条效果报废）。
+ *
+ * 与 `trackFromJSON` 的差别只在「通道」这一层：对象的 transform 是一条轨道，效果是
+ * `参数名 → 轨道` 的字典，所以逐通道调一次同样的归一；值仍收在 `state.x`。
+ */
+function fxTracksFromJSON(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const out = {};
+    for (const key of Object.keys(raw)) {
+        const channel = raw[key];
+        // `keys` 不是数组 ⇒ 这个参数根本没有轨道，丢掉通道（不猜、不补空帧）
+        if (!channel || typeof channel !== 'object' || !Array.isArray(channel.keys)) continue;
+        const keys = [];
+        for (const k of channel.keys) {
+            if (!k || typeof k !== 'object') continue;
+            const t = Number(k.t);
+            const x = Number(k.state && k.state.x);
+            if (!Number.isFinite(t) || !Number.isFinite(x)) continue;
+            const h1 = Array.isArray(k.h1) ? [Number(k.h1[0]), Number(k.h1[1])] : undefined;
+            const h2 = Array.isArray(k.h2) ? [Number(k.h2[0]), Number(k.h2[1])] : undefined;
+            try {
+                // 借 createKey 归一 ease / 切线柄（它顺带把 state 补成整份变换状态），
+                // 再收回成 `{x: …}`：效果轨道只认这一个标量，留着补出来的 y / scaleX 只是噪声。
+                const made = createKey(t, { x: x }, k.ease, h1, h2);
+                keys.push({ t: made.t, ease: made.ease, h1: made.h1, h2: made.h2, state: { x: made.state.x } });
+            } catch (err) {
+                /* 单个坏关键帧不该毁掉整个项目 */
+            }
+        }
+        if (!keys.length) continue;
+        keys.sort((a, b) => a.t - b.t);
+        out[key] = { keys: keys };
+    }
+    return Object.keys(out).length ? out : null;
+}
+
+/**
+ * 文件里的效果数组 → 运行期效果对象。
+ *
+ * 刻意**不**调 `normalizeEffect`：它按 `EFFECT_DEFS` 白名单收键，会把整个 `tracks` 丢掉
+ * （`paint/effects.mjs` 里它只服务渲染），一调效果动画就全没了。这里的规则：
+ * - 非数组 / 元素不是对象 / 缺 type / 不认识的 type → 丢掉该条（渲染侧本来也不认它）；
+ * - 参数先取 `defaultEffect(type)` 的默认值，再让存档里同名字段覆盖 ⇒ 缺键自动补齐；
+ * - 数值只认有限数，颜色只认非空串（`rgba(0,0,0,0.45)` 这种带 alpha 的照原样留着，
+ *   不按 `#rrggbb` 校验 —— 渲染侧的 readColor 也只要求非空）；
+ * - 不在这里 clamp：夹取是渲染期的职责（effectAt / normalizeEffect 各自管），载入时静默
+ *   改用户存的数只会让人以为文件被写坏。
+ */
+function effectsFromJSON(raw) {
+    if (!Array.isArray(raw)) return [];
+    const out = [];
+    for (const item of raw) {
+        if (!item || typeof item !== 'object') continue;
+        const base = defaultEffect(typeof item.type === 'string' ? item.type : '');
+        if (!base) continue;
+        // 兼容将来可能出现的 `{type, params:{…}}` 包装；现在运行期是扁平的
+        const src = item.params && typeof item.params === 'object' ? item.params : item;
+        for (const key of Object.keys(base)) {
+            if (key === 'type' || !Object.prototype.hasOwnProperty.call(src, key)) continue;
+            const v = src[key];
+            // 参数是数值还是颜色由默认值的类型决定（EFFECT_DEFS 里 num / rgb 的产物）：
+            // 颜色只认非空串，数值只认有限数（字符串数字也认，方便手改的文件）
+            if (typeof base[key] === 'string') {
+                if (typeof v === 'string' && v.trim() !== '') base[key] = v.trim();
+                continue;
+            }
+            const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+            if (Number.isFinite(n)) base[key] = n;
+        }
+        if (typeof item.id === 'string' && item.id) base.id = item.id;
+        const tracks = fxTracksFromJSON(item.tracks);
+        if (tracks) base.tracks = tracks;
+        out.push(base);
+    }
+    // 补号码：老档（v8.25 之前保存的）效果没有 id，这里按数组顺序发 fx-1..fx-n，
+    // 用户一保存就落盘；确定性发号保证同一份档反复载入得到同一组 id。
+    return ensureEffectIds(out);
+}
+
 /** 文件版本号：外壳（信封）上的优先，其次节点自身。 */
 function fileVersion(json, node) {
     const a = json && typeof json === 'object' ? Number(json.version) : NaN;
@@ -507,6 +731,7 @@ function isFrameNode(node, version) {
 /** 文件里的对象节点 → 干净对象外壳（不含 cels，位图要等解码）。 */
 function elementShell(src, i) {
     const s = src && typeof src === 'object' ? src : {};
+    const kind = kindOf(s.kind);
     const element = {
         id: s.id ? String(s.id) : 'element' + (++idSeq) + '-' + i,
         name: s.name || '对象 ' + (i + 1),
@@ -514,11 +739,24 @@ function elementShell(src, i) {
         locked: !!s.locked,
         opacity: Number.isFinite(s.opacity) ? s.opacity : 1,
         mixMode: s.mixMode || 'source-over',
-        // v1 没有 kind / anchor：升级时补 paint + 居中锚点
-        kind: s.kind === 'image' ? 'image' : DEFAULT_KIND,
-        anchor: normAnchor(s.anchor),
+        // v1 没有 kind / anchor：升级时补 paint + 居中锚点；骨骼补根部锚点
+        kind: kind,
+        anchor: normAnchor(s.anchor, kind === 'bone' ? BONE_ANCHOR : DEFAULT_ANCHOR),
         onionIgnore: !!s.onionIgnore,
     };
+    // 骨骼外观：档里有就收（越界/坏色归一），没有就交给 makeObject 补缺省 ——
+    // 所以这里**不写** bone 键，让「缺省」只有一个真源（BONE_DEFAULTS）。
+    if (kind === 'bone') {
+        const bone = normalizeBone(s.bone);
+        if (bone) element.bone = bone;
+    }
+    // 蒙皮：档里有就收（夹取网格、裁权重、重归一），没有就不写字段 ——
+    // 和 bone 同一策略：缺省只有一个来源（skinOf/normalizeSkin）。
+    const skin = normalizeSkin(s.skin);
+    if (skin) element.skin = skin;
+    // 与 bone 同一策略：缺省只有一个来源（ik.mjs 的 normalizeIk）
+    const ik = normalizeIk(s.ik);
+    if (ik) element.ik = ik;
     if (s.onClickIgnore) element.onClickIgnore = true;
     // v5：parentId 与时间通道；缺省时不写字段（保持对象形状干净）
     if (s.parentId != null) element.parentId = String(s.parentId);
@@ -526,6 +764,9 @@ function elementShell(src, i) {
     if (time) element.time = time;
     const track = trackFromJSON(s.transform);
     if (track) element.transform = track;
+    // 效果（含参数级关键帧）：缺字段 / 坏数据一律收敛成 []，老档读进来行为不变（由 makeObject 兜成空数组）
+    const effects = effectsFromJSON(s.effects);
+    if (effects.length) element.effects = effects;
     return element;
 }
 
@@ -789,11 +1030,14 @@ export function addImageElement(doc, spec) {
     let id = base.id || newElementId();
     while (taken.has(id)) id = newElementId();
 
-    const element = Object.assign({}, base, {
+    // 走 makeObject 而不是手拼：它是「cels → 关键帧上的 drawing」唯一的规范化入口。
+    // 手拼出来的 element 只有 cels 有图、关键帧上没有纹理，会成为「按真源重算」时的孤例
+    // （纹理在存档里凭空消失）；经 makeObject 吸收后文档里只剩一条关键帧时间轴。
+    const element = makeObject(Object.assign({}, base, {
         id: id,
         transform: { keys: [createKey(0, state)] },
         cels: [{ at: 0, image: spec.image || null }],
-    });
+    }));
 
     const next = Object.assign({}, doc, { objects: [element].concat(existing) });
     return { doc: next, element: element, celCount: 1 };

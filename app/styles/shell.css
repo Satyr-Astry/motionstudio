@@ -252,44 +252,6 @@ body {
     font-weight: 600;
 }
 
-/* —— 播放控制 —— */
-
-.top-transport {
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    gap: 2px;
-}
-
-.top-tr-btn {
-    flex: 0 0 auto;
-    width: var(--h-btn);
-    min-width: var(--h-btn);
-    padding: 0;
-    color: var(--ink-dim);
-    font-size: 11px;
-}
-
-.top-tr-btn.is-on {
-    background: var(--accent-2);
-    border-color: var(--accent-2);
-    color: #fff;
-}
-
-/* —— 时间读数 / 右侧提示 —— */
-
-.top-time {
-    flex: 0 0 auto;
-    min-width: 92px;
-    margin-left: 6px;
-    text-align: right;
-    font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-    color: var(--ink-dim);
-    white-space: nowrap;
-}
-
 .top-hint {
     flex: 0 1 auto;
     max-width: 42%;

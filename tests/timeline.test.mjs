@@ -31,6 +31,7 @@ import {
     segmentIndexAtTime,
     mount,
 } from '../app/editors/timeline.mjs';
+import { t } from '../app/i18n/index.mjs';
 
 const img = (tag) => ({ tag, width: 4, height: 4 });
 const near = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) <= eps, `${a} ≉ ${b}`);
@@ -420,13 +421,13 @@ test('mount 能用最小 ctx 挂起来：结构、纹理点、菱形、段条都
 
         // 工具条按钮齐全，且都接线到了 ctx
         // v8：播放控制（⏮ ‹ ▶ › ⏭ + 时间读数）搬进了时间轴，顺序即语义：
-        // 播放控制 → 纹理 → 关键帧 → 缩放。改这里必须同步改 timeline-paint。
+        // 播放控制 → 曝光 → 关键帧 → 缩放。改这里必须同步改 timeline-paint。
         const btns = root.childNodes[0].querySelectorAll('.tline-btn');
         assert.deepEqual(btns.map((b) => b.dataset.act), [
             'first', 'prev', 'play', 'next', 'last',
             // v10：预览播放的两件（速度 / 方式）紧跟走带 —— 只影响播放，不改文档结构
             'play-speed', 'play-mode',
-            'prevcel', 'nextcel', 'addcel', 'delcel', 'addkey', 'snap',
+            'addcel', 'delcel', 'addkey', 'snap',
             'zoomout', 'zoomin',
         ]);
 
@@ -467,6 +468,132 @@ test('mount 面对空 ctx 也不崩：缺失的能力只提示', () => {
         api.refresh();
         api.focusFrame();
         assert.equal(host.querySelectorAll('.tline-cel').length, 0);
+        api.destroy();
+    } finally {
+        delete globalThis.document;
+        delete globalThis.window;
+    }
+});
+
+/* ───────────────── T15：时间轴的「格」控件清算 ───────────────── */
+
+/** 带三次曝光（0 / 1 / 2 s）的单对象文档。 */
+function docWithExposures() {
+    const d = createDoc({ fps: 12, duration: 3 });
+    const obj = makeObject({
+        id: d.objects[0].id,
+        cels: [
+            { at: 0, image: { tag: 'a', width: 4, height: 4 } },
+            { at: 1, image: { tag: 'b', width: 4, height: 4 } },
+            { at: 2, image: { tag: 'c', width: 4, height: 4 } },
+        ],
+    });
+    d.objects[0] = obj;
+    return { d, obj };
+}
+
+/** 最小 ctx，外加两个记录型曝光动作（面板只该通过它们改文档）。 */
+function exposureCtx(d, obj) {
+    const state = { doc: d, t: 0.5, active: obj.id };
+    const calls = [];
+    const ctx = {
+        doc: () => state.doc,
+        time: () => state.t,
+        setTime: (v) => {
+            state.t = v;
+        },
+        activeLayerId: () => state.active,
+        on: () => () => {},
+        requestRender: () => {},
+        notify: () => {},
+        setDoc: (fn) => {
+            state.doc = fn(state.doc) || state.doc;
+        },
+        addExposure: (id, t) => {
+            calls.push(['addExposure', id, t]);
+        },
+        removeCelAt: (id, t) => {
+            calls.push(['removeCelAt', id, t]);
+        },
+    };
+    return { state, calls, ctx };
+}
+
+test('T15：上格 / 下格 已删 —— 工具条没有 prevcel / nextcel，分组 cel 改名 tex', () => {
+    const { d, obj } = docWithExposures();
+    const { ctx } = exposureCtx(d, obj);
+    const doc = fakeDocument();
+    globalThis.document = doc;
+    globalThis.window = { innerWidth: 1200, innerHeight: 800 };
+    try {
+        const host = doc.createElement('div');
+        const api = mount(host, ctx);
+        const toolsEl = host.childNodes[0].childNodes[0];
+        const acts = toolsEl.querySelectorAll('.tline-btn').map((b) => b.dataset.act);
+        assert.ok(!acts.includes('prevcel'), '上格按钮必须已经删掉（功能在 Shift+, 与命令面板）');
+        assert.ok(!acts.includes('nextcel'), '下格按钮必须已经删掉（功能在 Shift+. 与命令面板）');
+        assert.deepEqual(
+            toolsEl.querySelectorAll('.tline-grp').map((g) => g.dataset.grp),
+            ['transport', 'time', 'tex', 'key', 'zoom'],
+            '组名 cel → tex：标识符里不再出现「格」这个旧单位'
+        );
+        api.destroy();
+    } finally {
+        delete globalThis.document;
+        delete globalThis.window;
+    }
+});
+
+test('T15：再曝光 / 删曝光 只是改名 —— 点击仍走 addExposure / removeCelAt', () => {
+    const { d, obj } = docWithExposures();
+    const { ctx, calls } = exposureCtx(d, obj);
+    const doc = fakeDocument();
+    globalThis.document = doc;
+    globalThis.window = { innerWidth: 1200, innerHeight: 800 };
+    try {
+        const host = doc.createElement('div');
+        const api = mount(host, ctx);
+        const toolsEl = host.childNodes[0].childNodes[0];
+        const onClick = toolsEl.listeners.find(([type]) => type === 'click')[1];
+        const btn = (act) => toolsEl.querySelectorAll('.tline-btn').find((b) => b.dataset.act === act);
+        const press = (act) => {
+            const b = btn(act);
+            onClick({ target: b, shiftKey: false, preventDefault() {} });
+            return b;
+        };
+
+        const addBtn = press('addcel');
+        assert.ok(addBtn.innerHTML.includes(t('timeline.btn.addcel.text')), '文案从「曝光」改成「再曝光」');
+        assert.deepEqual(calls[0], ['addExposure', obj.id, 0.5], '复用当前纹理再曝光一次，不新建图');
+
+        const delBtn = press('delcel');
+        assert.ok(delBtn.innerHTML.includes(t('timeline.btn.delcel.text')), '文案从「删格」改成「删曝光」');
+        assert.deepEqual(calls[1], ['removeCelAt', obj.id, 0], '摘掉播放头所在那次曝光（0 s），不动整张纹理');
+        assert.equal(btn('addcel').disabled, false);
+        assert.equal(btn('delcel').disabled, false, '三次曝光时删曝光可用');
+        api.destroy();
+    } finally {
+        delete globalThis.document;
+        delete globalThis.window;
+    }
+});
+
+test('T15：只剩一次曝光时删曝光禁用 —— 判据来自 celTimes 真源', () => {
+    const d = createDoc({ fps: 12, duration: 3 });
+    const obj = makeObject({ id: d.objects[0].id, cels: [{ at: 0, image: { tag: 'a', width: 4, height: 4 } }] });
+    d.objects[0] = obj;
+    const { ctx } = exposureCtx(d, obj);
+    const doc = fakeDocument();
+    globalThis.document = doc;
+    globalThis.window = { innerWidth: 1200, innerHeight: 800 };
+    try {
+        const host = doc.createElement('div');
+        const api = mount(host, ctx);
+        api.refresh();
+        const toolsEl = host.childNodes[0].childNodes[0];
+        const btn = (act) => toolsEl.querySelectorAll('.tline-btn').find((b) => b.dataset.act === act);
+        assert.equal(btn('delcel').disabled, true, '一张不剩的删法要挡住（removeCelAt 也会拒绝）');
+        assert.equal(btn('addcel').disabled, false);
         api.destroy();
     } finally {
         delete globalThis.document;

@@ -194,7 +194,7 @@ test('cloneDocument 是深拷贝：结构相等但互不影响', () => {
     assert.notEqual(objectsOf(doc)[0].name, 'X');
 });
 
-test('normalizeOnion 夹取边界、只认 tint/fade', () => {
+test('normalizeOnion 夹取边界、mode 落盘值只有 tint / dim', () => {
     const cfg = normalizeOnion({ enabled: 1, before: 99, after: -3, opacity: 2, mode: 'x', past: 5 });
     assert.equal(cfg.enabled, false, '只认严格的 true');
     assert.equal(cfg.before, 12);
@@ -214,7 +214,10 @@ test('normalizeOnion 夹取边界、只认 tint/fade', () => {
         opacity: 0.4,
         ignoreTransform: false,
     });
-    assert.equal(normalizeOnion({ mode: 'fade' }).mode, 'fade');
+    // 面板写的是 'dim'，必须原样保留 —— 以前这里只认 'fade'，会把用户选的「淡化」吃成「着色」
+    assert.equal(normalizeOnion({ mode: 'dim' }).mode, 'dim');
+    // 'fade' 是 v8 之前的老值，含义等同 dim，读进来归一成 'dim'
+    assert.equal(normalizeOnion({ mode: 'fade' }).mode, 'dim');
     assert.equal(normalizeOnion({ before: 2.6 }).before, 3, '四舍五入');
     assert.equal(normalizeOnion({ enabled: true, ignoreTransform: true }).ignoreTransform, true);
 });

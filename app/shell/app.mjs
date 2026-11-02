@@ -34,12 +34,13 @@ import {
     swapCelAt,
     imageAt,
     moveCel as moveCelDoc,
+    addObject,
     objectById,
     objectsOf,
     patchObject,
     removeCelAt as removeCelAtDoc,
-    reorderObject,
     setImageAt,
+    setKeyDrawing,
     setObjectSize as setObjectSizeDoc,
     drawingsOf,
     addDrawing,
@@ -52,35 +53,12 @@ import {
     totalSeconds,
 } from '../core/doc-model.mjs';
 import { addKey, createTrack, matrixOf, setKeyState, stateAt } from '../core/transform.mjs';
-import {
-    describeTime,
-    isIdentityTime,
-    localTimeOf,
-    normalizeTime,
-    setParent as setParentDoc,
-    timeDepth,
-    collectSubtree,
-    subtreeSize,
-} from '../core/timegraph.mjs';
+import { SKIN_DEFAULTS, bindSkin, normalizeSkin, skinOf } from '../core/skin.mjs';
+import { isIdentityTime } from '../core/timegraph.mjs';
 import { createSurface, cloneSurface } from '../paint/surface.mjs';
 import { alignOffset, clampTextureSize, contentBounds, cropRgba, placeRgba } from '../paint/trim.mjs';
 import { ONION_DEFAULTS } from '../paint/onion.mjs';
-import {
-    normalizeSegments as normSegments,
-    hasTimebase,
-    fpsAt as fpsAtTime,
-    segmentIndexAt,
-    segmentRange,
-    addSegment as addTimeSegment,
-    removeSegment as removeTimeSegment,
-    setSegmentFps as setTimeSegmentFps,
-    setSegmentAt as setTimeSegmentAt,
-    resetTimebase as resetTimebaseDoc,
-    sampleTimes,
-} from '../core/timebase.mjs';
-import { hitTest, elementQuad, elementLattice } from '../core/element.mjs';
-import { createEvaluator, matrixObject } from '../core/evaluator.mjs';
-import { resizeLattice, latticeIsZero } from '../core/lattice.mjs';
+import { createEvaluator } from '../core/evaluator.mjs';
 import { EFFECT_DEFS, defaultEffect, normalizeEffect } from '../paint/effects.mjs';
 import { TOOLS } from '../paint/engine.mjs';
 import { editorIds } from './registry.mjs';
@@ -94,6 +72,7 @@ import { installLayerKeys } from '../editors/layer-keys.mjs';
 import { loadLayout } from './persist.mjs';
 import * as canvasEditor from '../editors/canvas.mjs';
 import * as DS from './doc-state.mjs';
+import { nextObjectName } from './object-factory.mjs';
 
 import {
     buildViews,
@@ -102,7 +81,10 @@ import {
     resetLayout,
     render,
     syncCanvasToActive,
-    scheduleAttachToActive, setCtx as setViewHostCtx } from './view-host.mjs';
+    scheduleAttachToActive, remountAll, setCtx as setViewHostCtx } from './view-host.mjs';
+// 本地化：换表 + `<html lang>` 在这里收口。面板不能自己引 view-host（会与 registry 成环），
+// 所以切语言经 ctx.setLocale 转一手（见 buildCtx）。
+import { t, setLocale as setI18nLocale, getLocale, htmlLangOf } from '../i18n/index.mjs';
 import {
     setEffectParam,
     keyEffectParam,
@@ -155,7 +137,7 @@ function swapCelTimes(objId, tA, tB) {
     if (!doc || id == null) return false;
     const next = swapCelAt(doc, id, tA, tB);
     if (next === doc) return false;
-    setDoc(() => next, { label: '交换纹理' });
+    setDoc(() => next, { label: t('shell.undo.swapCel') });
     return true;
 }
 
@@ -321,11 +303,11 @@ function findFreeCelTime(obj, t) {
     return { at: base, moved: false };
 }
 
-function addCelAt(objId, t) {
+function addCelAt(objId, when) {
     const doc = state.doc;
     const id = celTargetId(objId);
     if (!doc || !id) return null;
-    const at = celTimeArg(t);
+    const at = celTimeArg(when);
     let placed = at;
     let moved = false;
     setDoc((d) => {
@@ -349,43 +331,41 @@ function addCelAt(objId, t) {
         } else {
             image = blankSurface(d);
         }
-        const cel = Object.assign({}, cur, { image });
-        const cels = (Array.isArray(res.obj.cels) ? res.obj.cels : []).map((c) => (c === res.cel ? cel : c));
-        if (!cels.includes(cel)) cels.push(cel);
-        return replaceObject(d, id, Object.assign({}, res.obj, { cels: cels }));
+        // 走真源：新图登记进纹理库，这一格的关键帧 drawing 指向它（cels 由 projectCels 重算）
+        return replaceObject(d, id, setImageAt(res.obj, placed, image));
     });
-    if (moved) flash('该时刻已有纹理，已放到 ' + placed.toFixed(2) + ' s');
+    if (moved) flash(t('shell.cel.moved', { t: placed.toFixed(2) }));
     return placed;
 }
 
 /** 删掉时间 t 的纹理；对象只剩一个纹理时拒绝并提示。 */
-function removeCelAt(objId, t) {
+function removeCelAt(objId, when) {
     const doc = state.doc;
     const id = celTargetId(objId);
     if (!doc || !id) return false;
     const obj = objectById(doc, id);
     if (!obj) return false;
     if (celTimes(obj).length <= 1) {
-        flash('至少要保留一个纹理');
+        flash(t('shell.cel.keepOne'), 'error');
         return false;
     }
-    const at = celTimeArg(t);
+    const at = celTimeArg(when);
     const nextObj = removeCelAtDoc(obj, at);
     if (!nextObj || nextObj === obj) {
-        flash('这个时间点没有纹理');
+        flash(t('shell.cel.noneAt'), 'error');
         return false;
     }
     setDoc((d) => replaceObject(d, id, nextObj));
-    flash('已删除 ' + at.toFixed(2) + 's 的纹理');
+    flash(t('shell.cel.removed', { t: at.toFixed(2) }));
     return true;
 }
 
 /** 把时间 t 纹理的内容清空（纹理保留，image 置 null = 这一段全透明）。 */
-function clearCelAt(objId, t) {
+function clearCelAt(objId, when) {
     const doc = state.doc;
     const id = celTargetId(objId);
     if (!doc || !id) return false;
-    const at = celTimeArg(t);
+    const at = celTimeArg(when);
     let cleared = false;
     setDoc((d) => {
         const obj = objectById(d, id);
@@ -393,11 +373,10 @@ function clearCelAt(objId, t) {
         const res = ensureCelAt(obj, at, { inherit: true });
         if (!res.cel) return d;
         cleared = true;
-        const cel = Object.assign({}, res.cel, { image: null });
-        const cels = (Array.isArray(res.obj.cels) ? res.obj.cels : []).map((c) => (c === res.cel ? cel : c));
-        return replaceObject(d, id, Object.assign({}, res.obj, { cels: cels }));
+        // 清空 = 这一格成为「空白曝光」：关键帧仍在、drawing 置 null（keyHasDrawing 为真）
+        return replaceObject(d, id, setKeyDrawing(res.obj, res.cel.at, null));
     });
-    if (cleared) flash('已清空纹理');
+    if (cleared) flash(t('shell.cel.cleared'));
     return cleared;
 }
 
@@ -415,16 +394,14 @@ function celImageForPaint(layerId, w, h) {
     const res = ensureCelAt(obj, t, { inherit: true });
     const cur = res.cel;
     if (cur && cur.image && !res.created) return cur.image;
-    // 新纹理继承到的是上一格的位图**引用**：必须克隆，否则落笔会改坏上一格
+    // 新纹理继承到的是上一格的位图**引用**：必须克隆，否则落笔会改坏上一格。
+    // 克隆体要走 setImageAt 才会进纹理库、成为这一格的 drawing（只换 cels 镜像渲染侧读不到）。
     const image = cur && cur.image
         ? cloneSurface(cur.image)
         : createSurface(Math.max(1, Math.round(Number(w) || 1)), Math.max(1, Math.round(Number(h) || 1)));
     if (!image) return null;
-    const at = cur ? cur.at : t;
-    const cel = Object.assign({}, cur || { at: at }, { at: at, image: image });
-    const cels = (Array.isArray(res.obj.cels) ? res.obj.cels : []).map((c) => (c === cur ? cel : c));
-    if (!cels.includes(cel)) cels.push(cel);
-    setDoc((d) => replaceObject(d, id, Object.assign({}, res.obj, { cels: cels })));
+    const at = cur && Number.isFinite(cur.at) ? cur.at : celTimeArg(t);
+    setDoc((d) => replaceObject(d, id, setImageAt(res.obj, at, image)));
     return image;
 }
 
@@ -493,7 +470,14 @@ function clampTime() {
  * 新文档：一个对象 + t=0 的空纹理。没有帧、没有帧计数。
  * duration 显式给 1s —— 与旧版「12 帧 × 12fps」的初始时间轴等长；
  * 时间模型里空文档的 totalSeconds 是 0，没有显式时长时间轴会没有刻度可拖。
+ *
+ * 注意 `name` 是**用户数据**（用户会改它、它进层级面板、进 .msp），
+ * 所以这里不取词条、不跟界面语言走 —— 否则同一份文档里会混两种语言的
+ * 对象名，切换界面语言还会让「新建的对象叫什么」随设置变化。用户随时可以
+ * 双击改名，缺省叫什么并不重要，重要的是它**稳定**。
  */
+const DEFAULT_OBJECT_NAME = 'Object 1';
+
 function newTimeDocument() {
     return createTimeDocument({
         width: DEFAULT_W,
@@ -501,7 +485,7 @@ function newTimeDocument() {
         fps: DEFAULT_FPS,
         duration: 1,
         onion: Object.assign({}, ONION_DEFAULTS),
-        objects: [{ name: '对象 1', transform: createTrack(), cels: [{ at: 0, image: null }] }],
+        objects: [{ name: DEFAULT_OBJECT_NAME, transform: createTrack(), cels: [{ at: 0, image: null }] }],
     });
 }
 
@@ -534,6 +518,15 @@ function buildCtx() {
     setDoc,
     subscribeDoc,
 
+    /* 本地化：切语言的唯一入口。换表 + `<html lang>` + 重挂所有面板（画布除外），
+       并把选择写回偏好快照；落盘由设置面板的 commit 负责（它本来就管 ms.prefs）。 */
+    setLocale: (id) => {
+        if (DS && typeof DS.setPrefs === 'function') DS.setPrefs({ locale: id });
+        applyLocale(id, { remount: true });
+        return getLocale();
+    },
+    locale: () => getLocale(),
+
     time: () => state.time,
     setTime,
     playing: () => state.playing,
@@ -550,13 +543,91 @@ function buildCtx() {
     goToKey,
 
     /* v8：时间通道的「是否恒等」——ctx-time 没提供这个读法，面板靠它决定 ⏱ 徽章亮不亮。
-       其余 layerDepth / layerTime / setLayerTime / describeLayerTime / setLayerParent /
+       其余 layerTime / setLayerTime / describeLayerTime / setLayerParent /
        moveLayerTo / moveDrawOrder 都在 shell/ctx-time.mjs 里（boot 里 Object.assign 覆盖本对象，别在这里重复实现）。
-       v11 起：层级走 moveSubtree、叠放走 moveDrawOrder，setLayerParent/moveLayerTo 只作为老调用方的兼容壳保留。 */
+       v11 起：层级走 moveSubtree、叠放走 moveDrawOrder，setLayerParent/moveLayerTo 只作为老调用方的兼容壳保留。
+       v11 也删掉了 ctx 上的 layerDepth / subtreeCount 两个零调用者包装：要读层级深度直接用
+       core/timegraph.mjs 的 timeDepth，要读子树规模用 subtreeSize（两者都是公共 API 且有测试）。 */
     isLayerTimeIdentity: (id) => {
         const doc = state.doc;
         const el = doc ? objectById(doc, id) : null;
         return isIdentityTime(el ? el.time : null);
+    },
+
+    /* 蒙皮（P2-B）：命令表与属性面板的「解除绑定」按钮共用这一份实现 —— 两个入口各写一遍
+       「删 skin」的删除逻辑迟早会分叉，这里只留一条写口（内部仍是 setDoc 一步撤销）。 */
+    bindSkinToSelected,
+    unbindSkinOfSelected,
+
+    /* 权重叠加态（P2-C 步 1）：纯外壳态，不进文档、不进撤销、不落盘。
+       读写分离：下面四个 getter 只读 state.weight，三个 setter 末尾统一重画叠加层
+       （canvasEditor.syncSelectionUI 就是叠加层的重画入口，见 editors/canvas.mjs:32）。
+       目标对象一律过 weightTargetLayer()，所以删对象 / 解绑 / 撤销之后读出来的就是 null，
+       不需要额外的同步钩子。 */
+    weightMode: () => !!state.weight.active,
+    weightLayerId: () => (weightTargetLayer() ? state.weight.layerId : null),
+    weightBone: () => (weightTargetLayer() ? state.weight.boneId : null),
+    weightVertex: () => (weightTargetLayer() ? state.weight.vertex : null),
+    // 笔刷半径是外壳态（不进文档、不落盘）：同一个工程换台机器、换个图层都不该变，
+    // 但它也不是「作品内容」，所以只活在 state.weight 里，跟着会话走。
+    weightRadius: () => state.weight.radius,
+    setWeightMode(on) {
+        if (on) {
+            const layer = weightTargetLayer();
+            if (!layer) {
+                flash(t('props.obj.weightErrNoSkin'), 'error');
+                return false;
+            }
+            const bones = skinOf(layer).bones;
+            const boneId = bones.some((b) => b.id === state.weight.boneId)
+                ? state.weight.boneId
+                : (bones.length ? bones[0].id : null);
+            state.weight = Object.assign({}, state.weight, { active: true, layerId: layer.id, boneId, vertex: null });
+        } else {
+            state.weight = Object.assign({}, state.weight, { active: false, vertex: null });
+        }
+        canvasEditor.syncSelectionUI();
+        scheduleRefresh();
+        return true;
+    },
+    setWeightBone(id) {
+        const layer = weightTargetLayer();
+        const skin = layer ? skinOf(layer) : null;
+        const wanted = id == null ? '' : String(id);
+        const next = skin && skin.bones.some((b) => b.id === wanted) ? wanted : null;
+        state.weight = Object.assign({}, state.weight, { boneId: next });
+        canvasEditor.syncSelectionUI();
+        scheduleRefresh();
+        return next;
+    },
+    setWeightVertex(index) {
+        const layer = weightTargetLayer();
+        const skin = layer ? skinOf(layer) : null;
+        const count = skin ? (skin.grid.cols + 1) * (skin.grid.rows + 1) : 0;
+        const ok = Number.isInteger(index) && index >= 0 && index < count;
+        state.weight = Object.assign({}, state.weight, { vertex: ok ? index : null });
+        canvasEditor.syncSelectionUI();
+        scheduleRefresh();
+        return ok ? index : null;
+    },
+
+    /* 权重写入的唯一落点（P2-C 步 2）。涂抹手势每帧调一次，返回**新的 doc**、不落栈：
+       撤销粒度由调用方（canvas-input 的松手那一步）决定 —— 逐帧 pushCommand 会让
+       一次涂抹产生几十条记录，而 coalesce 又会把两次独立拖动并成一条（DOC_GESTURE_MS
+       只有 350ms），粒度随手感漂移。所以这里只管算，不管栈。 */
+    writeSkinPoints(layerId, pts) {
+        const doc = state.doc;
+        if (!doc) return null;
+        const el = layerId ? objectById(doc, layerId) : null;
+        const skin = skinOf(el);
+        if (!skin) return null;
+        // skinOf 已经归一过一遍，这里再过一次 normalizes 的是「手势产出的 pts」：
+        // 截 4 根 / 降序 / Σ=1 的收口必须发生在写入前，坏数据不该有机会进文档。
+        // 注意语义：normalizeSkin 会剔除 !(w > 0) 的项，所以「刷到 0」= 该顶点上
+        // 没有这一项，而不是存一个 0 —— 有意为之，别为它加特例。
+        const next = normalizeSkin(Object.assign({}, skin, { pts: Array.isArray(pts) ? pts : [] }));
+        if (!next) return null;
+        return patchObject(doc, el.id, (o) => Object.assign({}, o, { skin: next }));
     },
 
     engine,
@@ -646,9 +717,9 @@ function buildCtx() {
         const nextW = clamp(w, 16, 8192);
         const nextH = clamp(h, 16, 8192);
         if (nextW === Math.round(doc.width) && nextH === Math.round(doc.height)) return false;
-        setDoc((d) => Object.assign({}, d, { width: nextW, height: nextH }), { label: '改画布尺寸' });
+        setDoc((d) => Object.assign({}, d, { width: nextW, height: nextH }), { label: t('shell.undo.canvasSize') });
         if (engine && typeof engine.fitView === 'function') engine.fitView();
-        flash('画布改为 ' + nextW + ' × ' + nextH);
+        flash(t('shell.doc.canvasSize', { w: nextW, h: nextH }));
         return true;
     },
     /**
@@ -661,7 +732,7 @@ function buildCtx() {
         if (!doc || id == null) return null;
         const res = setObjectSizeDoc(doc, id, w, h, { makeCanvas: (cw, ch) => blankSurfaceOf(cw, ch) });
         if (!res.changed) return res.size;
-        setDoc(() => res.doc, { label: '改对象尺寸' });
+        setDoc(() => res.doc, { label: t('shell.undo.objectSize') });
         return res.size;
     },
 
@@ -693,7 +764,7 @@ function buildCtx() {
         const image = src ? cloneSurface(src) : createSurface(Math.max(1, Math.round(size.w)), Math.max(1, Math.round(size.h)));
         const next = addDrawing(obj, image);
         if (next === obj) return null;
-        setDoc(() => replaceObject(state.doc, id, next), { label: clone ? '复制纹理' : '新建纹理' });
+        setDoc(() => replaceObject(state.doc, id, next), { label: t(clone ? 'shell.undo.dupTexture' : 'shell.undo.newTexture') });
         const lib = drawingsOf(next);
         const made = lib[lib.length - 1];
         return made ? made.id : null;
@@ -714,9 +785,9 @@ function buildCtx() {
         if (!Number.isFinite(at)) return null;
         const next = placeDrawingDoc(obj, at, cur);
         if (next === obj) return null;
-        setDoc(() => replaceObject(state.doc, id, next), { label: '加曝光' });
+        setDoc(() => replaceObject(state.doc, id, next), { label: t('shell.undo.addExposure') });
         setTimeClamped(at);
-        flash('已加曝光 ' + at.toFixed(2) + ' s（复用当前纹理）');
+        flash(t('shell.cel.exposureAdded', { t: at.toFixed(2) }));
         return at;
     },
     addCelAt,
@@ -740,11 +811,11 @@ function buildCtx() {
         const obj = doc && id ? objectById(doc, id) : null;
         return obj ? drawingIdAt(obj, state.time) : null;
     },
-    placeDrawing(objId, t, drawingId) {
+    placeDrawing(objId, when, drawingId) {
         const doc = state.doc;
         const id = celTargetId(objId);
         if (!doc || id == null || !drawingId) return false;
-        const at = celTimeArg(t);
+        const at = celTimeArg(when);
         let changed = false;
         setDoc((d) => {
             const obj = objectById(d, id);
@@ -753,15 +824,15 @@ function buildCtx() {
             if (next === obj) return d;
             changed = true;
             return replaceObject(d, id, next);
-        }, { label: '切换纹理' });
+        }, { label: t('shell.undo.switchTexture') });
         return changed;
     },
     /** 把当前时刻的曝光独特化：拷一张新图，之后改它不影响别的时刻。 */
-    makeUniqueCel(objId, t) {
+    makeUniqueCel(objId, when) {
         const doc = state.doc;
         const id = celTargetId(objId);
         if (!doc || id == null) return false;
-        const at = celTimeArg(t);
+        const at = celTimeArg(when);
         let changed = false;
         setDoc((d) => {
             const obj = objectById(d, id);
@@ -770,7 +841,7 @@ function buildCtx() {
             if (next === obj) return d;
             changed = true;
             return replaceObject(d, id, next);
-        }, { label: '独特化纹理' });
+        }, { label: t('shell.undo.uniqueTexture') });
         return changed;
     },
     /** 旋转/缩放的原点（归一化 0–1，相对对象自己的画布）。0.5/0.5 = 中心。 */
@@ -807,7 +878,7 @@ function buildCtx() {
                 });
             }
             return doc2;
-        }, { label: '改旋转原点' });
+        }, { label: t('shell.undo.anchor') });
         return changed;
     },
     removeDrawing(objId, drawingId) {
@@ -822,7 +893,7 @@ function buildCtx() {
             if (next === obj) return d;
             changed = true;
             return replaceObject(d, id, next);
-        }, { label: '删除纹理' });
+        }, { label: t('shell.undo.removeTexture') });
         return changed;
     },
 
@@ -850,7 +921,7 @@ function buildCtx() {
         const o = opts || {};
         const mode = o.mode === 'trim' ? 'trim' : (o.mode === 'resize' ? 'resize' : '');
         if (!mode) {
-            flash('未知的纹理尺寸操作');
+            flash(t('shell.texture.err.unknownMode'), 'error');
             updateChrome();
             return false;
         }
@@ -859,7 +930,7 @@ function buildCtx() {
         const time = state.time;
         const src = readRgba(imageAt(obj, time));
         if (!src) {
-            flash('这张纹理没有可读取的像素');
+            flash(t('shell.texture.err.noReadablePixels'), 'error');
             updateChrome();
             return false;
         }
@@ -869,12 +940,12 @@ function buildCtx() {
         if (mode === 'trim') {
             const box = contentBounds(src.data, src.w, src.h);
             if (!box) {
-                flash('这张纹理是全透明的，没有内容可裁');
+                flash(t('shell.texture.err.empty'), 'error');
                 updateChrome();
                 return false;
             }
             if (box.x === 0 && box.y === 0 && box.w === src.w && box.h === src.h) {
-                flash('这张纹理四周没有多余的透明区域');
+                flash(t('shell.texture.err.noTrim'), 'error');
                 updateChrome();
                 return false;
             }
@@ -883,17 +954,17 @@ function buildCtx() {
                 dx: box.x,
                 dy: box.y,
             };
-            label = '裁剪纹理';
+            label = t('shell.undo.trimTexture');
         } else {
             const w = clampTextureSize(o.width);
             const h = clampTextureSize(o.height);
             if (w == null || h == null) {
-                flash('尺寸必须是 1–4096 之间的数字');
+                flash(t('shell.texture.err.sizeRange'), 'error');
                 updateChrome();
                 return false;
             }
             if (w === src.w && h === src.h) {
-                flash('尺寸没有变化');
+                flash(t('shell.texture.err.sizeSame'), 'error');
                 updateChrome();
                 return false;
             }
@@ -903,10 +974,10 @@ function buildCtx() {
                 dx: -off.ox,
                 dy: -off.oy,
             };
-            label = '重设纹理尺寸';
+            label = t('shell.undo.resizeTexture');
         }
         if (!next || !next.image) {
-            flash('无法创建新纹理');
+            flash(t('shell.texture.err.createFailed'), 'error');
             updateChrome();
             return false;
         }
@@ -938,8 +1009,8 @@ function buildCtx() {
 
         if (changed) {
             flash(mode === 'trim'
-                ? '已裁到内容：' + next.image.width + ' × ' + next.image.height
-                : '纹理尺寸改为 ' + next.image.width + ' × ' + next.image.height);
+                ? t('shell.texture.trimmed', { w: next.image.width, h: next.image.height })
+                : t('shell.texture.resized', { w: next.image.width, h: next.image.height }));
             updateChrome();
         }
         return changed;
@@ -1015,12 +1086,12 @@ function installDropImport() {
         const files = [];
         for (const f of e.dataTransfer.files) files.push(f);
         if (!files.length) return;
-        flash('正在导入 ' + files.length + ' 个文件…');
+        flash(t('shell.import.dropping', { n: files.length }));
         const payload = await Promise.all(files.map(readOne));
         try {
             await projectApi.importDropped(payload);
         } catch (err) {
-            flash('导入失败：' + ((err && err.message) || err));
+            flash(t('shell.import.failed', { msg: (err && err.message) || err }), 'error');
         }
     });
 }
@@ -1086,24 +1157,26 @@ function onDeleteKey(e) {
             // 直接调纯函数 removeDrawingDoc 只算出新对象、不写回文档，
             // 表现就是「提示已删除、列表不刷新」——这就是用户看到的那一幕。
             if (!ctx || typeof ctx.removeDrawing !== 'function') {
-                flash('删除纹理：该操作尚未接线');
+                flash(t('shell.delete.notWired'), 'error');
             } else if (ctx.removeDrawing(obj.id, textureId) === false) {
-                flash('至少要保留一张纹理');
+                flash(t('shell.delete.keepOne'), 'error');
             } else {
-                flash('已删除纹理（Ctrl+Z 可恢复）');
+                flash(t('shell.delete.textureDone'));
             }
         } else {
-            const name = obj.name || '对象';
-            setDoc((d) => removeObjectDoc(d, obj.id), { label: '删除对象' });
+            const name = obj.name || t('shell.doc.objectFallback');
+            setDoc((d) => removeObjectDoc(d, obj.id), { label: t('shell.undo.deleteObject') });
             if (state.activeLayerId === obj.id && typeof ctx.setActiveLayer === 'function') ctx.setActiveLayer(null);
-            flash('已删除对象「' + name + '」（Ctrl+Z 可恢复）');
+            flash(t('shell.delete.objectDone', { name }));
         }
         if (typeof e.preventDefault === 'function') e.preventDefault();
         updateChrome();
         return true;
     }
     pendingDelete = { key: key, at: now };
-    flash(kind === 'texture' ? '再按一次 Del 删除这张纹理（3 秒内有效）' : '再按一次 Del 删除对象「' + (obj.name || '对象') + '」（3 秒内有效）');
+    flash(kind === 'texture'
+        ? t('shell.delete.confirmTexture')
+        : t('shell.delete.confirmObject', { name: obj.name || t('shell.doc.objectFallback') }));
     if (typeof e.preventDefault === 'function') e.preventDefault();
     return true;
 }
@@ -1149,7 +1222,7 @@ function cycleDrawing(dir) {
     const step = dir < 0 ? -1 : 1;
     const list = typeof ctx.drawingsOf === 'function' ? ctx.drawingsOf(null) : [];
     if (!list.length) {
-        flash('这个对象还没有纹理');
+        flash(t('shell.cel.noTexture'), 'error');
         return false;
     }
     const cur = typeof ctx.currentDrawingId === 'function' ? ctx.currentDrawingId(null) : null;
@@ -1157,62 +1230,353 @@ function cycleDrawing(dir) {
     const next = list[(i < 0 ? (step > 0 ? 0 : list.length - 1) : (i + step + list.length) % list.length)];
     if (!next) return false;
     const ok = ctx.placeDrawing(null, state.time, next.id);
-    if (ok) flash('当前时刻显示第 ' + (list.indexOf(next) + 1) + ' 张纹理');
+    if (ok) flash(t('shell.cel.showing', { n: list.indexOf(next) + 1 }));
     return ok;
 }
 
+/**
+ * 在选中对象的同一层新建一根骨骼。
+ *
+ * 为什么不走 shell/object-factory.mjs：它的 `createEmptyObject` 只造 `kind: 'paint'`
+ * 的空对象，不认识 kind / parentId；骨骼的 anchor（根部中点）与 bone 缺省值都是 core 的
+ * `makeObject` 按 kind 补的，工厂也不在本次改动的写域里。这里直接调 core 的 addObject
+ * ——它内部就是 makeObject + normalizeDrawOrder，外壳一个字面量都不手写。
+ *
+ * 失败静默返回 null（没有文档时命令本来就不可达）；成功时把选中切到新骨骼，
+ * 属性面板的骨骼段随即出现，落盘仍只有 kind / bone / anchor 这些标量。
+ */
+function addBoneObject() {
+    const doc = state.doc;
+    if (!doc) return null;
+    const sel = state.selection && state.selection.id ? objectById(doc, state.selection.id) : null;
+    // 「同层」= 与选中对象同一个父级；没选中就直接进顶层
+    const parentId = sel ? (sel.parentId || null) : null;
+    const next = addObject(doc, { name: nextObjectName(doc), kind: 'bone', parentId });
+    const list = objectsOf(next);
+    const created = list[list.length - 1];
+    if (!created) return null;
+    setDoc(() => next, { label: t('cmd.object.addBone') });
+    ctx.setSelection({ id: created.id });
+    return created.id;
+}
+
+/**
+ * 蒙皮 P2-B：把「当前对象」绑到「被选中的骨骼」上。
+ *
+ * 选择模型（读 app.mjs 的 state 得到）：画布单选是 `state.selection.id`，多选是
+ * `state.layerSel`（`ctx.selectedLayers()`），而 `setLayerSelection` / `setSelection`
+ * 都保证 `activeLayerId` 落在选中里 —— 所以不存在「面板对象在多选集合之外」的第二种情形：
+ * 当前对象 = `selection.id || activeLayerId`，骨骼 = 多选里除它之外的 `kind === 'bone'`。
+ * 一个骨骼都没选中时**不猜**（不去绑全场景的骨）：`flash` 明确要求先选骨。
+ *
+ * 落盘只有一个 `skin` 字段（`bones[].bind` 是绑定时刻的世界矩阵快照），词条键与译文都不进档。
+ * 写入一律走 setDoc + 一步撤销，与 addBoneObject() 同款 —— 不允许裸改 state.doc。
+ */
+function bindSkinToSelected() {
+    const doc = state.doc;
+    if (!doc) return null;
+    const curId = (state.selection && state.selection.id) || state.activeLayerId || null;
+    const target = curId ? objectById(doc, curId) : null;
+    if (!target) {
+        flash(t('props.obj.skinErrNoObject'), 'error');
+        return null;
+    }
+    if (target.kind === 'bone') {
+        flash(t('props.obj.skinErrBone'), 'error');
+        return null;
+    }
+    // 硬约束：蒙皮对象不许把骨骼当父级 —— 皮肤已经按骨骼世界矩阵算过一遍，
+    // 再挂到骨骼下面就是二次变换（画布上会看到皮肤被拉走两倍的距离）。
+    const parent = target.parentId ? objectById(doc, target.parentId) : null;
+    if (parent && parent.kind === 'bone') {
+        flash(t('props.obj.skinErrParentBone'), 'error');
+        return null;
+    }
+    const sel = typeof ctx.selectedLayers === 'function' ? ctx.selectedLayers() : [];
+    const boneIds = sel.filter((id) => {
+        if (id === target.id) return false;
+        const el = objectById(doc, id);
+        return !!(el && el.kind === 'bone');
+    });
+    if (boneIds.length === 0) {
+        flash(t('props.obj.skinErrNoBones'), 'error');
+        return null;
+    }
+    const skin = bindSkin(doc, target, boneIds, { grid: SKIN_DEFAULTS.grid, t: state.time });
+    if (!skin) return null;
+    const next = patchObject(doc, target.id, (o) => Object.assign({}, o, { skin }));
+    setDoc(() => next, { label: t('cmd.object.bindSkin') });
+    flash(t('props.obj.skinBound', { n: skin.bones.length }));
+    return target.id;
+}
+
+/**
+ * 解除蒙皮：只删 `skin` 一个字段，`st.warp` / 变换通道 / 绑定快照一概不动 ——
+ * 变形网格是用户自己的雕刻，解除绑定不该把它一起抹掉（P2-A 的求值接缝也是「skin 叠加在 warp 上」）。
+ */
+function unbindSkinOfSelected(layerId) {
+    const doc = state.doc;
+    if (!doc) return false;
+    const id = layerId || (state.selection && state.selection.id) || state.activeLayerId || null;
+    const target = id ? objectById(doc, id) : null;
+    if (!target) {
+        flash(t('props.obj.skinErrNoObject'), 'error');
+        return false;
+    }
+    if (!skinOf(target)) {
+        flash(t('props.obj.skinErrNone'), 'error');
+        return false;
+    }
+    const next = patchObject(doc, target.id, (o) => {
+        const copy = Object.assign({}, o);
+        delete copy.skin;
+        return copy;
+    });
+    setDoc(() => next, { label: t('cmd.object.unbindSkin') });
+    flash(t('props.obj.skinUnbound'));
+    return true;
+}
+
+/**
+ * 权重编辑的目标对象（P2-C 步 1）：必须「存在且带 skin」才算数。
+ * layerId 优先——用户为了换目标骨会去点骨骼，那一刻选区是骨骼，
+ * 靠选区找对象的话顶点会当场消失。读的时候现校验，悬空状态自动失效。
+ */
+function weightTargetLayer() {
+    const doc = state.doc;
+    if (!doc) return null;
+    const w = state.weight;
+    const id = w.layerId || (state.selection && state.selection.id) || state.activeLayerId || null;
+    const layer = id ? objectById(doc, id) : null;
+    return layer && skinOf(layer) ? layer : null;
+}
+
+/**
+ * 命令表。`id` 是契约：快捷键表、命令面板、测试都按它引用，**一个字都不许改**；
+ * 文案的取值来源换成词条表（键 = `cmd.` + id 折驼峰，见 app/i18n/parts/commands.mjs）。
+ *
+ * 文案字段写成 getter 而不是直接 `t(...)` 求值：`boot()` 里先 `createPalette({ commands:
+ * buildCommands() })`、再 `applyLocale(...)`，直接求值会把默认语言的命令名冻在表里，
+ * 切到中文后界面照样显示英文。面板每次渲染 / 打分都读一次 title/hint/group，正好现取。
+ */
 function buildCommands() {
-    const toolCmd = (t) => ({
-        id: 'tool.' + t.id,
-        title: t.name,
-        hint: '工具',
-        keys: t.key,
-        group: '工具',
+    const toolCmd = (tool) => ({
+        id: 'tool.' + tool.id,
+        keys: tool.key,
         run: () => {
-            engine.setTool(t.id);
-            flash('工具：' + t.name);
+            engine.setTool(tool.id);
+            flash(t('shell.tool.picked', { name: tool.name }));
             updateChrome();
         },
+        get title() { return t('cmd.tool.' + tool.id, tool.name); },
+        get hint() { return t('cmd.group.tool'); },
+        get group() { return t('cmd.group.tool'); },
     });
     return [
         // 文件
-        { id: 'file.save', title: '保存项目', hint: '写入当前存档', keys: 'Ctrl+S', group: '文件', run: () => saveProject() },
-        { id: 'file.open', title: '打开项目库', hint: '最近项目 / 新建 / 导入', keys: 'Ctrl+O', group: '文件', run: () => openProjectsPanel() },
-        { id: 'file.export-frames', title: '导出帧序列…', hint: 'PNG 序列 + 帧清单（可设范围/缩放/格式）', keys: 'Ctrl+Shift+E', group: '文件', run: () => exportFrames() },
-        { id: 'file.export-current', title: '导出当前帧…', hint: '当前时刻的一张 PNG', keys: '', group: '文件', run: () => projectApi.exportCurrentFrame() },
-        { id: 'file.export-clip', title: '复制当前帧到剪贴板', hint: '直接粘贴到聊天或绘图软件', keys: '', group: '文件', run: () => projectApi.copyFrameToClipboard() },
-        { id: 'file.export-sheet', title: '导出精灵图…', hint: '图集 PNG + 每帧坐标 JSON（可设上限/裁剪/引擎格式）', keys: '', group: '文件', run: () => exportSpritesheet() },
-        { id: 'file.export-video', title: '导出 WebM 视频', hint: '按当前帧率录制整段时长', keys: '', group: '文件', run: () => projectApi.exportVideo() },
+        {
+            id: 'file.save', keys: 'Ctrl+S', run: () => saveProject(),
+            get title() { return t('cmd.file.save'); },
+            get hint() { return t('cmd.file.save.hint'); },
+            get group() { return t('cmd.group.file'); },
+        },
+        {
+            id: 'file.open', keys: 'Ctrl+O', run: () => openProjectsPanel(),
+            get title() { return t('cmd.file.open'); },
+            get hint() { return t('cmd.file.open.hint'); },
+            get group() { return t('cmd.group.file'); },
+        },
+        {
+            id: 'file.export-frames', keys: 'Ctrl+Shift+E', run: () => exportFrames(),
+            get title() { return t('cmd.file.exportFrames'); },
+            get hint() { return t('cmd.file.exportFrames.hint'); },
+            get group() { return t('cmd.group.file'); },
+        },
+        {
+            id: 'file.export-current', keys: '', run: () => projectApi.exportCurrentFrame(),
+            get title() { return t('cmd.file.exportCurrent'); },
+            get hint() { return t('cmd.file.exportCurrent.hint'); },
+            get group() { return t('cmd.group.file'); },
+        },
+        {
+            id: 'file.export-clip', keys: '', run: () => projectApi.copyFrameToClipboard(),
+            get title() { return t('cmd.file.exportClip'); },
+            get hint() { return t('cmd.file.exportClip.hint'); },
+            get group() { return t('cmd.group.file'); },
+        },
+        {
+            id: 'file.export-sheet', keys: '', run: () => exportSpritesheet(),
+            get title() { return t('cmd.file.exportSheet'); },
+            get hint() { return t('cmd.file.exportSheet.hint'); },
+            get group() { return t('cmd.group.file'); },
+        },
+        {
+            id: 'file.export-video', keys: '', run: () => projectApi.exportVideo(),
+            get title() { return t('cmd.file.exportVideo'); },
+            get hint() { return t('cmd.file.exportVideo.hint'); },
+            get group() { return t('cmd.group.file'); },
+        },
         // 编辑
-        { id: 'edit.undo', title: '撤销', hint: '', keys: 'Ctrl+Z', group: '编辑', run: () => engine.undo() },
-        { id: 'edit.redo', title: '重做', hint: '', keys: 'Ctrl+Shift+Z', group: '编辑', run: () => engine.redo() },
-        { id: 'edit.copy-keys', title: '复制关键帧', hint: '时间轴里选中的那些', keys: 'Ctrl+C', group: '编辑', run: () => dispatchTimeEvent('ms:copy-keys') },
-        { id: 'edit.paste-keys', title: '粘贴关键帧', hint: '粘到当前时间', keys: 'Ctrl+V', group: '编辑', run: () => dispatchTimeEvent('ms:paste-keys') },
+        {
+            id: 'edit.undo', keys: 'Ctrl+Z', hint: '', run: () => engine.undo(),
+            get title() { return t('cmd.edit.undo'); },
+            get group() { return t('cmd.group.edit'); },
+        },
+        {
+            id: 'edit.redo', keys: 'Ctrl+Shift+Z', hint: '', run: () => engine.redo(),
+            get title() { return t('cmd.edit.redo'); },
+            get group() { return t('cmd.group.edit'); },
+        },
+        {
+            id: 'edit.copy-keys', keys: 'Ctrl+C', run: () => dispatchTimeEvent('ms:copy-keys'),
+            get title() { return t('cmd.edit.copyKeys'); },
+            get hint() { return t('cmd.edit.copyKeys.hint'); },
+            get group() { return t('cmd.group.edit'); },
+        },
+        {
+            id: 'edit.paste-keys', keys: 'Ctrl+V', run: () => dispatchTimeEvent('ms:paste-keys'),
+            get title() { return t('cmd.edit.pasteKeys'); },
+            get hint() { return t('cmd.edit.pasteKeys.hint'); },
+            get group() { return t('cmd.group.edit'); },
+        },
         // 播放与定位
-        { id: 'play.toggle', title: '播放 / 暂停', hint: '时间轴走带', keys: 'Space', group: '播放', run: () => setPlaying(!state.playing) },
-        { id: 'play.first', title: '回到开头', hint: 't = 0', keys: 'Home', group: '播放', run: () => setTimeClamped(0) },
-        { id: 'play.last', title: '跳到结尾', hint: '文档末端', keys: 'End', group: '播放', run: () => setTimeClamped(totalSeconds(state.doc)) },
-        { id: 'play.prev-cel', title: '上一个纹理', hint: '', keys: 'Shift+,', group: '播放', run: () => goPrevCel() },
-        { id: 'play.next-cel', title: '下一个纹理', hint: '', keys: 'Shift+.', group: '播放', run: () => goNextCel() },
-        { id: 'play.prev-key', title: '上一个关键帧', hint: '当前对象', keys: ',', group: '播放', run: () => goToKey(-1) },
-        { id: 'play.next-key', title: '下一个关键帧', hint: '当前对象', keys: '.', group: '播放', run: () => goToKey(1) },
+        {
+            id: 'play.toggle', keys: 'Space', run: () => setPlaying(!state.playing),
+            get title() { return t('cmd.play.toggle'); },
+            get hint() { return t('cmd.play.toggle.hint'); },
+            get group() { return t('cmd.group.play'); },
+        },
+        {
+            id: 'play.first', keys: 'Home', hint: 't = 0', run: () => setTimeClamped(0),
+            get title() { return t('cmd.play.first'); },
+            get group() { return t('cmd.group.play'); },
+        },
+        {
+            id: 'play.last', keys: 'End', run: () => setTimeClamped(totalSeconds(state.doc)),
+            get title() { return t('cmd.play.last'); },
+            get hint() { return t('cmd.play.last.hint'); },
+            get group() { return t('cmd.group.play'); },
+        },
+        {
+            id: 'play.prev-cel', keys: 'Shift+,', hint: '', run: () => goPrevCel(),
+            get title() { return t('cmd.play.prevCel'); },
+            get group() { return t('cmd.group.play'); },
+        },
+        {
+            id: 'play.next-cel', keys: 'Shift+.', hint: '', run: () => goNextCel(),
+            get title() { return t('cmd.play.nextCel'); },
+            get group() { return t('cmd.group.play'); },
+        },
+        {
+            id: 'play.prev-key', keys: ',', run: () => goToKey(-1),
+            get title() { return t('cmd.play.prevKey'); },
+            get hint() { return t('cmd.play.prevKey.hint'); },
+            get group() { return t('cmd.group.play'); },
+        },
+        {
+            id: 'play.next-key', keys: '.', run: () => goToKey(1),
+            get title() { return t('cmd.play.nextKey'); },
+            get hint() { return t('cmd.play.nextKey.hint'); },
+            get group() { return t('cmd.group.play'); },
+        },
         // 纹理
-        { id: 'cel.new', title: '新建纹理（只进库）', hint: '生成一张新图，不占时间轴；点亮库里那一行才放到时间轴', keys: '', group: '纹理', run: () => ctx.newDrawing(null) },
-        { id: 'cel.add', title: '加曝光', hint: '在播放头处再曝光一次当前纹理（不新建图）', keys: '', group: '纹理', run: () => ctx.addExposure(null, null) },
-        { id: 'cel.remove', title: '删纹理', hint: '播放头所在纹理', keys: '', group: '纹理', run: () => removeCelAt(null, null) },
-        { id: 'cel.cycle-prev', title: '切换纹理：上一张', hint: '把库里上一张纹理放到当前时刻（复用，不加时间）', keys: '', group: '纹理', run: () => cycleDrawing(-1) },
-        { id: 'cel.cycle-next', title: '切换纹理：下一张', hint: '把库里下一张纹理放到当前时刻（复用，不加时间）', keys: '', group: '纹理', run: () => cycleDrawing(1) },
-        { id: 'cel.unique', title: '纹理独特化', hint: '当前时刻的纹理脱钩成独立一张', keys: '', group: '纹理', run: () => ctx.makeUniqueCel && ctx.makeUniqueCel(null, state.time) },
+        {
+            id: 'cel.new', keys: '', run: () => ctx.newDrawing(null),
+            get title() { return t('cmd.cel.new'); },
+            get hint() { return t('cmd.cel.new.hint'); },
+            get group() { return t('cmd.group.cel'); },
+        },
+        {
+            id: 'cel.add', keys: '', run: () => ctx.addExposure(null, null),
+            get title() { return t('cmd.cel.add'); },
+            get hint() { return t('cmd.cel.add.hint'); },
+            get group() { return t('cmd.group.cel'); },
+        },
+        {
+            id: 'cel.remove', keys: '', run: () => removeCelAt(null, null),
+            get title() { return t('cmd.cel.remove'); },
+            get hint() { return t('cmd.cel.remove.hint'); },
+            get group() { return t('cmd.group.cel'); },
+        },
+        {
+            id: 'cel.cycle-prev', keys: '', run: () => cycleDrawing(-1),
+            get title() { return t('cmd.cel.cyclePrev'); },
+            get hint() { return t('cmd.cel.cyclePrev.hint'); },
+            get group() { return t('cmd.group.cel'); },
+        },
+        {
+            id: 'cel.cycle-next', keys: '', run: () => cycleDrawing(1),
+            get title() { return t('cmd.cel.cycleNext'); },
+            get hint() { return t('cmd.cel.cycleNext.hint'); },
+            get group() { return t('cmd.group.cel'); },
+        },
+        {
+            id: 'cel.unique', keys: '', run: () => ctx.makeUniqueCel && ctx.makeUniqueCel(null, state.time),
+            get title() { return t('cmd.cel.unique'); },
+            get hint() { return t('cmd.cel.unique.hint'); },
+            get group() { return t('cmd.group.cel'); },
+        },
+        // 对象
+        {
+            id: 'object.add-bone', keys: '', run: () => addBoneObject(),
+            get title() { return t('cmd.object.addBone'); },
+            get hint() { return t('cmd.object.addBone.hint'); },
+            get group() { return t('cmd.group.edit'); },
+        },
+        {
+            id: 'object.bind-skin', keys: '', run: () => bindSkinToSelected(),
+            get title() { return t('cmd.object.bindSkin'); },
+            get hint() { return t('cmd.object.bindSkin.hint'); },
+            get group() { return t('cmd.group.edit'); },
+        },
+        {
+            id: 'object.unbind-skin', keys: '', run: () => unbindSkinOfSelected(),
+            get title() { return t('cmd.object.unbindSkin'); },
+            get hint() { return t('cmd.object.unbindSkin.hint'); },
+            get group() { return t('cmd.group.edit'); },
+        },
         // 画布
-        { id: 'canvas.fit', title: '适配视图', hint: '画布撑满可视区', keys: '0', group: '画布', run: () => { engine.fitView(); flash('已适配视图'); updateChrome(); } },
-        { id: 'canvas.brush-smaller', title: '笔刷变小', hint: '每次 −4px', keys: '[', group: '画布', run: () => nudgeSize(-4) },
-        { id: 'canvas.brush-bigger', title: '笔刷变大', hint: '每次 +4px', keys: ']', group: '画布', run: () => nudgeSize(4) },
+        {
+            id: 'canvas.fit', keys: '0', run: () => { engine.fitView(); flash(t('shell.view.fitted')); updateChrome(); },
+            get title() { return t('cmd.canvas.fit'); },
+            get hint() { return t('cmd.canvas.fit.hint'); },
+            get group() { return t('cmd.group.canvas'); },
+        },
+        {
+            id: 'canvas.brush-smaller', keys: '[', run: () => nudgeSize(-4),
+            get title() { return t('cmd.canvas.brushSmaller'); },
+            get hint() { return t('cmd.canvas.brushSmaller.hint'); },
+            get group() { return t('cmd.group.canvas'); },
+        },
+        {
+            id: 'canvas.brush-bigger', keys: ']', run: () => nudgeSize(4),
+            get title() { return t('cmd.canvas.brushBigger'); },
+            get hint() { return t('cmd.canvas.brushBigger.hint'); },
+            get group() { return t('cmd.group.canvas'); },
+        },
         // 工作区
-        { id: 'ws.animate', title: '切到编排', hint: 'animate', keys: '', group: '工作区', run: () => setWorkspace('animate') },
-        { id: 'ws.draw', title: '切到画板', hint: 'draw', keys: '', group: '工作区', run: () => setWorkspace('draw') },
-        { id: 'ws.free', title: '切到设置', hint: 'free', keys: '', group: '工作区', run: () => setWorkspace('free') },
+        {
+            id: 'ws.animate', keys: '', hint: 'animate', run: () => setWorkspace('animate'),
+            get title() { return t('cmd.ws.animate'); },
+            get group() { return t('cmd.group.workspace'); },
+        },
+        {
+            id: 'ws.draw', keys: '', hint: 'draw', run: () => setWorkspace('draw'),
+            get title() { return t('cmd.ws.draw'); },
+            get group() { return t('cmd.group.workspace'); },
+        },
+        {
+            id: 'ws.free', keys: '', hint: 'free', run: () => setWorkspace('free'),
+            get title() { return t('cmd.ws.free'); },
+            get group() { return t('cmd.group.workspace'); },
+        },
         // 界面
-        { id: 'ui.shortcuts', title: '快捷键一览', hint: '列出所有按键', keys: '?', group: '界面', run: () => { if (shortcuts) shortcuts.open(); } },
+        {
+            id: 'ui.shortcuts', keys: '?', run: () => { if (shortcuts) shortcuts.open(); },
+            get title() { return t('cmd.ui.shortcuts'); },
+            get hint() { return t('cmd.ui.shortcuts.hint'); },
+            get group() { return t('cmd.group.ui'); },
+        },
         // 工具
         ...TOOLS.map(toolCmd),
     ];
@@ -1349,15 +1713,15 @@ function onKeyDown(e) {
     if (key === '0') {
         e.preventDefault();
         engine.fitView();
-        flash('已适配视图');
+        flash(t('shell.view.fitted'));
         updateChrome();
         return;
     }
     const toolId = TOOL_KEYS[String(key).toLowerCase()];
     if (toolId) {
         engine.setTool(toolId);
-        const t = TOOLS.find((x) => x.id === toolId);
-        flash(t ? t.name : toolId);
+        const tool = TOOLS.find((x) => x.id === toolId);
+        flash(tool ? tool.name : toolId);
         updateChrome();
     }
 }
@@ -1435,6 +1799,29 @@ function expose() {
     });
 }
 
+/**
+ * 让某个 locale 真正生效：换词条表 + 同步 `<html lang>`（屏幕阅读器与断词规则读的是它）
+ * + 可选地重挂面板。
+ *
+ * 为什么重挂：面板在自己 `mount()` 里把静态文案写进 DOM，`refresh()` 只刷数据不刷文案。
+ * `remountAll()` 会跳过画布实例（引擎宿主与视口都在里面，重挂会丢正在画的笔）。
+ */
+function applyLocale(id, opts) {
+    const changed = setI18nLocale(id);
+    if (typeof document !== 'undefined' && document.documentElement) {
+        document.documentElement.lang = htmlLangOf(id);
+    }
+    if (changed && opts && opts.remount) {
+        remountAll();
+        // 快捷键浮层不归 remountAll 管（它挂在 body 上、不是工作区里的面板），
+        // 而它的文案是 boot 时按当时语言渲染进 DOM 的；换语言得重新喂一份数据源。
+        if (shortcuts && typeof shortcuts.setGroups === 'function') {
+            shortcuts.setGroups(overlayGroups());
+        }
+    }
+    return changed;
+}
+
 function boot() {
     ({
         TOOL_KEYS, DEFAULT_W, DEFAULT_H, DEFAULT_FPS, state, shell, el, engine,
@@ -1455,6 +1842,8 @@ function boot() {
     if (engine && typeof engine.setHistoryLimit === 'function' && pref0) {
         engine.setHistoryLimit(pref0.undoLimit);
     }
+    // 语言要在 buildViews 之前生效：否则第一帧会按缺省语言渲染一遍、再被重挂刷掉（闪一下）。
+    applyLocale(pref0 && pref0.locale ? pref0.locale : 'en');
     ctx.project = projectApi;
     Object.assign(ctx, timeCtx({
         getDoc: () => state.doc,
@@ -1507,7 +1896,7 @@ function boot() {
     installDropImport();
     window.addEventListener('resize', () => render());
     expose();
-    flash('就绪');
+    flash(t('shell.status.ready'));
     updateChrome();
     scheduleRefresh();
     syncCanvasToActive();

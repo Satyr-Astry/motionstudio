@@ -13,6 +13,7 @@ import { createKeys, deleteTarget } from '../app/editors/timeline-keys.mjs';
 import { createDoc, addObject, makeObject, objectById } from '../app/core/doc-model.mjs';
 import { createTrack, addKey, DEFAULT_STATE, stateAt } from '../app/core/transform.mjs';
 import { snapFrame } from '../app/editors/timeline-geo.mjs';
+import { t } from '../app/i18n/index.mjs';
 
 /** 造一条只有 t=… 这么几颗关键帧的轨道。 */
 function trackOf(...times) {
@@ -88,7 +89,7 @@ test('单选删除：一次 setDoc、一条撤销、删完清空选中', () => {
     assert.equal(s.keys.deleteSelection(), 1);
     assert.equal(s.calls.setDoc, 1, '多选也必须是「一次 setDoc」＝一步撤销');
     assert.equal(keyCount(s.getDoc(), 'a'), 1);
-    assert.deepEqual(s.calls.notify, ['已删除 1 颗关键帧']);
+    assert.deepEqual(s.calls.notify, [t('timeline.del.count', { n: 1 })]);
     assert.equal(s.keys.selectionAll().length, 0, '删完要清空选中');
 });
 
@@ -101,7 +102,7 @@ test('多选批量：一次 setDoc 删掉多处', () => {
     assert.equal(s.keys.deleteSelection(), 2);
     assert.equal(s.calls.setDoc, 1);
     assert.equal(keyCount(s.getDoc(), 'a'), 1);
-    assert.deepEqual(s.calls.notify, ['已删除 2 颗关键帧']);
+    assert.deepEqual(s.calls.notify, [t('timeline.del.count', { n: 2 })]);
 });
 
 test('多选跨对象：各删各的，不互相误删', () => {

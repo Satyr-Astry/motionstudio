@@ -18,55 +18,73 @@
 import { stateAt } from '../core/transform.mjs';
 
 /** 数值参数：范围 + 步进 + 默认值 */
-function num(key, label, min, max, step, def) {
-    return { key, label, min, max, step, def };
+function num(key, min, max, step, def) {
+    return { key, min, max, step, def };
 }
 
 /** 颜色参数：只有默认值，用 `color: true` 与数值参数区分 */
-function rgb(key, label, def) {
-    return { key, label, def, color: true };
+function rgb(key, def) {
+    return { key, def, color: true };
+}
+
+/**
+ * 给一类效果挂上词条键，然后逐层冻结。
+ *
+ * 键是**派生**的，不手写第二遍：`type`（blur / glow / …）与参数名（amount / color / …）
+ * 本来就是存档里的一等字段 —— 参数级轨道直接挂在 `layer.effects[i].tracks[参数名]` 上，
+ * 键里再抄一遍只会让改 id 或改参数名时两边悄悄错开，界面最后显示成一个键名。
+ * 派生只有一个来源，抄错是不可能的。
+ *
+ * 显示名为什么不直接写在定义里：这张表是被 `Object.freeze` 冻住的常量，而语言可以在
+ * 运行期切换 —— 就地改冻住的常量既改不动，也会让「同一个对象在不同语言下是两份数据」
+ * 这种 bug 变得可能。所以这里只留**键**（nameKey / labelKey），译文全在
+ * `app/i18n/parts/effects.mjs`，显示处每次渲染现查词典（`t(def.nameKey)`）。
+ *
+ * 落盘只认 `type` + 各参数字段 + `id`：`nameKey` / `labelKey` 挂在定义上而不是效果实例上，
+ * 因此永远进不了 .msp（`tests/i18n-parts-effects.test.mjs` 钉住这一条）。
+ */
+function freezeDef(def) {
+    def.nameKey = 'effect.' + def.id + '.name';
+    for (const p of def.params) {
+        p.labelKey = 'effect.' + def.id + '.param.' + p.key;
+        Object.freeze(p);
+    }
+    Object.freeze(def.params);
+    return Object.freeze(def);
 }
 
 function deepFreeze(list) {
-    for (const def of list) {
-        for (const p of def.params) Object.freeze(p);
-        Object.freeze(def.params);
-        Object.freeze(def);
-    }
+    for (const def of list) freezeDef(def);
     return Object.freeze(list);
 }
 
 export const EFFECT_DEFS = deepFreeze([
-    { id: 'blur', name: '模糊', params: [num('amount', '模糊半径', 0, 40, 0.5, 4)] },
+    { id: 'blur', params: [num('amount', 0, 40, 0.5, 4)] },
     {
         id: 'glow',
-        name: '外发光',
-        params: [num('amount', '发光强度', 0, 40, 1, 8), rgb('color', '颜色', '#4a7dff')],
+        params: [num('amount', 0, 40, 1, 8), rgb('color', '#4a7dff')],
     },
     {
         id: 'shadow',
-        name: '投影',
         params: [
-            num('dx', 'X 偏移', -40, 40, 1, 4),
-            num('dy', 'Y 偏移', -40, 40, 1, 4),
-            num('amount', '模糊半径', 0, 40, 1, 6),
-            rgb('color', '颜色', 'rgba(0,0,0,0.45)'),
+            num('dx', -40, 40, 1, 4),
+            num('dy', -40, 40, 1, 4),
+            num('amount', 0, 40, 1, 6),
+            rgb('color', 'rgba(0,0,0,0.45)'),
         ],
     },
     {
         id: 'adjust',
-        name: '调整',
         params: [
-            num('brightness', '亮度', 0, 2, 0.01, 1),
-            num('contrast', '对比度', 0, 2, 0.01, 1),
-            num('saturate', '饱和度', 0, 2, 0.01, 1),
-            num('hue', '色相', -180, 180, 1, 0),
+            num('brightness', 0, 2, 0.01, 1),
+            num('contrast', 0, 2, 0.01, 1),
+            num('saturate', 0, 2, 0.01, 1),
+            num('hue', -180, 180, 1, 0),
         ],
     },
     {
         id: 'outline',
-        name: '描边',
-        params: [num('amount', '描边宽度', 0, 20, 0.5, 2), rgb('color', '颜色', '#000000')],
+        params: [num('amount', 0, 20, 0.5, 2), rgb('color', '#000000')],
     },
 ]);
 
@@ -291,4 +309,75 @@ export function hasTracks(e) {
         if (track && Array.isArray(track.keys) && track.keys.length) return true;
     }
     return false;
+}
+
+// ── 效果身份 ──────────────────────────────────────────────────────────────
+// 效果原先只靠**数组下标**寻址：删除按钮的闭包拿的是构建 DOM 时那份文档的 idx，
+// 重绘前点一下就会删错 / 改错（`prop-object.mjs` 的旧 `dataset.fxIndex` 全仓无读取者）。
+// 这里给每条效果一个**层内**稳定 id：`fx-<n>`。层内唯一就够 —— 寻址只在单个对象的
+// 效果列表里发生，曲线编辑器一次也只编辑一个对象。
+//
+// 取名不带 type：将来支持「替换效果类型」时 id 不该跟着变，否则已经建好的通道全失效。
+// id 里不放「.」：通道 id 的形态是 `fx.<effectId>.<paramKey>`，要靠 split('.') 解析。
+
+const FX_ID_RE = /^[A-Za-z0-9_-]+$/;
+const FX_SEQ_RE = /^fx-(\d+)$/;
+
+/** 按 id 找效果下标，找不到返回 -1 */
+export function indexOfEffect(list, id) {
+    if (!Array.isArray(list) || typeof id !== 'string' || !id) return -1;
+    for (let i = 0; i < list.length; i += 1) {
+        const e = list[i];
+        if (e && typeof e === 'object' && e.id === id) return i;
+    }
+    return -1;
+}
+
+/** 按 id 找效果对象，找不到返回 null */
+export function findEffectById(list, id) {
+    const i = indexOfEffect(list, id);
+    return i < 0 ? null : list[i];
+}
+
+/**
+ * 给缺 id / id 非法 / id 重复的效果补发 `fx-<n>`。
+ *
+ * 为什么是**确定性**补号而不是 uid()：同一份老档要能反复载入得到同一组 id，否则每次打开
+ * 都产生新 id，存档会无意义地抖动（doc-model 的 uid 是 Date.now + 计数，不满足）。
+ *
+ * 规则：
+ * - 已有合法且不重复的 id → 原样保留（含手写的 `fx-outline` 这种非序号 id）；
+ * - 缺 id / 非法字符 / 与前面的重复 → 从「本层已有 `fx-<n>` 的最大值 + 1」起顺序发号；
+ * - 全部合法时返回**原数组引用**，不制造无意义的 diff。
+ *
+ * 刻意不放进 `defaultEffect`（不知道兄弟列表，会发重号）也不放进 `normalizeEffect`
+ * （它按 def.params 收键、会丢 tracks，且是渲染期的每帧路径）。
+ */
+export function ensureEffectIds(list) {
+    if (!Array.isArray(list) || !list.length) return list;
+    const seen = new Set();
+    let next = 1;
+    let dirty = false;
+    for (const e of list) {
+        const id = e && typeof e === 'object' && typeof e.id === 'string' ? e.id : '';
+        if (!FX_ID_RE.test(id) || seen.has(id)) { dirty = true; continue; }
+        seen.add(id);
+        const m = FX_SEQ_RE.exec(id);
+        if (m) next = Math.max(next, Number(m[1]) + 1);
+    }
+    if (!dirty) return list;
+    const out = list.slice();
+    const taken = new Set();
+    for (let i = 0; i < out.length; i += 1) {
+        const e = out[i];
+        if (!e || typeof e !== 'object') continue;
+        const id = typeof e.id === 'string' ? e.id : '';
+        if (FX_ID_RE.test(id) && !taken.has(id)) { taken.add(id); continue; }
+        let fresh = 'fx-' + next;
+        while (taken.has(fresh) || seen.has(fresh)) { next += 1; fresh = 'fx-' + next; }
+        next += 1;
+        taken.add(fresh);
+        out[i] = Object.assign({}, e, { id: fresh });
+    }
+    return out;
 }

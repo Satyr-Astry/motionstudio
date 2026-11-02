@@ -27,13 +27,10 @@
  */
 
 /* —— 实心小按钮：1px 描边 + 22px 高 + 2px 圆角 —— */
-.bd-btn,
-.bd-tool,
 .tbar-tool,
 .tbar-brush,
 .cv-hud-btn,
 .fx-add > button,
-.prop-subtree-btn,
 .lyr-tp-reset,
 .xf-div-btn,
 .lyr-tp-mode,
@@ -47,13 +44,10 @@
     line-height: 1;
 }
 
-.bd-btn:hover,
-.bd-tool:hover,
 .tbar-tool:hover,
 .tbar-brush:hover,
 .cv-hud-btn:hover,
 .fx-add > button:hover,
-.prop-subtree-btn:hover:not(:disabled),
 .xf-div-btn:hover,
 .lyr-tp-reset:hover,
 .lyr-tp-mode:hover,
@@ -84,12 +78,9 @@ input.lyr-rename,
 /* —— 浮层：6px 圆角 + 统一描边与投影 —— */
 .curve-pop,
 .curve-menu,
-.cv-ob-menu,
-.cv-objectbar,
 .lyr-tp,
 .tline-menu,
-.tline-legend-card,
-.bd-ask-box {
+.tline-legend-card
     border: 1px solid var(--line-2);
     border-radius: var(--r-pop);
     background: var(--panel);
@@ -98,7 +89,6 @@ input.lyr-rename,
 
 /* —— 菜单项 / 弹层行：22px 高、2px 圆角、悬停才浮出底色 —— */
 .curve-menu > button,
-.cv-ob-mi,
 .tline-menu-item,
 .curve-ch-row {
     height: var(--h-btn);
@@ -112,7 +102,6 @@ input.lyr-rename,
 }
 
 .curve-menu > button:hover,
-.cv-ob-mi:hover,
 .tline-menu-item:hover,
 .curve-ch-row:hover {
     background: var(--surface);
@@ -483,16 +472,6 @@ input.pal-hue:focus-visible::-webkit-slider-thumb {
 
 .lyr-vis.is-off:hover::before { border-color: var(--ink-dim); }
 
-/* 缩略图：棋盘格底 + 像素化放大。canvas 位图仍是 40×30，这里按 4:3 微缩到行高里
-   （34×26 ≈ 1.308，误差 1.8%，肉眼不可分辨），否则 30px 的图塞不进 28px 的行 */
-.lyr-thumb {
-    flex: 0 0 34px; width: 34px; height: 26px;
-    border: 1px solid var(--line-2); border-radius: var(--r-1);
-    background-color: var(--bg);
-    background-image: repeating-conic-gradient(var(--panel-2) 0% 25%, var(--bg) 0% 50%);
-    background-size: 8px 8px; image-rendering: pixelated;
-}
-
 .lyr-meta {
     flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px;
 }
@@ -590,13 +569,6 @@ input.pal-hue:focus-visible::-webkit-slider-thumb {
     color: #fff;
 }
 
-.tline-time {
-    flex: 0 0 auto; margin-left: auto; padding-left: 8px;
-    text-align: right; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
-    font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ink-dim);
-    white-space: nowrap;
-}
-
 /* v6：行区既是横向也是纵向滚动容器；对象名列 sticky left 由 .tline-label 负责 */
 
 .tline-rows {
@@ -676,6 +648,10 @@ input.prop-num:focus { border-color: var(--accent); }
 
 button.prop-seg {
     flex: 0 0 auto; min-width: 26px;
+    /* 英文比中文长（"Ping-pong" vs "乒乓"、"Simplified Chinese" vs "简体中文"），
+       分段按钮又不换行，所以给它一条兜底：宽度被容器压住时省略，而不是溢出压到邻居。
+       有省略号兜底之后，读不到的全文由 title 承担（prop-prefs 的语言段已带 title）。 */
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     padding: 0 6px; border: 1px solid var(--line); border-radius: var(--r-1);
     background: var(--panel-2); color: var(--ink-dim);
     font-size: 11px; line-height: 1;
@@ -983,8 +959,6 @@ input.lyr-rename {
 .lyr-row.is-hold .lyr-sub {
     color: var(--ink-faint); font-style: italic;
 }
-
-.lyr-row.is-hold .lyr-thumb { opacity: 0.55; }
 
 .lyr-row.is-linked .lyr-sub { color: var(--accent); }
 
@@ -1346,60 +1320,6 @@ input.lyr-rename {
 
 .curve-menu > button.is-danger { color: var(--danger); }
 
-/* ── 画布上的对象浮动工具条 ── */
-.cv-objectbar {
-    position: absolute; z-index: 5; display: flex; align-items: center; gap: 2px;
-    padding: 2px 4px 2px 8px;
-    background: color-mix(in srgb, var(--panel) 92%, transparent);
-    backdrop-filter: blur(6px);
-    pointer-events: auto; white-space: nowrap;
-}
-
-.cv-objectbar[hidden] { display: none; }
-
-.cv-ob-name {
-    max-width: 110px; overflow: hidden;
-    text-overflow: ellipsis; margin-right: 4px;
-    color: var(--ink); font-size: 11px; font-weight: 600;
-}
-
-.cv-ob-btn {
-    padding: 0 7px; color: var(--ink-dim);
-    font-size: 11px;
-}
-
-.cv-ob-btn:hover {
-    background: var(--surface); border-color: var(--line-2);
-    color: var(--ink);
-}
-
-.cv-ob-btn.is-on {
-    /* 选中填充用 accent-2：11px 白字压 #4a7dff 只有 3.70:1，压 #2f5fd0 是 5.73:1 */
-    background: var(--accent-2); border-color: var(--accent);
-    color: #fff;
-}
-
-.cv-ob-btn:disabled {
-    color: var(--ink-faint); opacity: 0.55;
-}
-
-.cv-ob-btn:disabled:hover {
-    background: transparent; border-color: transparent;
-    color: var(--ink-faint);
-}
-
-.cv-ob-menu {
-    position: absolute; z-index: 6; display: flex; flex-direction: column; min-width: 96px;
-    padding: 4px;
-    pointer-events: auto;
-}
-
-.cv-ob-menu[hidden] { display: none; }
-
-.cv-ob-mi:hover {
-    background: var(--accent-2); color: #fff;
-}
-
 /* 效果参数关键帧开关：◆ 表示该参数有轨道（拖滑杆会逐帧改） */
 .fx-key {
     flex: 0 0 auto; width: var(--h-btn); height: var(--h-btn);
@@ -1467,12 +1387,6 @@ input.lyr-rename {
         transparent 1px, transparent 12px
     );
     pointer-events: none;
-}
-
-/* 子行缩略图小一档（26 → 22 高，按 4:3 收到 29 宽）：
-   子对象在树里是「附属」的，视觉重量不该和根对象一样重。 */
-.lyr-row.is-child .lyr-thumb {
-    flex: 0 0 29px; width: 29px; height: 22px;
 }
 
 /* 「N 个子对象」胶囊：行尾，10px + tabular-nums，只说明数量不抢名字宽度 */
@@ -1656,43 +1570,6 @@ input.lyr-rename {
     vertical-align: middle;
 }
 
-/* v5：属性面板「对象时间」只读摘要 */
-.prop-obj-time {
-    font-variant-numeric: tabular-nums; color: var(--accent);
-}
-
-/* 组时间（子樹）：一行两个小按钮 + 规模提示 */
-.prop-subtree {
-    gap: 4px;
-    margin-top: 2px;
-}
-
-.prop-subtree-btn {
-    padding: 0 6px;
-    font-size: 10px;
-    cursor: pointer;
-}
-
-.prop-subtree-btn:hover:not(:disabled) {
-    color: var(--ink);
-    border-color: var(--line-2);
-}
-
-.prop-subtree-btn.is-reset:hover:not(:disabled) {
-    color: var(--danger);
-    border-color: var(--danger);
-}
-
-.prop-subtree-btn:disabled {
-    opacity: 0.4;
-    cursor: default;
-}
-
-.prop-subtree-info {
-    font-size: 10px;
-    color: var(--ink-faint);
-}
-
 /* ── 时间轴：补齐「JS 在用、CSS 缺失」的 6 个选择器 ─────────────────────────
    这组差异在拆分前后一模一样，属既有欠账：右键菜单原本没有任何样式（裸文本堆叠），
    段帧率容器也没有定位上下文。这里给最小可用样式，几何仍以 JS 内联为准。 */
@@ -1811,81 +1688,6 @@ body.pref-bg .cv-host { background: var(--pref-cv-bg, var(--bg)); }
     background: var(--panel-2);
 }
 
-.bd-tools {
-    display: flex;
-    gap: 2px;
-}
-
-.bd-tool {
-    padding: 0 9px;
-    background: var(--surface);
-    cursor: pointer;
-}
-
-.bd-tool:hover {
-    border-color: var(--line-2);
-    color: var(--ink);
-}
-
-.bd-tool.is-on {
-    border-color: var(--accent);
-    background: var(--accent-2);
-    color: var(--ink);
-}
-
-/* 笔尖：滑条窄一点，数字用等宽数字免得 8 → 9 时整行抖 */
-.bd-size {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    color: var(--ink-dim);
-    font-size: 11px;
-}
-
-.bd-size input[type="range"] {
-    width: 92px;
-    height: 16px;
-    margin: 0;
-}
-
-.bd-size-num {
-    min-width: 16px;
-    text-align: right;
-    color: var(--ink);
-    font-variant-numeric: tabular-nums;
-}
-
-.bd-sizeinfo {
-    margin-left: auto;
-    color: var(--ink-faint);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-}
-
-.bd-btn {
-    padding: 0 10px;
-    background: var(--surface);
-    color: var(--ink);
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-.bd-btn:hover {
-    border-color: var(--line-2);
-    background: var(--panel);
-}
-
-/* 「提交」是这块面板的主出口，视觉上要压过其它按钮 */
-.bd-btn[data-act="submit"] {
-    border-color: var(--accent);
-    background: var(--accent-2);
-}
-
-.bd-btn[data-act="submit"]:hover {
-    background: var(--accent);
-}
-
 /* 舞台：棋盘格底纹说明画板是透明的，画布按 JS 算出的 CSS 尺寸居中 */
 .bd-stage {
     display: flex;
@@ -1915,61 +1717,6 @@ body.pref-bg .cv-host { background: var(--pref-cv-bg, var(--bg)); }
     border-top: 1px solid var(--line);
     color: var(--ink-faint);
     font-size: 11px;
-}
-
-/* 改尺寸浮层：盖住整块面板，避免误点画布时又落一笔 */
-.bd-ask {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(9, 10, 12, .62);
-    z-index: 5;
-}
-
-.bd-ask[hidden] {
-    display: none;
-}
-
-.bd-ask-box {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-width: 236px;
-    padding: 12px;
-}
-
-.bd-ask-title {
-    color: var(--ink);
-    font-size: 12px;
-}
-
-.bd-ask-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.bd-ask-row input[type="number"] {
-    width: 72px;
-}
-
-.bd-ask-x {
-    color: var(--ink-faint);
-}
-
-.bd-ask-note {
-    max-width: 280px;
-    color: var(--ink-faint);
-    font-size: 11px;
-    line-height: 1.5;
-}
-
-.bd-ask-btns {
-    display: flex;
-    justify-content: flex-end;
-    gap: 6px;
 }
 
 /* ── 时间轴工具条 v8：五组（播放 / 读数 / 纹理 / 关键帧 / 缩放）─────

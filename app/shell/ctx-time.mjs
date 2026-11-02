@@ -20,14 +20,11 @@ import {
     collectSubtree,
     describeTime,
     localTimeOf,
-    isDescendant,
     moveSubtreeDoc,
     normalizeTime,
     setParent as setParentDoc,
-    subtreeSize,
-    timeDepth,
 } from '../core/timegraph.mjs';
-import { objectById, objectsOf, patchObject, reorderObject } from '../core/doc-model.mjs';
+import { objectById, patchObject } from '../core/doc-model.mjs';
 import { drawOrderOf, moveInOrder, orderIndex } from '../core/draw-order.mjs';
 import {
     addSegment as addTimeSegment,
@@ -46,6 +43,7 @@ import { elementLattice, elementQuad, hitTest, reparentOffset } from '../core/el
 import { latticeIsZero, resizeLattice } from '../core/lattice.mjs';
 import { matrixObject } from '../core/evaluator.mjs';
 import { totalSeconds } from '../core/doc-model.mjs';
+import { t } from '../i18n/index.mjs';
 
 /** 注入依赖，返回可直接展开进 ctx 的一组方法。 */
 export function timeCtx(deps) {
@@ -71,7 +69,7 @@ export function timeCtx(deps) {
             const next = normalizeTime(Object.assign({}, cur, patch));
             return Object.assign({}, o, { time: next });
         }));
-        flash('时间通道 ' + describeTime(patch));
+        flash(t('shell.time.channelSet', { patch: describeTime(patch) }));
     },
     /** 清掉时间通道回到恒等。 */
     resetLayerTime(id) {
@@ -79,7 +77,7 @@ export function timeCtx(deps) {
         if (!doc) return;
         if (!objectById(doc, id)) return;
         setDoc((d) => patchObject(d, id, (o) => Object.assign({}, o, { time: undefined })));
-        flash('时间通道已重置');
+        flash(t('shell.time.channelReset'));
     },
     /** 把时间通道一次性套到整棵子树（含自身）。返回受影响的对象数。 */
     setSubtreeTime(id, patch) {
@@ -97,7 +95,7 @@ export function timeCtx(deps) {
             }
             return next;
         });
-        flash('时间通道 ' + describeTime(patch) + ' · ' + ids.length + ' 个对象');
+        flash(t('shell.time.subtreeSet', { patch: describeTime(patch), n: ids.length }));
         return ids.length;
     },
     /** 重置整棵子树的时间通道。 */
@@ -111,27 +109,15 @@ export function timeCtx(deps) {
             for (const oid of ids) next = patchObject(next, oid, (o) => Object.assign({}, o, { time: undefined }));
             return next;
         });
-        flash('子树时间通道已重置 · ' + ids.length + ' 个对象');
+        flash(t('shell.time.subtreeReset', { n: ids.length }));
         return ids.length;
-    },
-    /** 子树后代数量（不含自身）。 */
-    subtreeCount(id) {
-        const doc = getDoc();
-        return doc ? subtreeSize(doc, id) : 0;
     },
     /** 一句话描述时间通道（对象面板徽章的 title 与只读摘要用）。 */
     describeLayerTime(id) {
         const doc = getDoc();
-        if (!doc) return '无时间变换';
+        if (!doc) return t('shell.time.none');
         const obj = objectById(doc, id);
-        return obj ? describeTime(obj.time) : '无时间变换';
-    },
-    /** 层级深度（0 = 根）。 */
-    layerDepth(id) {
-        const doc = getDoc();
-        if (!doc) return 0;
-        const obj = objectById(doc, id);
-        return obj ? timeDepth(doc, obj) : 0;
+        return obj ? describeTime(obj.time) : t('shell.time.none');
     },
     /** 设父对象（自动做环检测，失败返回 false 并提示原因）。 */
     setLayerParent(id, parentId) {
@@ -171,7 +157,7 @@ export function timeCtx(deps) {
         const to = Math.max(0, Math.min(order.length - 1, Math.round(Number(index))));
         if (!Number.isFinite(to) || to === from) return false;
         const next = moveInOrder(order, id, to);
-        setDoc((d) => Object.assign({}, d, { drawOrder: next }), { label: '调整叠放顺序' });
+        setDoc((d) => Object.assign({}, d, { drawOrder: next }), { label: t('shell.time.reorderDraw') });
         return true;
     },
     /** 把对象移到指定下标（v10 起只动叠放；绘制顺序看 `drawOrder`，不看数组下标）。 */
@@ -186,7 +172,7 @@ export function timeCtx(deps) {
         if (!Number.isFinite(raw) || raw < 0) return false;
         const idx = Math.max(0, Math.min(order.length - 1, raw));
         if (idx === from) return false;
-        setDoc((d) => Object.assign({}, d, { drawOrder: moveInOrder(order, id, idx) }), { label: '调整对象顺序' });
+        setDoc((d) => Object.assign({}, d, { drawOrder: moveInOrder(order, id, idx) }), { label: t('shell.time.reorderObjects') });
         return true;
     },
     /**
@@ -212,14 +198,15 @@ export function timeCtx(deps) {
         const doc = getDoc();
         if (!doc) return false;
         const o = opts && typeof opts === 'object' ? opts : {};
-        const t = typeof now === 'function' ? now() : 0;
+        // 这里的局部量叫 atNow 而不是 t：t 是词条函数（同名 const 会把 t() 调用炸掉）
+        const atNow = typeof now === 'function' ? now() : 0;
         const res = moveSubtreeDoc(doc, id, o.mode, o.targetId,
-            (el, pid) => reparentOffset(doc, el, pid, t));
+            (el, pid) => reparentOffset(doc, el, pid, atNow));
         if (!res.ok) {
-            flash(res.reason || '移动失败');
+            flash(res.reason || t('shell.time.moveFailed'));
             return false;
         }
-        setDoc(() => res.doc, { label: '移动对象', coalesce: typeof o.coalesce === 'string' ? o.coalesce : undefined });
+        setDoc(() => res.doc, { label: t('shell.time.moveObject'), coalesce: typeof o.coalesce === 'string' ? o.coalesce : undefined });
         return true;
     },
     /** 全局时间 → 该对象的局部时间（曲线编辑器按对象时间显示用）。 */
@@ -292,19 +279,20 @@ export function timeCtx(deps) {
     addTimeSegment(at, fps) {
         const doc = getDoc();
         if (!doc) return;
-        const t = Math.max(0, Number(at) || 0);
-        setDoc((d) => addTimeSegment(d, t, fps));
-        flash('时间轴帧率 ' + Math.round(Number(fps) || doc.fps) + ' fps @ ' + t.toFixed(2) + 's');
+        // 局部变量不能叫 t：那是词条函数的名字（同名的 const 会把 t() 调用炸掉）
+        const atSec = Math.max(0, Number(at) || 0);
+        setDoc((d) => addTimeSegment(d, atSec, fps));
+        flash(t('shell.time.fpsSegment', { fps: Math.round(Number(fps) || doc.fps), sec: atSec.toFixed(2) }));
     },
     removeTimeSegment(index) {
         const doc = getDoc();
         if (!doc) return;
         if (normSegments(doc).length <= 1) {
-            flash('至少要保留一段帧率');
+            flash(t('shell.time.keepOneSegment'), 'error');
             return;
         }
         setDoc((d) => removeTimeSegment(d, index));
-        flash('已删除帧率段');
+        flash(t('shell.time.segmentRemoved'));
     },
     setTimeSegmentFps(index, fps) {
         if (!getDoc()) return;
@@ -317,7 +305,7 @@ export function timeCtx(deps) {
     resetTimebase() {
         if (!getDoc()) return;
         setDoc((d) => resetTimebaseDoc(d));
-        flash('帧率已恢复为全片 ' + getDoc().fps + ' fps');
+        flash(t('shell.time.timebaseReset', { fps: getDoc().fps }));
     },
     /** 导出 / 预览用的采样时间点（按段帧率） */
     sampleTimes() {
@@ -335,7 +323,7 @@ export function timeCtx(deps) {
         // 2×2 以上的网格即使顶点全零也要保留结构，否则「改成 2×2」这一步会被当成空 warp 丢掉
         const keep = next.cols > 1 || next.rows > 1 || !latticeIsZero(next);
         setDoc(writeKeyAt(getDoc(), el.id, now(), { warp: keep ? next : null }));
-        flash('网格 ' + next.cols + '×' + next.rows);
+        flash(t('shell.time.grid', { cols: next.cols, rows: next.rows }));
     },
     /** 清掉该对象在当前时间的全部 warp 偏移 */
     resetLattice(layerId) {
@@ -344,7 +332,7 @@ export function timeCtx(deps) {
         const el = objectById(doc, layerId || activeId());
         if (!el) return;
         setDoc(writeKeyAt(getDoc(), el.id, now(), { warp: null }));
-        flash('已重置网格');
+        flash(t('shell.time.gridReset'));
     }
     };
 }

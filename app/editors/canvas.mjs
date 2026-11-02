@@ -21,6 +21,9 @@ import { createTrack, addKey, setKeyState, stateAt } from '../core/transform.mjs
 import {
     elementLattice, handlePoints, elementWorldMatrix, applyMatrix, anchorPoint,
 } from '../core/element.mjs';
+import { BONE_DEFAULTS } from '../core/doc-model.mjs';
+import { skinOf } from '../core/skin.mjs';
+import { WEIGHT_EPS, skinVertices, mainBoneIndex, boneColorOf } from '../core/weight-paint.mjs';
 import { HANDLE_NAMES, HANDLE_PX, handlePositions } from '../core/gizmo.mjs';
 import { buildChrome } from './canvas-chrome.mjs';
 import { createInput } from './canvas-input.mjs';
@@ -120,9 +123,8 @@ export function mount(el, ctx) {
 
     const host = placeCanvas(el);
 
-    // 旧 gizmo / 工具条从宿主里清掉（同一宿主可能被多次 mount）
+    // 旧 gizmo 从宿主里清掉（同一宿主可能被多次 mount）
     for (const old of Array.from(host.querySelectorAll(':scope > .' + GIZMO_CLASS))) old.remove();
-    for (const old of Array.from(host.querySelectorAll(':scope > .cv-objectbar, :scope > .cv-ob-menu'))) old.remove();
 
     /* ── 坐标换算：doc 空间 ↔ 宿主 CSS 像素 ── */
 
@@ -172,6 +174,187 @@ export function mount(el, ctx) {
         return { doc, el, sel, time: ctx.time(), parentM };
     }
 
+    /**
+     * 画所有骨骼对象的骨架（不只选中的）：骨架是场景结构，必须常显，
+     * 否则建完骨骼在画布上什么都看不见。所以这段排在 `selectionInfo()` 判空**之前**。
+     *
+     * 世界变换 = 父链矩阵（ctx.objectParentMatrix）× 自身 element 矩阵（elementWorldMatrix）。
+     * 为什么不走求值器：求值器按「该时刻有纹理」绘制，骨骼没有纹理、它根本不认识骨骼；
+     * 而选框与手柄用的就是这条路径（handlePoints / anchorPoint 同一套矩阵），
+     * 走同一条路，骨头的根部圆点才能和选框严格对齐。
+     *
+     * 局部几何按约定：骨头从 (0, width/2) 画到 (len, width/2)，配合 anchor={x:0,y:0.5}
+     * 就是「原点在根部中点，旋转围绕根部」。
+     */
+    function drawBones(g) {
+        const doc = ctx && typeof ctx.doc === 'function' ? ctx.doc() : null;
+        if (!doc || !Array.isArray(doc.objects)) return;
+        const sel = typeof ctx.selection === 'function' ? ctx.selection() : null;
+        const selId = sel && sel.id ? String(sel.id) : null;
+        // 权重态下的「目标骨」：这一刷会落到它身上，所以它得比其它骨显眼。
+        // 与选中态分开画 —— 用户可能选着 A 骨却在刷 B 骨（目标骨由下拉/最近骨决定）。
+        const weightBone = typeof ctx.weightBone === 'function' ? ctx.weightBone() : null;
+        const time = typeof ctx.time === 'function' ? ctx.time() : 0;
+        const z = viewport().zoom;
+        for (const el of doc.objects) {
+            if (!el || el.kind !== 'bone') continue;
+            // 老档或手改过的对象可能缺 bone 字段：兜底成缺省骨头，别整条消失
+            const b = el.bone && typeof el.bone === 'object' ? el.bone : {};
+            const len = Number.isFinite(b.len) ? b.len : BONE_DEFAULTS.len;
+            const width = Number.isFinite(b.width) ? b.width : BONE_DEFAULTS.width;
+            const color = typeof b.color === 'string' ? b.color : BONE_DEFAULTS.color;
+            const parentM = typeof ctx.objectParentMatrix === 'function' ? ctx.objectParentMatrix(el.id, time) : null;
+            // 骨骼没有纹理，尺寸就是骨头的长与宽（不能问 objectSize：它对无位图对象返回 null）
+            const m = elementWorldMatrix(el, time, { w: len, h: width }, parentM);
+            const root = toScreen(applyMatrix(m, { x: 0, y: width / 2 }));
+            const tip = toScreen(applyMatrix(m, { x: len, y: width / 2 }));
+            const on = selId === el.id;
+            const isTarget = !!weightBone && String(weightBone) === String(el.id);
+            // 线宽跟着视图缩放，但两头夹住：缩到很小还得看得见，放到很大别糊成一团
+            const lw = Math.max(2, Math.min(48, width * z));
+            g.save();
+            g.lineCap = 'round';
+            // 未选中的骨架退到背景：它是结构提示，不该跟选框、手柄抢注意力
+            g.globalAlpha = on || isTarget ? 1 : 0.42;
+            // 加粗/加亮的垫层：目标骨用强调色垫一圈且比选中更粗，选中骨按原样
+            const boost = isTarget ? 6 : (on ? 3 : 0);
+            if (boost > 0) {
+                g.strokeStyle = isTarget ? '#ffd479' : ACCENT;
+                g.lineWidth = lw + boost;
+                g.beginPath();
+                g.moveTo(root.x, root.y);
+                g.lineTo(tip.x, tip.y);
+                g.stroke();
+            }
+            g.strokeStyle = color;
+            g.lineWidth = lw;
+            g.beginPath();
+            g.moveTo(root.x, root.y);
+            g.lineTo(tip.x, tip.y);
+            g.stroke();
+            // 根部关节：实心圆 + 深色描边（描边色与手柄同一套，叠在任何底色上都分得清）
+            g.fillStyle = color;
+            g.strokeStyle = '#0d0f12';
+            g.lineWidth = 1;
+            g.beginPath();
+            g.arc(root.x, root.y, Math.max(3, lw * 0.6), 0, Math.PI * 2);
+            g.fill();
+            g.stroke();
+            // 末端小圆点：标出骨头的「尖」，后续接蒙皮时这里就是子骨骼的挂点
+            g.beginPath();
+            g.arc(tip.x, tip.y, Math.max(2.5, lw * 0.34), 0, Math.PI * 2);
+            g.fill();
+            g.restore();
+        }
+    }
+
+    /**
+     * 权重叠加层（P2-C 步 1）：把蒙皮网格的顶点画在**形变之后**的位置上。
+     *
+     * 位置一律来自 core/weight-paint 的 skinVertices（applySkin 同密度分支）。
+     * 不能用 elementLattice：它只读 st.warp、看不见蒙皮偏移，顶点会停在绑定姿势，
+     * 与用户看到的画面错开一截 —— 眼睛在 A 点、鼠标得去 B 点，这种 bug 极难自查。
+     *
+     * 只画「正在编辑的那个对象」（ctx.weightLayerId）：用户为换目标骨会去点骨骼，
+     * 那一刻选区变成骨骼，靠选区找对象的话顶点会当场消失。
+     */
+    function drawSkinWeights(g) {
+        if (typeof ctx.weightMode !== 'function' || !ctx.weightMode()) return;
+        const doc = ctx && typeof ctx.doc === 'function' ? ctx.doc() : null;
+        const layerId = typeof ctx.weightLayerId === 'function' ? ctx.weightLayerId() : null;
+        const el = doc && layerId ? layerById(doc, layerId) : null;
+        const skin = el ? skinOf(el) : null;
+        if (!el || !skin) return;
+        const time = typeof ctx.time === 'function' ? ctx.time() : 0;
+        const parentM = typeof ctx.objectParentMatrix === 'function' ? ctx.objectParentMatrix(el.id, time) : null;
+        const verts = skinVertices(doc, el, time, parentM);
+        if (!verts) return;
+        const selVertex = typeof ctx.weightVertex === 'function' ? ctx.weightVertex() : null;
+        const { cols, rows } = verts;
+        g.save();
+        g.setLineDash([]);
+        // 网格线自己按 map 采样。禁用 latticeWireframe：它返回的是「已含偏移的局部像素」，
+        // 再套一次 map 就等于偏移加了两遍。
+        g.strokeStyle = 'rgba(125,143,168,0.55)';
+        g.lineWidth = 1;
+        g.beginPath();
+        for (let r = 0; r <= rows; r++) {
+            for (let c = 0; c <= cols; c++) {
+                const s = toScreen(verts.map(cols ? c / cols : 0, rows ? r / rows : 0));
+                if (c === 0) g.moveTo(s.x, s.y);
+                else g.lineTo(s.x, s.y);
+            }
+        }
+        for (let c = 0; c <= cols; c++) {
+            for (let r = 0; r <= rows; r++) {
+                const s = toScreen(verts.map(cols ? c / cols : 0, rows ? r / rows : 0));
+                if (r === 0) g.moveTo(s.x, s.y);
+                else g.lineTo(s.x, s.y);
+            }
+        }
+        g.stroke();
+        // 顶点：填充色 = 该顶点**主骨**的颜色（一眼看出这块皮归哪根骨）；
+        // 主权重低就压暗（globalAlpha 随 mainW 抬升），因为「这块只有一点点属于它」；
+        // 当前选中用 #ffd479（与 warp 顶点同一套强调色）；
+        // Σw≈0 的点不受任何骨影响，用警示色画空心方框（填充会让人以为它有重量）
+        for (let i = 0; i < verts.pts.length; i++) {
+            const s = toScreen(verts.pts[i]);
+            const dead = !(verts.sums[i] > WEIGHT_EPS);
+            const picked = i === selVertex;
+            g.beginPath();
+            g.rect(s.x - HANDLE_PX, s.y - HANDLE_PX, HANDLE_PX * 2, HANDLE_PX * 2);
+            if (dead) {
+                g.strokeStyle = picked ? '#ffd479' : '#ff6b6b';
+                g.lineWidth = 1.5;
+                g.stroke();
+            } else {
+                const slot = skin.pts && skin.pts[i] ? skin.pts[i] : [];
+                const mainIdx = mainBoneIndex(slot);
+                let mainW = 0;
+                for (const it of slot) {
+                    if (it && it.b === mainIdx && Number.isFinite(it.w)) { mainW = it.w; break; }
+                }
+                // 先前的版本一律用 BONE_DEFAULTS.color，所有顶点一个色，
+                // 「这块皮归哪根骨」只能靠点开面板逐个读 —— 涂权重时几乎没法自查。
+                g.globalAlpha = 0.45 + 0.55 * (mainW > 0 ? Math.min(1, mainW) : 0);
+                g.fillStyle = picked ? '#ffd479' : boneColorOf(doc, skin, mainIdx);
+                g.strokeStyle = '#0d0f12';
+                g.lineWidth = 1;
+                g.fill();
+                g.stroke();
+                g.globalAlpha = 1;
+            }
+        }
+
+        // 笔刷圈：与软拖预览同构 —— 参数空间画圆、透 map 投到屏幕，
+        // 所以对象有旋转 / 已有蒙皮形变时圈仍贴着真实影响区。
+        // 半径语义与 core/weight-paint.brushVertices 用的是同一个（参数空间距离）。
+        const brush = typeof input.weightBrush === 'function' ? input.weightBrush() : null;
+        if (brush && brush.elId === el.id && brush.radius > 0) {
+            const STEPS = 64;
+            g.save();
+            g.strokeStyle = 'rgba(74,125,255,0.85)';
+            g.fillStyle = 'rgba(74,125,255,0.10)';
+            g.lineWidth = 1.5;
+            g.setLineDash([]);
+            g.beginPath();
+            for (let i = 0; i <= STEPS; i++) {
+                const a = (i / STEPS) * Math.PI * 2;
+                // 夹到 [0,1]：圈外的参数空间没有几何可影响，画到对象外面只会误导
+                const su = clamp01(brush.u + Math.cos(a) * brush.radius);
+                const sv = clamp01(brush.v + Math.sin(a) * brush.radius);
+                const s = toScreen(verts.map(su, sv));
+                if (i === 0) g.moveTo(s.x, s.y);
+                else g.lineTo(s.x, s.y);
+            }
+            g.closePath();
+            g.fill();
+            g.stroke();
+            g.restore();
+        }
+        g.restore();
+    }
+
     /* ── 指针交互：命中判定 + 拖动生命周期（纯数学在 core/gizmo.mjs，
        事件节流与关键帧写入在 canvas-input.mjs） ── */
 
@@ -187,9 +370,12 @@ export function mount(el, ctx) {
         el, host, engine, ctx, gizmoClass: GIZMO_CLASS,
         toScreen, selectionInfo, placeCanvas,
     });
-    const { gizmo, syncZoom, updateObjectBar, ensureVisibleHost } = chrome;
+    const { gizmo, syncZoom, ensureVisibleHost } = chrome;
 
     host.addEventListener('pointerdown', input.onDown, true);
+    // 笔刷圈要跟手：hover 只更新状态（不排渲染），重画交给 gizmo 的每帧 rAF。
+    host.addEventListener('pointermove', input.onHover);
+    host.addEventListener('pointerleave', input.onHoverEnd);
 
     /* ── 引擎挂载 ── */
 
@@ -260,6 +446,11 @@ export function mount(el, ctx) {
         g.setTransform(1, 0, 0, 1, 0, 0);
         g.clearRect(0, 0, gizmo.width, gizmo.height);
         g.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        // 骨架先画：它要常显，所以必须在 selectionInfo() 判空之前（没选中也得有骨架）
+        drawBones(g);
+        // 权重顶点紧随骨架：同样要常显（编辑权重时选区可能落在骨骼上），也得在判空之前
+        drawSkinWeights(g);
 
         const info = selectionInfo();
         if (!info) return;
@@ -423,7 +614,7 @@ export function mount(el, ctx) {
     let gizmoRaf = 0;
     let lastGuard = 0;
 
-    /** 一帧的工作：兜底搬宿主、校正视图、重画叠加层与浮动工具条 */
+    /** 一帧的工作：兜底搬宿主、校正视图、重画叠加层 */
     const tickOnce = () => {
         if (!host.isConnected) return;
         const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -433,7 +624,6 @@ export function mount(el, ctx) {
             syncViewOnce();
         }
         drawGizmo();
-        updateObjectBar();
     };
 
     const gizmoTick = () => {
@@ -456,14 +646,16 @@ export function mount(el, ctx) {
         if (engine && typeof engine.scheduleRender === 'function') engine.scheduleRender();
         else if (ctx && typeof ctx.requestRender === 'function') ctx.requestRender();
         syncZoom();
-        // 外壳每次 render / setSelection 都会调 refresh，叠加层与工具条就地更新，
+        // 外壳每次 render / setSelection 都会调 refresh，叠加层就地更新，
         // 不依赖 rAF（后台窗口会被暂停）
-        try { drawGizmo(); updateObjectBar(); } catch (err) { /* 画布未就绪时忽略 */ }
+        try { drawGizmo(); } catch (err) { /* 画布未就绪时忽略 */ }
     };
 
     const destroy = () => {
         chrome.disposeHud();
         host.removeEventListener('pointerdown', input.onDown, true);
+        host.removeEventListener('pointermove', input.onHover);
+        host.removeEventListener('pointerleave', input.onHoverEnd);
         input.dispose();
         if (gizmoRaf) cancelAnimationFrame(gizmoRaf);
         gizmoRaf = 0;
@@ -473,6 +665,6 @@ export function mount(el, ctx) {
     };
 
     refresh();
-    activeBarSync = () => { drawGizmo(); updateObjectBar(); };
+    activeBarSync = () => { drawGizmo(); };
     return { destroy, refresh, focusFrame: refresh };
 }

@@ -21,6 +21,18 @@ import {
     mapTrackTimes,
 } from '../app/core/timegraph.mjs';
 import { createDocument, totalSeconds, fpsAtTime } from '../app/core/cel.mjs';
+import { DEFAULT_LOCALE, getLocale, setLocale, t } from '../app/i18n/index.mjs';
+
+/** describeTime 的文案都走词条：断言按当前语言取期望值，切完语言必须复原。 */
+function withLocale(id, fn) {
+    const prev = getLocale();
+    setLocale(id);
+    try {
+        return fn();
+    } finally {
+        setLocale(prev || DEFAULT_LOCALE);
+    }
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // 夹具：v6 时间模型——没有帧，对象带 cels:[{at,image}]，文档用 duration 给总长。
@@ -622,46 +634,70 @@ test('isDescendant：空参、不存在 id、环链都安全返回 false', () =>
 // ── describeTime ───────────────────────────────────────────────────────────
 
 test('describeTime：恒等 / offset / scale / loop / hold 五种输出互不相同', () => {
-    const out = [
-        describeTime(undefined),
-        describeTime({ offset: 1.5 }),
-        describeTime({ scale: 2 }),
-        describeTime({ mode: 'loop', from: 0.5, to: 2 }),
-        describeTime({ hold: true, holdAt: 1.25 }),
-    ];
-    for (const s of out) assert.equal(typeof s, 'string');
-    assert.equal(out[0], '无时间变换');
-    assert.equal(new Set(out).size, 5, `五种输出必须互不相同：${JSON.stringify(out)}`);
-    assert.ok(out[1].includes('延后') && out[1].includes('1.50'));
-    assert.ok(out[2].includes('×2'));
-    assert.ok(out[3].includes('循环') && out[3].includes('0.50') && out[3].includes('2.00'));
-    assert.ok(out[4].includes('冻结') && out[4].includes('1.25'));
+    withLocale('zh-Hans', () => {
+        const out = [
+            describeTime(undefined),
+            describeTime({ offset: 1.5 }),
+            describeTime({ scale: 2 }),
+            describeTime({ mode: 'loop', from: 0.5, to: 2 }),
+            describeTime({ hold: true, holdAt: 1.25 }),
+        ];
+        for (const s of out) assert.equal(typeof s, 'string');
+        assert.equal(out[0], t('time.none'));
+        assert.equal(out[0], '无时间变换', '恒等文案取自词条');
+        assert.equal(new Set(out).size, 5, `五种输出必须互不相同：${JSON.stringify(out)}`);
+        assert.equal(out[1], t('time.delay', { sec: '1.50' }));
+        assert.equal(out[2], t('time.speed', { factor: 2 }));
+        assert.equal(out[3], t('time.loop.range', { from: '0.50', to: '2.00' }));
+        assert.equal(out[4], t('time.frozen', { sec: '1.25' }));
+    });
+    // 换语言后同一份时间必须换一份话：这是「现取」而不是「创建时定值」的证据。
+    withLocale('en', () => {
+        assert.equal(describeTime(undefined), t('time.none'));
+        assert.match(describeTime({ offset: 1.5 }), /1\.50/);
+        assert.doesNotMatch(describeTime(undefined), /[\u4e00-\u9fff]/, 'en 下不许漏出中文');
+    });
 });
 
 test('describeTime：负 offset 说「提前」，组合项叠加', () => {
-    const early = describeTime({ offset: -0.5 });
-    assert.ok(early.includes('提前') && early.includes('0.50'), early);
-    const combo = describeTime({ offset: 1, scale: 2, mode: 'loop', from: 0, to: 1 });
-    assert.ok(combo.includes('延后 1.00s'), combo);
-    assert.ok(combo.includes('×2'), combo);
-    assert.ok(combo.includes('循环'), combo);
-    assert.ok(combo.includes('·'), '多项用 · 连接');
+    withLocale('zh-Hans', () => {
+        const early = describeTime({ offset: -0.5 });
+        assert.equal(early, t('time.advance', { sec: '0.50' }), early);
+        assert.ok(early.includes('提前'), early);
+        const combo = describeTime({ offset: 1, scale: 2, mode: 'loop', from: 0, to: 1 });
+        assert.equal(
+            combo,
+            [t('time.delay', { sec: '1.00' }), t('time.speed', { factor: 2 }), t('time.loop.range', { from: '0.00', to: '1.00' })].join(' · '),
+            combo,
+        );
+        assert.ok(combo.includes('延后 1.00s'), combo);
+        assert.ok(combo.includes('·'), '多项用 · 连接');
+    });
 });
 
 test('describeTime：clamp / pingpong 文案与「全片」区间', () => {
-    const clamp = describeTime({ mode: 'clamp', from: 1, to: 3 });
-    assert.ok(clamp.includes('夹取') && clamp.includes('1.00') && clamp.includes('3.00'), clamp);
-    const ppAll = describeTime({ mode: 'pingpong' });
-    assert.ok(ppAll.includes('往返') && ppAll.includes('全片'), ppAll);
-    const loopAll = describeTime({ mode: 'loop' });
-    assert.ok(loopAll.includes('循环') && loopAll.includes('全片'), loopAll);
+    withLocale('zh-Hans', () => {
+        const clamp = describeTime({ mode: 'clamp', from: 1, to: 3 });
+        assert.equal(clamp, t('time.clamp.range', { from: '1.00', to: '3.00' }), clamp);
+        assert.ok(clamp.includes('夹取'), clamp);
+        const ppAll = describeTime({ mode: 'pingpong' });
+        assert.equal(ppAll, t('time.pingpong.whole'), ppAll);
+        assert.ok(ppAll.includes('往返') && ppAll.includes('全片'), ppAll);
+        const loopAll = describeTime({ mode: 'loop' });
+        assert.equal(loopAll, t('time.loop.whole'), loopAll);
+        assert.ok(loopAll.includes('循环') && loopAll.includes('全片'), loopAll);
+    });
 });
 
 test('describeTime：scale=0 与 hold 一样输出冻结文案', () => {
-    const frozen = describeTime({ scale: 0, holdAt: 2 });
-    assert.ok(frozen.includes('冻结') && frozen.includes('2.00'), frozen);
-    assert.equal(describeTime({ scale: 0 }), describeTime({ hold: true }), 'holdAt=0 时两者同文案');
-    assert.equal(describeTime({ scale: 1 }), '无时间变换');
+    withLocale('zh-Hans', () => {
+        const frozen = describeTime({ scale: 0, holdAt: 2 });
+        assert.equal(frozen, t('time.frozen', { sec: '2.00' }), frozen);
+        assert.ok(frozen.includes('冻结') && frozen.includes('2.00'), frozen);
+        assert.equal(describeTime({ scale: 0 }), describeTime({ hold: true }), 'holdAt=0 时两者同文案');
+        assert.equal(describeTime({ scale: 1 }), t('time.none'));
+        assert.equal(describeTime({ scale: 1 }), '无时间变换');
+    });
 });
 
 // ── mapTrackTimes ──────────────────────────────────────────────────────────

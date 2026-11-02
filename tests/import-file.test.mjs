@@ -22,6 +22,12 @@ import {
 } from '../app/shell/import-file.mjs';
 import { createDoc } from '../app/core/doc-model.mjs';
 import { createEvaluator } from '../app/core/evaluator.mjs';
+import { setLocale } from '../app/i18n/index.mjs';
+
+// 这里的错误文案已经迁进词条表（`app/i18n/parts/shell.mjs` 的 `shell.import.*`），
+// 而进程里的默认语言是 en。断言照旧钉中文译文，所以先把语言钉死：
+// 英文那一侧由 `tests/i18n-parts-shell.test.mjs` 的两表镜面 + 占位符断言兜。
+setLocale('zh-Hans');
 
 // ── 字节小工具 ────────────────────────────────────────────────────────────────
 

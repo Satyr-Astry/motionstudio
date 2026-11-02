@@ -108,3 +108,26 @@ test('parentChainOf / collectSubtree / isDescendant 与既有实现一致', () =
     assert.equal(isDescendant(nested, c.id, a.id), true);
     assert.equal(isDescendant(nested, a.id, c.id), false);
 });
+
+// 父子面板的落点守卫（app/editors/tree.mjs）手里只有 id：传 id 要能判，「自身」不算后代，
+// 未知 id 一律 false（不猜）。这条锁住面板换用 core 版之后的入参与语义。
+test('isDescendant：传 id 也能判，自身不算后代，未知 id 一律 false', () => {
+    const doc = createDoc({ objects: [{ name: 'a' }, { name: 'b' }, { name: 'c' }] });
+    const [a, b, c] = objectsOf(doc);
+    const nested = {
+        ...doc,
+        objects: [
+            { ...a, parentId: undefined },
+            { ...b, parentId: a.id },
+            { ...c, parentId: b.id },
+        ],
+    };
+    assert.equal(isDescendant(nested, c.id, a.id), true);
+    // 自身 → false：面板在 dragover 里已经先拦「拖到自身」，这里不再重复算子树
+    assert.equal(isDescendant(nested, b.id, b.id), false, '自身不算后代');
+    // 对象入参与 id 入参同一语义
+    assert.equal(isDescendant(nested, objectsOf(nested)[2], a), true);
+    // 找不到就 false，绝不猜
+    assert.equal(isDescendant(nested, 'ghost', a.id), false, '找不到子对象 → false');
+    assert.equal(isDescendant(nested, b.id, 'ghost'), false, '找不到祖先 → false');
+});

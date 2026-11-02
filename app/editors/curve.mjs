@@ -30,6 +30,15 @@ import {
     channelKeysOf, writeModeOf, occupiedAt, isChannelField, dragChannelKeyTo, dragChannelHandleTo, autoTangentsChannel,
 } from './curve-geo.mjs';
 import { resizeCanvas, beginFrame, paintCanvas } from './curve-draw.mjs';
+// 本模块里 `t` 到处是「时刻」的局部变量（`const t = xToT(geo, x)`），所以翻译函数改名 tr。
+import { t as tr } from '../i18n/index.mjs';
+
+/**
+ * `describeTime()` 用这句中文当「时间变换恒等」的哨兵（`app/core/timegraph.mjs:518`），
+ * 这里只拿它做比较、不显示，所以**不走词典**：词条一换语言哨兵就对不上了。
+ * 根治得让 core 导出显式的恒等判定，那不在本片写域。
+ */
+const IDENTITY_TIME_TEXT = '无时间变换';
 // 曲线里「拖出来/打出来的时刻」也要落在整帧上，否则时间轴帧带里对不上位置
 import { snapForDrag } from './timeline-geo.mjs';
 import { snapOnNow } from './timeline-keys.mjs';
@@ -78,23 +87,27 @@ export function mount(el, ctx) {
     bar.appendChild(chBtn);
 
     /* ── 缓动预设：选中关键帧后一键换线型（比拖柄快得多）。图标化，语义留在 title 里 ── */
+    // 关键字与第三个元素是**落盘的缓动名**，不许动；显示名（按钮里的短语 + title 全句）
+    // 一律走词典 `curve.preset.*`。
     const PRESETS = [
-        ['linear', 'curve-line', '线', '线性', 'linear', null],
-        ['in', 'curve-in', '入', '进入', 'bezier', [[0.42, 0], [1, 1]]],
-        ['out', 'curve-out', '出', '退出', 'bezier', [[0, 0], [0.58, 1]]],
-        ['inout', 'curve-both', '双', '双向', 'bezier', [[0.42, 0], [0.58, 1]]],
-        ['back', 'curve-overshoot', '冲', '回弹', 'bezier', [[0.34, 1.56], [0.64, 1]]],
+        ['linear', 'curve-line', 'linear', null],
+        ['in', 'curve-in', 'bezier', [[0.42, 0], [1, 1]]],
+        ['out', 'curve-out', 'bezier', [[0, 0], [0.58, 1]]],
+        ['inout', 'curve-both', 'bezier', [[0.42, 0], [0.58, 1]]],
+        ['back', 'curve-overshoot', 'bezier', [[0.34, 1.56], [0.64, 1]]],
     ];
     const presets = document.createElement('div');
     presets.className = 'curve-presets';
-    for (const [key, iconName, glyph, label, ease, hs] of PRESETS) {
+    for (const [key, iconName, ease, hs] of PRESETS) {
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'curve-preset ms-icon-label';
         b.dataset.preset = key;
-        b.innerHTML = icon(iconName, { size: 'sm' }) + '<span>' + glyph + '</span>';
-        b.title = ease === 'linear' ? label + '：选中关键帧 → 这一段改为线性'
-            : label + '：选中关键帧 → 这一段改为贝塞尔「' + label + '」';
+        b.innerHTML = icon(iconName, { size: 'sm' }) + '<span>' + tr('curve.preset.' + key + '.glyph') + '</span>';
+        const name = tr('curve.preset.' + key + '.label');
+        b.title = ease === 'linear'
+            ? tr('curve.preset.hint.linear', { name })
+            : tr('curve.preset.hint.bezier', { name });
         b.addEventListener('click', (ev) => {
             ev.stopPropagation();
             applyPreset(ease, hs);
@@ -105,8 +118,8 @@ export function mount(el, ctx) {
     const autoBtn = document.createElement('button');
     autoBtn.type = 'button';
     autoBtn.className = 'curve-preset is-auto ms-icon-label';
-    autoBtn.innerHTML = icon('curve-auto', { size: 'sm' }) + '<span>自</span>';
-    autoBtn.title = '自由：自动切线 —— 按相邻关键帧的斜率自动摆平切线（再按一次回到手动，曲线可自由拖）';
+    autoBtn.innerHTML = icon('curve-auto', { size: 'sm' }) + '<span>' + tr('curve.preset.auto.glyph') + '</span>';
+    autoBtn.title = tr('curve.preset.auto.hint');
     autoBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         applyAuto();
@@ -225,9 +238,10 @@ export function mount(el, ctx) {
         if (typeof wrap.clientWidth === 'number' && wrap.clientWidth <= 0) return;
         if (!focusChannel(d.layerId, d.ch, d.t)) return;
         const ch = chById(d.ch);
-        const name = ch ? ch.short : String(d.ch || '通道');
-        notify('已定位到通道关键帧 · ' + name + ' · ' + fmt2(d.t) + ' s' +
-            (Number(d.count) > 1 ? '（该时刻有 ' + d.count + ' 个通道，已切到 ' + name + '）' : ''));
+        const name = ch ? ch.short : tr('curve.channelFallback');
+        let msg = tr('curve.notify.located', { name, t: fmt2(d.t) });
+        if (Number(d.count) > 1) msg += tr('curve.notify.locatedMulti', { n: d.count, name });
+        notify(msg);
     }
 
     function toggleRef(id) {
@@ -252,8 +266,8 @@ export function mount(el, ctx) {
             pop.appendChild(h);
             for (const ch of list) pop.appendChild(chRow(ch));
         };
-        group('变换', SCALAR_CHANNELS);
-        group('网格顶点', warpChannels());
+        group(tr('curve.group.transform'), SCALAR_CHANNELS);
+        group(tr('curve.group.warp'), warpChannels());
         syncPopRows();
         syncPopValues(trackOf(activeLayer(docOf())));
     }
@@ -274,7 +288,7 @@ export function mount(el, ctx) {
         val.className = 'curve-ch-val';
         row.append(name, solo, val);
         popVals.set(ch.id, val);
-        row.title = '点击：切到这条曲线 · Shift+点击：当作参考线叠加';
+        row.title = tr('curve.row.hint');
         row.addEventListener('click', (ev) => {
             ev.stopPropagation();
             if (ev.shiftKey) toggleRef(ch.id);
@@ -295,8 +309,8 @@ export function mount(el, ctx) {
             row.classList.toggle('is-ref', id !== focus && refs.has(id));
             row.classList.toggle('is-solo', solo);
             row.title = id === focus
-                ? (solo ? '当前编辑的曲线 · 已独立：只动它自己' : '当前编辑的曲线')
-                : (solo ? '已独立：有自己的关键帧时间 · 点击切到这条曲线' : '点击：切到这条曲线 · Shift+点击：当作参考线叠加');
+                ? (solo ? tr('curve.row.focusSolo') : tr('curve.row.focus'))
+                : (solo ? tr('curve.row.refSolo') : tr('curve.row.hint'));
         }
     }
 
@@ -442,27 +456,26 @@ export function mount(el, ctx) {
         chLabel.textContent = ch ? ch.short : '—';
         chBtn.style.setProperty('--ch', ch ? ch.color : 'var(--accent)');
         chBtn.classList.toggle('is-solo', solo);
-        chBtn.title = (ch ? ch.label : '通道') +
-            (solo ? ' · 已独立：有自己的关键帧时间，不再跟随共用关键帧' : '') +
-            ' —— 点开切换曲线（Shift+点击列表项可叠加参考线）';
+        chBtn.title = (ch ? ch.label : tr('curve.channelFallback')) +
+            (solo ? tr('curve.bar.solo') : '') +
+            tr('curve.bar.open');
 
         if (!layer) {
-            hint.textContent = '无对象';
+            hint.textContent = tr('curve.bar.noObject');
             hint.title = '';
             return;
         }
         const easeName = keys.length > 1 ? EASE_LABEL[keys[Math.min(sel ? sel.index : 0, keys.length - 1)].ease] : '—';
         // 对象一旦有非恒等时间通道，横轴就是「它自己的时间」，必须标出来
-        const td = typeof ctx.describeLayerTime === 'function' ? ctx.describeLayerTime(layer.id) : '无时间变换';
-        const timeTag = td && td !== '无时间变换' ? ' · 对象时间' : '';
-        const refTag = refs.size ? ' · 参考 ' + refs.size : '';
-        hint.textContent = keys.length + ' 键 · ' + easeName + (solo ? ' · ⤴独立' : '') + refTag + timeTag;
+        const td = typeof ctx.describeLayerTime === 'function' ? ctx.describeLayerTime(layer.id) : IDENTITY_TIME_TEXT;
+        const timeTag = td && td !== IDENTITY_TIME_TEXT ? tr('curve.bar.objectTime') : '';
+        const refTag = refs.size ? tr('curve.bar.refs', { n: refs.size }) : '';
+        hint.textContent = tr('curve.bar.summary', { n: keys.length, ease: easeName }) +
+            (solo ? tr('curve.bar.summarySolo') : '') + refTag + timeTag;
         hint.title =
-            (td && td !== '无时间变换' ? '横轴 = 该对象的局部时间（' + td + '）\n' : '') +
-            '拖点改时间/数值 · 拖柄改曲线 · 右键改缓动 · 双击空白加点 · Delete 删点 · Shift 吸附纹理\n' +
-            (solo
-                ? '这条通道已独立（⤴）：只动它自己的关键帧，其余曲线不受影响。右键「回到共用关键帧」可撤销。'
-                : '第一次单独拖这条曲线时，它会拷贝一份自己的关键帧（⤴ 独立），之后只影响它自己。');
+            (td && td !== IDENTITY_TIME_TEXT ? tr('curve.bar.titleObjectTime', { desc: td }) + '\n' : '') +
+            tr('curve.bar.titleHelp') + '\n' +
+            (solo ? tr('curve.bar.titleSolo') : tr('curve.bar.titleFollow'));
         if (!pop.hidden) {
             syncPopRows(track);
             syncPopValues(track);
@@ -499,7 +512,7 @@ export function mount(el, ctx) {
         // 批量：同一对象上所有被选中的关键帧一起改缓动
         const idxs = selectionIndexes(selKeys, layer.id);
         if (!idxs.length) {
-            hint.textContent = '先选点';
+            hint.textContent = tr('curve.hint.selectFirst');
             return;
         }
         // 批量：同一对象上所有被选中的点一起改缓动。走哪套 API 由 writeModeOf 决定 ——
@@ -512,7 +525,9 @@ export function mount(el, ctx) {
                 return setChannelKeyEase(acc, chId, i, ease, hs ? hs[0] : undefined, hs ? hs[1] : undefined);
             }, trk);
         });
-        hint.textContent = '缓动 ' + (ease === 'linear' ? '线性' : ease === 'hold' ? '保持' : '贝塞尔') + (idxs.length > 1 ? ' ×' + idxs.length : '');
+        const easeName = EASE_LABEL[ease] || EASE_LABEL.bezier;
+        hint.textContent = tr('curve.hint.easeApplied', { ease: easeName }) +
+            (idxs.length > 1 ? tr('curve.hint.easeMulti', { n: idxs.length }) : '');
     }
 
     /**
@@ -526,7 +541,7 @@ export function mount(el, ctx) {
         if (!layer) return;
         const idxs = selectionIndexes(selKeys, layer.id);
         if (!idxs.length) {
-            hint.textContent = '先选点';
+            hint.textContent = tr('curve.hint.selectFirst');
             return;
         }
         // 批量：逐个算切线（每次都基于最新轨道，避免后一个用到过期的邻居值）
@@ -547,7 +562,7 @@ export function mount(el, ctx) {
             }
             done += 1;
         }
-        hint.textContent = '自动切线 ×' + done;
+        hint.textContent = tr('curve.hint.autoApplied', { n: done });
     }
 
     function writeTrack(layerId, mut) {
@@ -681,7 +696,7 @@ export function mount(el, ctx) {
             if (cur && occupiedAt(cur, drag.chId, t, drag.index)) {
                 if (!drag.blockedNotified) {
                     drag.blockedNotified = true;
-                    notify('这个时刻已经有关键帧了：换一帧再拖，或先把那一颗删掉');
+                    notify(tr('curve.notify.occupied'));
                 }
                 return;
             }
@@ -738,7 +753,7 @@ export function mount(el, ctx) {
             if (!dup && selKeys.length < 2000) selKeys.push(hit);
         }
         sel = selKeys[selKeys.length - 1] || null;
-        if (picked.length) notify('框选 ' + picked.length + ' 颗关键帧');
+        if (picked.length) notify(tr('curve.marquee.picked', { n: picked.length }));
         paint();
     }
 
@@ -760,7 +775,7 @@ export function mount(el, ctx) {
         } catch (err) {
             /* ignore */
         }
-        notify('关键帧已更新');
+        notify(tr('curve.notify.keyUpdated'));
         paint();
     }
     cv.addEventListener('pointerup', endDrag);
@@ -788,7 +803,10 @@ export function mount(el, ctx) {
         if (typeof ctx.setTime === 'function') ctx.setTime(t);
         const after = layerById(docOf(), layer.id);
         const solo = isSolo(trackOf(after), focus);
-        notify('已添加关键帧 t = ' + fmt2(t) + ' s' + (solo && chById(focus) ? ' · ' + chById(focus).short + ' 已独立' : ''));
+        const chFocused = chById(focus);
+        let msg = tr('curve.notify.keyAdded', { t: fmt2(t) });
+        if (solo && chFocused) msg += tr('curve.notify.keyAddedSolo', { name: chFocused.short });
+        notify(msg);
         paint();
     });
 
@@ -823,7 +841,7 @@ export function mount(el, ctx) {
                     writeTrack(layer.id, (trk) => (writeModeOf(trk, chId) === 'channel'
                         ? setChannelKeyEase(trk, chId, hit.index, ease)
                         : setKeyEase(trk, hit.index, ease)));
-                    notify('缓动改为' + EASE_LABEL[ease]);
+                    notify(tr('curve.notify.easeChanged', { ease: EASE_LABEL[ease] }));
                     closeMenu();
                     paint();
                 });
@@ -832,7 +850,7 @@ export function mount(el, ctx) {
             const del = document.createElement('button');
             del.type = 'button';
             del.className = 'is-danger';
-            del.textContent = '删除关键帧';
+            del.textContent = tr('curve.menu.deleteKey');
             del.addEventListener('click', () => {
                 // 右键的删除也走批量：点中的点若在选区里，就删整个选区
                 const same = (s) => s.layerId === hit.layerId && s.chId === hit.chId && s.index === hit.index && s.part === hit.part;
@@ -860,7 +878,7 @@ export function mount(el, ctx) {
             return list.reduce((acc, i) => removeKey(acc, i), trk);
         });
         setSel(null);
-        notify('已删除 ' + list.length + ' 颗关键帧');
+        notify(tr('curve.notify.keysDeleted', { n: list.length }));
     }
 
     /** 菜单项「回到共用」：删掉该通道的独立轨道。 */
@@ -868,8 +886,8 @@ export function mount(el, ctx) {
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'is-solo-back';
-        b.textContent = '⤴ 回到共用关键帧';
-        b.title = '删掉这条通道自己的轨道，重新跟随共用关键帧（数值会立刻变回共用求值）';
+        b.textContent = tr('curve.menu.backToShared');
+        b.title = tr('curve.menu.backToSharedHint');
         b.addEventListener('click', () => {
             closeMenu();
             backToShared(layerId, chId);
@@ -884,7 +902,7 @@ export function mount(el, ctx) {
         // 选择集里的索引属于刚被删掉的通道轨道，必须一起作废
         setSel(null);
         const ch = chById(chId);
-        notify((ch ? ch.label : chId) + ' 已回到共用关键帧');
+        notify(tr('curve.notify.backToShared', { name: ch ? ch.label : chId }));
         paint();
     }
 

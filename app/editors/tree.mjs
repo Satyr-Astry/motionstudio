@@ -1,16 +1,19 @@
-// 父子树面板（编辑器 id: tree）：只编辑 parentId（跟谁动），不表达叠放顺序。
+// 父子树面板（编辑器 id: tree）：编辑 parentId（跟谁动），行序按 drawOrder 展示。
 // 契约：docs/层级与叠放-2026-10.md §5 —— 拖拽三区（上缘 before / 中间 into / 下缘 after），
 // 全走 ctx.moveSubtree（一次 setDoc、一条撤销）；拖到空白 = 脱父并排到最底（rootEnd）。
-// 叠放顺序在 layers.mjs（扁平列表，改 drawOrder），两个面板各改一处数据，互不代偿。
+// 叠放顺序的真源是 doc.drawOrder：layers 面板直接拖它；这里的行序也按它排，所以三区拖拽
+// 会连带把子树块在 drawOrder 里一起搬（core/timegraph.moveSubtreeDoc），否则「拖了没反应」。
 
-import { treeOrder, isDescendantId } from './layers.mjs';
+import { treeOrder, isDescendant } from '../core/hierarchy.mjs';
 import { treeZone } from '../core/layer-order.mjs';
 import { objectsOf } from '../core/cel.mjs';
 import { icon } from '../core/icons.mjs';
 import { clickIntent, rangeBetween } from '../core/selection.mjs';
+import { skinOf } from '../core/skin.mjs';
+import { t } from '../i18n/index.mjs';
 
 const INDENT = 12;                       // 每级缩进（契约 §5：12px/级）
-const MAX_DEPTH = 64;                    // 与 layers.mjs 的 MAX_TREE_DEPTH 同值，防脏数据成环
+const MAX_DEPTH = 64;                    // 与 core/timegraph 的 MAX_DEPTH 同值，防脏数据成环
 const STORE_KEY = 'ms.tree.collapsed';   // 折叠态只影响面板显示，不进文档
 
 let collapsed = new Set();
@@ -31,6 +34,30 @@ function saveCollapsed() {
 let dragId = null;     // 正在拖的对象 id
 let dropWhere = null;   // 当前悬停的落点：before / into / after
 
+const objById = (doc, id) => (doc && Array.isArray(doc.objects) ? doc.objects.find((o) => o && o.id === id) || null : null);
+
+/**
+ * 父链硬约束：**带蒙皮的对象不许把骨骼当父级**。
+ *
+ * 为什么是这条规则：皮肤求值已经把骨骼的世界矩阵算进顶点偏移（skin.mjs 的
+ * `now · bind⁻¹`），父级再挂到骨骼上就是同一份变换算两遍 —— 画布上会看到皮肤按两倍
+ * 距离漂走，而且帧一变就抖。骨骼自己的父级可以是骨骼（骨链是正常结构），
+ * 非蒙皮对象挂到骨骼下面也没问题（纯层级跟随，没有第二份变换）。
+ *
+ * 为什么落在 tree.mjs：面板里改父只有一个入口 —— 行内拖拽（`drop` 处理里，三区落点全走
+ * `ctx.moveSubtree`）。原先还有一条「老接口降级」分支去调 `ctx.setParent`，但 ctx 上从来
+ * 没有这个方法（真正叫 `setLayerParent`），分支永远 return，是假的兜底；本批把它删了。
+ * 而 ctx-time.mjs 的 setLayerParent / moveSubtree 是别人刚清干净的地盘，不在本批范围。
+ * 判定放在 core 之外是刻意的：core 只认「结构与矩阵」，不认「谁被蒙皮了」这种编辑期约定。
+ */
+export function parentBlocked(doc, movedId, targetId) {
+    if (!doc || !movedId || !targetId || movedId === targetId) return false;
+    const target = objById(doc, targetId);
+    if (!target || target.kind !== 'bone') return false;
+    const moved = objById(doc, movedId);
+    return !!(moved && skinOf(moved));
+}
+
 export function mount(el, ctx) {
     const root = document.createElement('div');
     root.className = 'tree';
@@ -41,10 +68,9 @@ export function mount(el, ctx) {
 
     const empty = document.createElement('div');
     empty.className = 'tree-empty';
-    empty.textContent = '还没有对象';
+    empty.textContent = t('tree.empty');
     root.appendChild(empty);
 
-    const objects = () => objectsOf(ctx.doc());
     const activeId = () => (typeof ctx.activeLayerId === 'function' ? ctx.activeLayerId() : null);
     const notify = (msg) => { if (typeof ctx.notify === 'function') ctx.notify(msg); };
 
@@ -97,8 +123,9 @@ export function mount(el, ctx) {
 
     /** 行选择：单击独占、Shift/Ctrl 累加或移出、Shift+Alt 从锚点连选。 */
     function select(id, ev) {
-        const all = objectsOf(ctx.doc() || {});
-        const order = all.map((l) => l.id);
+        // 连选区间按**显示行序**算：rangeBetween 的约定就是「顺序即显示顺序」，
+        // 而这份显示序是 treeOrder（DFS + 同级按 drawOrder），不是 objects 数组序
+        const order = treeOrder(ctx.doc() || {}).map((r) => r.obj.id);
         const sels = selIds();
         const intent = clickIntent(ev, sels.includes(id));
         if (intent === 'ignore') return;
@@ -112,11 +139,6 @@ export function mount(el, ctx) {
         if (typeof ctx.setSelection === 'function') ctx.setSelection({ id });
         // 主键写在 setLayerSelection 之后，免得被它回退到集合首位
         if (typeof ctx.setActiveLayer === 'function') ctx.setActiveLayer(id);
-    }
-
-    function setParentOf(id, parentId) {
-        if (typeof ctx.setParent !== 'function') return;
-        if (!ctx.setParent(id, parentId)) notify('移动失败');
     }
 
     function makeRow(layer, depth, kidCount, byId) {
@@ -135,7 +157,7 @@ export function mount(el, ctx) {
             caret.className = 'tree-caret ms-icon-btn';
             const isCollapsed = collapsed.has(layer.id);
             caret.innerHTML = icon(isCollapsed ? 'chevron-right' : 'chevron-down');
-            caret.title = isCollapsed ? '展开这一支（Alt+点：连祖先一起合上）' : '收起这一支（Alt+点：连祖先一起合上）';
+            caret.title = isCollapsed ? t('tree.caret.expand') : t('tree.caret.collapse');
             caret.setAttribute('aria-label', caret.title);
             caret.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
             caret.addEventListener('click', (e) => {
@@ -172,13 +194,14 @@ export function mount(el, ctx) {
             const pill = document.createElement('span');
             pill.className = 'tree-kids';
             pill.textContent = String(kidCount);
-            pill.title = '含 ' + kidCount + ' 个子对象（拖动这一行会整棵子树一起移动）';
+            pill.title = t('tree.kids', { n: kidCount });
             pill.setAttribute('aria-label', pill.title);
             row.appendChild(pill);
         }
 
         const chain = chainText(layer, byId);
-        row.title = (layer.name || layer.id) + (chain ? ' · 父链 ' + chain : ' · 顶层');
+        const rowName = layer.name || layer.id;
+        row.title = chain ? t('tree.row.withChain', { name: rowName, chain }) : t('tree.row.top', { name: rowName });
 
         row.addEventListener('click', (e) => select(layer.id, e));
 
@@ -200,18 +223,25 @@ export function mount(el, ctx) {
         });
         row.addEventListener('dragover', (e) => {
             if (!dragId || dragId === layer.id) return;
-            const all = objects();
             // 任何落点都不能进自己的子树（before/after 也一样：整棵子树搬到自己里面没有意义）
-            if (isDescendantId(all, layer.id, dragId)) {
+            // core 的 isDescendant 对「自身」返回 false —— 上面已先返回，这里只管真后代
+            if (isDescendant(ctx.doc(), layer.id, dragId)) {
+                clearDropMarks();
+                row.classList.add('drop-invalid');
+                return;
+            }
+            const r = row.getBoundingClientRect();
+            const ratio = r.height > 0 ? (e.clientY - r.top) / r.height : 0.5;
+            const where = treeZone(ratio);
+            // 蒙皮对象落到骨骼上 = 非法落点：与「拖进自己子孙」同一套反馈
+            // （只标红、不 preventDefault，指针不动用户也能看出这一下放不进去）
+            if (where === 'into' && parentBlocked(ctx.doc(), dragId, layer.id)) {
                 clearDropMarks();
                 row.classList.add('drop-invalid');
                 return;
             }
             e.preventDefault();
             if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-            const r = row.getBoundingClientRect();
-            const ratio = r.height > 0 ? (e.clientY - r.top) / r.height : 0.5;
-            const where = treeZone(ratio);
             clearDropMarks();   // 先清（它会把 dropWhere 归零），再记本帧落点
             dropWhere = where;
             row.classList.add(where === 'into' ? 'is-drop' : (where === 'before' ? 'drop-before' : 'drop-after'));
@@ -234,15 +264,20 @@ export function mount(el, ctx) {
             if (!from || from === layer.id) return;
             // 父子关系一次只能改一个对象：多选块拖进树里只提示，绝不拿其中一行去改结构
             if (multi) {
-                notify('父子关系一次只能改一个对象');
+                notify(t('tree.moveOne'));
+                return;
+            }
+            // 蒙皮对象拖进骨骼下面：拦在写文档之前（parentBlocked 的规则见模块顶部注释）
+            if (where === 'into' && parentBlocked(ctx.doc(), from, layer.id)) {
+                notify(t('props.obj.skinErrParentBone'));
                 return;
             }
             if (typeof ctx.moveSubtree === 'function') {
-                if (ctx.moveSubtree(from, { mode: where, targetId: layer.id }) === false) notify('移动失败');
-            } else if (where === 'into') {
-                setParentOf(from, layer.id);   // 老接口降级：只有「成为子对象」这一种
+                if (ctx.moveSubtree(from, { mode: where, targetId: layer.id }) === false) notify(t('tree.moveFailed'));
             } else {
-                notify('这个版本不支持插入到行间');
+                // 没有 moveSubtree 就什么都做不了：以前这里降级到 ctx.setParent，但那个方法
+                // 在 ctx 上从来不存在（真正叫 setLayerParent），分支永远 return，是个假的兜底。
+                notify(t('tree.moveUnsupported'));
             }
             paint();
         });
@@ -250,7 +285,8 @@ export function mount(el, ctx) {
     }
 
     function paint() {
-        const all = objects();
+        const doc = ctx.doc();
+        const all = objectsOf(doc);
         const byId = new Map(all.map((o) => [o.id, o]));
         const kids = new Map();   // parentId → 子对象数
         for (const o of all) {
@@ -260,9 +296,10 @@ export function mount(el, ctx) {
 
         // 列表是整体重建的（与 layers.mjs 同策略）：对象量级在几十，重建比 diff 省事也少 bug
         const frag = document.createDocumentFragment();
-        const rows = treeOrder(all);
+        // 行序唯一来源：core/hierarchy.treeOrder —— 深度优先，同级按 drawOrder（叠放真源）
+        const rows = treeOrder(doc);
         let shown = 0;
-        for (const { layer, depth } of rows) {
+        for (const { obj: layer, depth } of rows) {
             if (hiddenByCollapse(layer, byId)) continue;
             frag.appendChild(makeRow(layer, depth, kids.get(layer.id) || 0, byId));
             shown++;
@@ -293,8 +330,8 @@ export function mount(el, ctx) {
         const from = dragId;
         dragId = null;
         if (!from) return;
+        // 同上：没有 moveSubtree 就静默不动（原先降级到一个永远 return 的假兜底）
         if (typeof ctx.moveSubtree === 'function') ctx.moveSubtree(from, { mode: 'rootEnd', targetId: null });
-        else setParentOf(from, null);
         paint();
     });
 

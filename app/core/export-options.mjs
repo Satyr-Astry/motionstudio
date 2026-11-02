@@ -32,8 +32,58 @@ export const TEXTURE_DEFAULT = 4096;
  */
 export const FORMATS = Object.freeze(['png', 'webp', 'jpeg']);
 
-/** 引擎帧表：自家格式 / Phaser 3 JSON Hash / 两者都要。 */
-export const ENGINES = Object.freeze(['own', 'phaser', 'both']);
+/**
+ * 引擎帧表：自家格式 / Phaser 3 JSON Hash / Aseprite frame-tags / 全都要。
+ *
+ * `both` 原本是「own + phaser」，加了 aseprite 之后它的含义是「三个都出」——
+ * 因为用户选 `both` 的动机就是「我不知道我的引擎吃哪个，都给我一份」。
+ */
+export const ENGINES = Object.freeze(['own', 'phaser', 'aseprite', 'both']);
+
+/**
+ * 导出预设：**只是初值，不是模式**。
+ *
+ * 点一个预设 = 把下表那几项写进当前选项；之后用户再改任何一项，预设不会
+ * 「把值改回去」（没有 observer、没有 locked 字段）。理由：用户改 scale 说明他
+ * 现在就想用这个数，工具不该拿「你选了 web 预设」去覆盖他。
+ *
+ * 四档的选择依据是「导出的东西要交给谁」：
+ * - `engine` 引擎里直接用：无损 PNG、不缩放、图集上限按常见桌面 GPU 取 4096。
+ * - `web`   网页/小游戏：WebP 省一半流量，上限 2048（移动端保险）。
+ * - `chat`  发出去看：单张别太大，PNG（聊天软件对 WebP 支持参差）。
+ * - `print` 拿去排版：2 倍分辨率、不裁边（裁了会对不齐）、上限放满 8192。
+ */
+export const PRESETS = Object.freeze({
+    engine: Object.freeze({ scale: 1, format: 'png', quality: 0.92, trim: true, maxTextureSize: 4096, engine: 'both' }),
+    web: Object.freeze({ scale: 1, format: 'webp', quality: 0.85, trim: true, maxTextureSize: 2048, engine: 'both' }),
+    chat: Object.freeze({ scale: 1, format: 'png', quality: 0.92, trim: true, maxTextureSize: 1024, engine: 'both' }),
+    print: Object.freeze({ scale: 2, format: 'png', quality: 1, trim: false, maxTextureSize: 8192, engine: 'own' }),
+});
+
+/** 预设 id 列表（顺序即界面上出现的顺序）。 */
+export const PRESET_IDS = Object.freeze(['engine', 'web', 'chat', 'print']);
+
+/**
+ * 取一个预设。未知 id 返回 null（界面据此不显示高亮，而不是猜一个）。
+ * @param {string} id
+ * @returns {object|null}
+ */
+export function presetOf(id) {
+    return Object.prototype.hasOwnProperty.call(PRESETS, id) ? PRESETS[id] : null;
+}
+
+/**
+ * 把预设叠到现有选项上，返回**新对象**（不改入参）。
+ *
+ * @param {object|null} opts 当前选项（通常来自 `normalizeExportOptions`）
+ * @param {string} id 预设 id
+ * @returns {object|null} 未知 id 返回 null
+ */
+export function applyPreset(opts, id) {
+    const p = presetOf(id);
+    if (!p) return null;
+    return Object.assign({}, opts && typeof opts === 'object' ? opts : {}, p);
+}
 
 /** 缺省选项。`dir` 为空串表示「用系统图片目录下的默认子目录」。 */
 export const EXPORT_DEFAULTS = Object.freeze({
