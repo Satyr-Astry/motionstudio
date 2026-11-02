@@ -405,6 +405,31 @@ function celImageForPaint(layerId, w, h) {
     return image;
 }
 
+/**
+ * 把「当前时刻这张纹理」整张换成给定的图（一次 setDoc、一步撤销）。
+ *
+ * 用途：导入位图是 `ImageBitmap`（没有 `getContext`），画板上不能直接往上画。
+ * 需要落笔时先在离屏画布上改好，再用这里写回关键帧上的 drawing ——
+ * 与 `celImageForPaint` 的克隆体写回同一条路径（`setImageAt`），
+ * 所以纹理库、渲染侧、存档三者看到的都是真源。
+ *
+ * @param {string} [layerId] 目标对象；不给就用当前活动对象
+ * @param {*} image 画布或位图
+ * @returns {boolean} 是否真的写入了
+ */
+function setCelImage(layerId, image) {
+    const doc = state.doc;
+    const id = celTargetId(layerId);
+    if (!doc || !id || !image) return false;
+    const obj = objectById(doc, id);
+    if (!obj) return false;
+    const t = state.time;
+    const res = ensureCelAt(obj, t, { inherit: true });
+    const at = res.cel && Number.isFinite(res.cel.at) ? res.cel.at : celTimeArg(t);
+    setDoc((d) => replaceObject(d, id, setImageAt(res.obj, at, image)), { label: t('shell.cel.replaceImage') });
+    return true;
+}
+
 /** 把纹理从 fromT 挪到 toT（目标时间已有纹理则覆盖）。 */
 function moveCel(objId, fromT, toT) {
     const doc = state.doc;
@@ -1021,6 +1046,7 @@ function buildCtx() {
     clampTime,
     /** 引擎落笔用：保证当前时间有可写纹理（旧的 (帧下标, layerId, w, h) 签名已废） */
     ensureCelImage: celImageForPaint,
+    setCelImage,
 
     exportFrames,
     exportSpritesheet,
@@ -1771,6 +1797,7 @@ function expose() {
         goPrevCel,
         goNextCel,
         ensureCelImage: celImageForPaint,
+        setCelImage,
         exportFrames,
         exportSpritesheet,
         exportVideo: (opts) => projectApi.exportVideo(opts),

@@ -44,6 +44,7 @@ import {
 import { captureRegion, makeRegionCommand } from '../paint/patch.mjs';
 import { MAX_LEVEL, clampLevel, createStabilizer } from '../paint/stabilizer.mjs';
 import { floodFillRegion } from '../paint/fill.mjs';
+import { createSurface } from '../paint/surface.mjs';
 import { icon } from '../core/icons.mjs';
 import { imageAt, objectById, objectsOf } from '../core/doc-model.mjs';
 import { t } from '../i18n/index.mjs';
@@ -1139,6 +1140,64 @@ export function mount(el, ctx) {
      * @param {PointerEvent} e
      * @returns {boolean} 是否真的填了（false 时一定没产生撤销命令）
      */
+    /**
+     * 在导入位图上填充：**不能原地改**（ImageBitmap 没有 getContext，而且同一张图可能被
+     * 多个关键帧共享）。所以复制到离屏画布上填，再写回当前时刻的纹理 ——
+     * 写回走 `ctx.setCelImage`，与画板其它写路径一样是「一次 setDoc、一步撤销」。
+     *
+     * 只有在 ctx 没提供 setCelImage（老外壳）时才退回原来的「不支持」提示。
+     */
+    function fillImportedBitmap(e) {
+        const obj = targetObject();
+        const src = obj ? imageAt(obj, timeNow()) : null;
+        if (!src || !(src.width > 0) || !(src.height > 0)) {
+            notify(t('board.empty.noTexture'));
+            return false;
+        }
+        if (typeof c.setCelImage !== 'function') {
+            notify(t('board.bucket.imported'));
+            return false;
+        }
+        const W = Math.floor(src.width);
+        const H = Math.floor(src.height);
+        const cv = createSurface(W, H);
+        const g = cv && typeof cv.getContext === 'function'
+            ? cv.getContext('2d', { willReadFrequently: true })
+            : null;
+        if (!g) {
+            notify(t('board.bucket.unreadable'));
+            return false;
+        }
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.clearRect(0, 0, W, H);
+        g.drawImage(src, 0, 0);
+        const p = toTexture(e);
+        const x = Math.floor(p.x);
+        const y = Math.floor(p.y);
+        let frame;
+        try {
+            frame = g.getImageData(0, 0, W, H);
+        } catch (err) {
+            notify(t('board.bucket.unreadable'));
+            return false;
+        }
+        const res = floodFillRegion(frame.data, W, H, x, y, color);
+        if (!res.changed) {
+            if (x < 0 || y < 0 || x >= W || y >= H) notify(t('board.bucket.outside'));
+            else notify(t('board.bucket.filled'));
+            return false;
+        }
+        g.putImageData(frame, 0, 0);
+        if (!c.setCelImage(obj.id, cv)) {
+            notify(t('board.bucket.unreadable'));
+            return false;
+        }
+        draw();
+        if (typeof c.requestRender === 'function') c.requestRender();
+        notify(t('board.bucket.done', { n: res.painted }));
+        return true;
+    }
+
     function fillAt(e) {
         const { kind, img } = textureForFill();
         if (kind === 'none') {
@@ -1146,9 +1205,10 @@ export function mount(el, ctx) {
             return false;
         }
         if (kind === 'bitmap') {
-            // 导入位图是 ImageBitmap，没有 getContext —— 不许偷偷画到临时画布上再丢回去
-            notify(t('board.bucket.imported'));
-            return false;
+            // 导入位图是 ImageBitmap（无 getContext），不能原地改；也不能就地替换那张共享位图
+            // （同一张图可能被多个关键帧共享）。做法：画到离屏画布 → 在画布上填充 →
+            // 用 ctx.setCelImage 写回当前关键帧的 drawing（一次 setDoc、一步撤销）。
+            return fillImportedBitmap(e);
         }
         const g = img.getContext('2d', { willReadFrequently: true });
         if (!g) return false;
