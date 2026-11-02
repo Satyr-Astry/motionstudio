@@ -643,3 +643,135 @@ test('libraryTotals：count 只数记录，bytes 求和且坏数据按 0', () =>
     const rows = [{ bytes: 10 }, { bytes: '20' }, { bytes: -5 }, { bytes: 'x' }, null, 5, 'bad'];
     assert.deepEqual(store.libraryTotals(rows), { count: 4, bytes: 30 }, '非对象行不进 count，坏 bytes 按 0');
 });
+
+/* ───────────── P2 收尾：版本历史快照（alpha.47，node 走内存兜底） ───────────── */
+
+test('版本历史：push / list / get / delete 全链路，列表只给轻量 meta', async () => {
+    store.__resetVersions();
+    const { doc } = richDoc();
+    const rec = store.makeRecord({ id: 'ver-proj-1', name: '甲', doc });
+    rec.savedAt = 111; // 保存动作写进记录的时间（makeRecord 自己取 now，这里固定下来断言透传）
+    const meta = await store.pushVersion(rec, { at: 1000 });
+    assert.ok(meta, 'pushVersion 必须返回轻量 meta');
+    assert.match(meta.id, /^ver-/, '快照 id 必须有自己的前缀');
+    assert.equal(meta.projectId, 'ver-proj-1');
+    assert.equal(meta.name, '甲');
+    assert.equal(meta.savedAt, 111, 'savedAt 是这次保存写进项目的时间');
+    assert.equal(meta.at, 1000, 'at 是这条历史留下的时刻（测试注入）');
+    assert.ok(meta.bytes > 0);
+    assert.equal(Object.prototype.hasOwnProperty.call(meta, 'project'), false, '列表视图不带 project（几十兆位图）');
+
+    const list = await store.listVersions('ver-proj-1');
+    assert.deepEqual(list, [meta], '列表就是轻量 meta，内容一字不差');
+
+    const full = await store.getVersion(meta.id);
+    assert.ok(full && full.project, 'getVersion 要给完整快照');
+    assert.equal(full.project.doc.width, 40);
+    assert.equal(full.project.doc.elements.length, 1);
+
+    assert.equal(await store.deleteVersion(meta.id), true, '删掉存在的快照返回 true');
+    assert.equal(await store.getVersion(meta.id), null);
+    assert.deepEqual(await store.listVersions('ver-proj-1'), []);
+    assert.equal(await store.deleteVersion(meta.id), false, '本来就不存在返回 false');
+
+    // 空 id / 不存在的项目：空结果，不抛
+    assert.deepEqual(await store.listVersions(''), []);
+    assert.deepEqual(await store.listVersions(null), []);
+    assert.equal(await store.getVersion(''), null);
+    assert.equal(await store.deleteVersion(''), false);
+});
+
+test('版本历史：同内容去重（savedAt 不同也不能刷新一条），内容变了才新建', async () => {
+    store.__resetVersions();
+    const { doc } = richDoc();
+    const first = store.makeRecord({ id: 'ver-proj-2', name: '甲', doc });
+    const meta1 = await store.pushVersion(first, { at: 1000 });
+    assert.ok(meta1);
+
+    // 同一份内容再保存一次：savedAt 必然不同，但指纹只算内容 ⇒ 不入库
+    const second = store.makeRecord({ id: 'ver-proj-2', name: '甲', doc });
+    assert.equal(await store.pushVersion(second, { at: 2000 }), null, '内容没变不该刷出第二条历史');
+    assert.equal((await store.listVersions('ver-proj-2')).length, 1);
+
+    // 内容变了（画布宽度不同）⇒ 新建一条
+    const changed = Object.assign({}, doc, { width: 50 });
+    const meta2 = await store.pushVersion(store.makeRecord({ id: 'ver-proj-2', name: '甲', doc: changed }), { at: 3000 });
+    assert.ok(meta2);
+    assert.notEqual(meta2.sig, meta1.sig, '内容变了指纹就要变');
+    const list = await store.listVersions('ver-proj-2');
+    assert.equal(list.length, 2);
+    assert.deepEqual(list.map((row) => row.at), [3000, 1000], '按 at 倒序');
+});
+
+test('版本历史：最多留 MAX_VERSIONS 条，按 at 淘汰最旧的', async () => {
+    store.__resetVersions();
+    assert.equal(store.MAX_VERSIONS, 10);
+    assert.equal(store.VERSIONS_STORE, 'versions');
+    const { doc } = richDoc();
+    const metas = [];
+    for (let i = 0; i < 12; i += 1) {
+        // 每次换名字（名字进指纹），保证 12 条都是「内容不同」的历史
+        // eslint-disable-next-line no-await-in-loop
+        const meta = await store.pushVersion(
+            store.makeRecord({ id: 'ver-proj-3', name: 'v' + i, doc: Object.assign({}, doc, { width: 40 + i }) }),
+            { at: 1000 + i }
+        );
+        metas.push(meta);
+    }
+    assert.equal(metas.length, 12);
+    assert.equal(metas[0].at, 1000);
+    const list = await store.listVersions('ver-proj-3');
+    assert.equal(list.length, store.MAX_VERSIONS, '只留最近 10 条');
+    assert.deepEqual(
+        list.map((row) => row.at),
+        [1011, 1010, 1009, 1008, 1007, 1006, 1005, 1004, 1003, 1002],
+        '留的是最近 10 条：最旧的两条（1000 / 1001）已被删掉'
+    );
+    assert.equal(await store.getVersion(metas[0].id), null, '被 prune 的快照真的从库里没了');
+    assert.ok(await store.getVersion(metas[11].id), '最新的那条还在');
+});
+
+test('版本历史：坏记录返回 null 不抛，list / get / delete 对脏输入收敛', async () => {
+    store.__resetVersions();
+    // 没有 id / 没有 project / project 不是对象：一律 null，绝不抛
+    assert.equal(await store.pushVersion(null), null);
+    assert.equal(await store.pushVersion(undefined), null);
+    assert.equal(await store.pushVersion({}), null);
+    assert.equal(await store.pushVersion({ id: '' }), null);
+    assert.equal(await store.pushVersion({ id: 'x' }), null);
+    assert.equal(await store.pushVersion({ id: 'x', project: null }), null);
+    assert.equal(await store.pushVersion({ id: 'x', project: 'oops' }), null);
+    assert.equal(await store.pushVersion({ id: 'x', project: [] }), null);
+    // 有 id/project 但 savedAt / name 缺失：用兜底值，不抛
+    const ok = await store.pushVersion({ id: 'ver-proj-4', project: { format: store.FORMAT, version: 4, doc: {} } }, { at: 5 });
+    assert.ok(ok);
+    assert.equal(ok.name, '');
+    assert.equal(ok.savedAt, 5, 'savedAt 缺省退回 at');
+    // 排序：即使 at 相同也给出确定顺序（按 id 倒序），list 不会时新时旧
+    const again = await store.pushVersion({ id: 'ver-proj-4', name: 'b', project: { format: store.FORMAT, version: 4, doc: { width: 2 } } }, { at: 5 });
+    assert.ok(again);
+    const same = await store.listVersions('ver-proj-4');
+    assert.equal(same.length, 2);
+    assert.ok(
+        String(same[0].id).localeCompare(String(same[1].id)) >= 0,
+        '同一时刻按 id 倒序，结果确定（不依赖引擎 sort 的稳定性）'
+    );
+});
+
+test('删项目时把它的历史快照一起删掉（不留永远清不掉的孤儿行）', async () => {
+    store.__resetMemory();
+    store.__resetVersions();
+    const { doc } = richDoc();
+    const rec = store.makeRecord({ id: 'del-1', name: '甲', doc });
+    await store.putProject(rec);
+    await store.pushVersion(rec, { at: 1 });
+    await store.pushVersion(
+        store.makeRecord({ id: 'del-1', name: '乙', doc: Object.assign({}, doc, { width: 41 }) }),
+        { at: 2 }
+    );
+    assert.equal((await store.listVersions('del-1')).length, 2, '先确认库里真有两条历史');
+
+    assert.equal(await store.deleteProject('del-1'), true);
+    assert.equal(await store.getProject('del-1'), null);
+    assert.deepEqual(await store.listVersions('del-1'), [], '项目都没了，快照不能继续占空间');
+});

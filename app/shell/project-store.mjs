@@ -75,8 +75,19 @@ const DEFAULT_ANCHOR = { x: 0.5, y: 0.5 };
 
 /** IndexedDB 的名字与对象仓库。 */
 const DB_NAME = 'motionstudio';
-const DB_VERSION = 1;
+/**
+ * 库结构版本（alpha.47：1 → 2 加 `versions` 快照仓库）。
+ *
+ * 升版必须**幂等**：老库从 1 升上来、新库直接按 2 建、以及重复触发 `onupgradeneeded`
+ * 三种情况都要能过 —— 判断「仓库/索引在不在」再建，绝不再 `createObjectStore` 一个
+ * 已经存在的名字（那会抛 `ConstraintError`，整个库打不开，用户看到的是空库 + 数据全丢）。
+ */
+const DB_VERSION = 2;
 const STORE = 'projects';
+/** 版本历史快照仓库（keyPath `id`，索引 `projectId` 非唯一）。 */
+export const VERSIONS_STORE = 'versions';
+/** 每个项目最多留多少条快照：多了按 `at` 删最旧的。 */
+export const MAX_VERSIONS = 10;
 
 /** localStorage 里记住「当前项目 id」的键（库本身不放这里）。 */
 const LS_CURRENT = 'klm-project';
@@ -97,6 +108,9 @@ let dbPromise = null;
 
 /** IndexedDB 不可用时的兜底仓库（Node 单测、非 Chromium 环境）。 */
 const memory = new Map();
+
+/** 版本历史的内存兜底（Node 里没有 indexedDB；键是快照 id，值是整条快照）。 */
+const versionMemory = new Map();
 
 /**
  * 测试注入点：Node 里没有 document / OffscreenCanvas，纯函数单测需要替身。
@@ -1238,6 +1252,14 @@ function idbAvailable() {
     }
 }
 
+/**
+ * 打开库并保证结构就位。
+ *
+ * `onupgradeneeded` 里对两个仓库都做「不存在才建」：
+ * - `projects` 是 v1 就有的，老库升上来时已经存在，**绝不能**再建一次；
+ * - `versions` 是 v2 新增；索引 `projectId` 也一样先查 `indexNames`（重复创建索引会抛）。
+ * 于是同一段升级代码对「v1 老库 / 新库直建 / 重复触发升级」三种情形都成立。
+ */
 function openDb() {
     if (!idbAvailable()) return Promise.resolve(null);
     if (dbPromise) return dbPromise;
@@ -1253,15 +1275,46 @@ function openDb() {
             try {
                 const db = req.result;
                 if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
+                if (!db.objectStoreNames.contains(VERSIONS_STORE)) {
+                    db.createObjectStore(VERSIONS_STORE, { keyPath: 'id' });
+                }
+                const versions = req.transaction.objectStore(VERSIONS_STORE);
+                if (!versions.indexNames.contains('projectId')) {
+                    versions.createIndex('projectId', 'projectId', { unique: false });
+                }
             } catch (err) {
-                /* 升库失败就当没有库 */
+                /* 升库失败就当没有库：内存兜底仍然能跑，不会因此白屏 */
             }
         };
-        req.onsuccess = () => resolve(req.result || null);
+        req.onsuccess = () => {
+            const db = req.result || null;
+            // 老窗口要把连接让出来：不然另一个还开着旧版本的窗口会让这次升级卡在
+            // onblocked 上，新窗口落回内存兜底 = 用户看到空库。升级完成后旧连接作废，
+            // 那个窗口的后续读会落到内存（这次的改动本来也只属于新窗口）。
+            if (db) {
+                db.onversionchange = () => {
+                    try {
+                        db.close();
+                    } catch (err) {
+                        /* 已经关了 */
+                    }
+                };
+            }
+            resolve(db);
+        };
         req.onerror = () => resolve(null);
         req.onblocked = () => resolve(null);
     });
     return dbPromise;
+}
+
+/** 跑一个 readwrite 事务并等它真的落盘（与 putProject 同一套判据）。 */
+function transactionDone(tx) {
+    return new Promise((resolve) => {
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+        tx.onabort = () => resolve(false);
+    });
 }
 
 function ask(request) {
@@ -1493,20 +1546,282 @@ export async function deleteProject(id) {
     if (!id) return false;
     memory.delete(id);
     const db = await openDb();
-    if (!db) return true;
-    try {
-        const tx = db.transaction(STORE, 'readwrite');
-        tx.objectStore(STORE).delete(id);
-        await new Promise((resolve) => {
-            tx.oncomplete = () => resolve(true);
-            tx.onerror = () => resolve(false);
-            tx.onabort = () => resolve(false);
-        });
-    } catch (err) {
-        return false;
+    if (db) {
+        try {
+            const tx = db.transaction(STORE, 'readwrite');
+            tx.objectStore(STORE).delete(id);
+            await new Promise((resolve) => {
+                tx.oncomplete = () => resolve(true);
+                tx.onerror = () => resolve(false);
+                tx.onabort = () => resolve(false);
+            });
+        } catch (err) {
+            return false;
+        }
     }
     if (currentProjectId() === id) setCurrentProjectId('');
+    // 项目没了，它的历史快照也不该继续占着库：不删就是永远清不掉的孤儿行
+    // （每个项目最多 10 条，几十个项目就是几百份完整的位图 JSON）。
+    // 失败不影响删除本身：项目已经删了，孤儿快照只是占空间，不是数据错误。
+    try {
+        for (const meta of await listVersions(id)) {
+            await deleteVersion(meta.id);
+        }
+    } catch (err) {
+        console.error('[store] failed to drop version snapshots of a deleted project:', err);
+    }
     return true;
+}
+
+/* ─────────────────────────── 版本历史快照（alpha.47） ─────────────────────────── */
+
+/**
+ * 快照去重与内容指纹：FNV-1a 32 位。
+ *
+ * 为什么存指纹而不是每次都比整份 project：自动保存可能每几秒触发一次，逐条深比
+ * 几十兆的 dataURL 是纯浪费；比较一个 8 位十六进制串就够。FNV-1a 是逐字符乘加，
+ * 无依赖、结果确定 —— 同一份内容在任何运行环境都得到同一个指纹。
+ */
+function fnv1a(text) {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i += 1) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+    return hash.toString(16).padStart(8, '0');
+}
+
+let versionSeq = 0;
+
+/** 快照 id：`ver-<时间36进制>-<序号>`，同毫秒内多次 push 也不会撞。 */
+function newVersionId() {
+    versionSeq += 1;
+    return 'ver-' + Date.now().toString(36) + '-' + versionSeq.toString(36);
+}
+
+/** 轻量视图（列表只读它；`project` 是几十兆位图，不进列表）。 */
+function versionMeta(row) {
+    if (!row || typeof row !== 'object') return null;
+    return {
+        id: row.id,
+        projectId: row.projectId,
+        name: row.name,
+        savedAt: row.savedAt,
+        at: row.at,
+        bytes: row.bytes,
+        sig: row.sig,
+    };
+}
+
+/** 快照按时间倒序（新的在前）；同一毫秒按 id 倒序，保证 prune 的「最近 10 条」确定。 */
+function byVersionAtDesc(a, b) {
+    const d = numOf(b && b.at) - numOf(a && a.at);
+    if (d !== 0) return d;
+    return String(b && b.id).localeCompare(String(a && a.id));
+}
+
+/**
+ * 某个项目的全部快照（完整行，含 project）。内存兜底与 IndexedDB 取并集：
+ * 写库失败时 `putVersionRow` 会把行留在内存里，读的时候不能把它当成不存在。
+ */
+async function allVersionRows(projectId) {
+    const pid = String(projectId == null ? '' : projectId);
+    if (!pid) return [];
+    const rows = new Map();
+    for (const row of versionMemory.values()) {
+        if (row && row.projectId === pid) rows.set(row.id, row);
+    }
+    const db = await openDb();
+    if (db) {
+        try {
+            const objectStore = db.transaction(VERSIONS_STORE, 'readonly').objectStore(VERSIONS_STORE);
+            // 索引缺失（极端情况：库被外部降级过）时退回全表读，不让列表直接空掉
+            const source = objectStore.indexNames && objectStore.indexNames.contains('projectId')
+                ? objectStore.index('projectId')
+                : objectStore;
+            const list = source.getAll(pid) || null;
+            const got = (await ask(list)) || [];
+            for (const row of got) {
+                if (row && row.projectId === pid && !rows.has(row.id)) rows.set(row.id, row);
+            }
+        } catch (err) {
+            /* 读不出来就只给内存里的那几条 */
+        }
+    }
+    return Array.from(rows.values());
+}
+
+/** 写一条快照：先 IndexedDB，写不成落内存（与 putProject 同一套降级路径）。 */
+async function putVersionRow(row) {
+    const db = await openDb();
+    if (db) {
+        try {
+            const tx = db.transaction(VERSIONS_STORE, 'readwrite');
+            tx.objectStore(VERSIONS_STORE).put(row);
+            if (await transactionDone(tx)) return true;
+        } catch (err) {
+            /* 落回内存 */
+        }
+    }
+    versionMemory.set(row.id, row);
+    return true;
+}
+
+/**
+ * 给一个项目留一条版本快照（保存 / 自动保存成功后调用）。
+ *
+ * 快照 = `{id, projectId, name, savedAt, at, bytes, sig, project}`：
+ * - `savedAt` 是这次保存写进项目文件的时间（顶栏「上次保存」的口径）；
+ * - `at` 是「这条历史是什么时候留下的」（列表排序 / prune 的口径）；
+ * - `sig` 是**内容**指纹：`savedAt` 这类「保存动作的时间」要先抹掉再算，
+ *   否则每保存一次指纹都不同，去重永远不会命中（等于每拍刷一条快照）。
+ *   抹掉 savedAt 之后指纹只随「名字 + 文档内容」变，同一份内容重复保存不入库。
+ *
+ * 返回值是轻量 meta（不含 project）。坏记录（没有 id / project）与「内容没变」
+ * 都返回 null，**绝不抛**：这是保存之后的附属动作，历史没存上不能把保存判失败。
+ *
+ * @param {{id:string,name?:string,savedAt?:number,project:object}} rec 完整库记录（不是 stripRecord）
+ * @param {{at?:number}} [opts] 测试注入快照时刻；不给就取当前时间
+ * @returns {Promise<object|null>}
+ */
+export async function pushVersion(rec, opts) {
+    try {
+        if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return null;
+        const projectId = String(rec.id == null ? '' : rec.id);
+        if (!projectId) return null;
+        // 只做两次序列化：raw 同时给出「可入库的深拷贝」与真实体积（与 makeRecord 同口径），
+        // 再一次把 savedAt 归零后算指纹。存档可能有几十兆 dataURL，少一次 stringify 就少一次卡顿。
+        let raw = '';
+        let project = null;
+        try {
+            raw = JSON.stringify(rec.project);
+            project = raw ? JSON.parse(raw) : null;
+        } catch (err) {
+            return null;
+        }
+        if (!project || typeof project !== 'object' || Array.isArray(project)) return null;
+
+        const o = opts || {};
+        const stamp = Number(o.at);
+        const at = Number.isFinite(stamp) && stamp > 0 ? Math.round(stamp) : Date.now();
+        const savedRaw = Number(rec.savedAt);
+        const savedAt = Number.isFinite(savedRaw) && savedRaw > 0 ? savedRaw : at;
+
+        // 指纹只算内容：`savedAt` 是动作时间，不是内容（不归零的话去重永远命中不了）
+        let sigSource = '';
+        const hadSavedAt = Object.prototype.hasOwnProperty.call(project, 'savedAt');
+        const savedValue = project.savedAt;
+        try {
+            project.savedAt = 0;
+            sigSource = JSON.stringify(project);
+        } catch (err) {
+            return null;
+        } finally {
+            if (hadSavedAt) project.savedAt = savedValue;
+            else delete project.savedAt;
+        }
+        const sig = fnv1a(sigSource);
+
+        const rows = (await allVersionRows(projectId)).slice().sort(byVersionAtDesc);
+        // 与最新一条内容相同 ⇒ 不重复入库（自动保存 / 连按两次 Ctrl+S 不该刷屏）
+        if (rows.length && rows[0] && rows[0].sig === sig) return null;
+
+        const row = {
+            id: newVersionId(),
+            projectId: projectId,
+            name: String(rec.name == null ? '' : rec.name),
+            savedAt: savedAt,
+            at: at,
+            bytes: raw.length,
+            sig: sig,
+            project: project,
+        };
+        await putVersionRow(row);
+        await pruneVersions(projectId);
+        return versionMeta(row);
+    } catch (err) {
+        return null;
+    }
+}
+
+/**
+ * 按 `at` 只留最近 `MAX_VERSIONS` 条，更旧的一律删掉。
+ * 删除失败只影响空间，不影响正确性：下次 push 会再试一次。
+ */
+async function pruneVersions(projectId) {
+    const rows = (await allVersionRows(projectId)).slice().sort(byVersionAtDesc);
+    const extra = rows.slice(MAX_VERSIONS);
+    for (const row of extra) {
+        // eslint-disable-next-line no-await-in-loop
+        await deleteVersion(row && row.id);
+    }
+}
+
+/**
+ * 某个项目的快照列表（轻量 meta，按 `at` 倒序，最多 MAX_VERSIONS 条）。
+ * 不返回 project：列表/选择框只需要时间与体积，把几十兆位图读进内存没有意义。
+ * @param {string} projectId
+ * @returns {Promise<object[]>}
+ */
+export async function listVersions(projectId) {
+    try {
+        const rows = await allVersionRows(projectId);
+        return rows
+            .filter((row) => row && row.id)
+            .sort(byVersionAtDesc)
+            .slice(0, MAX_VERSIONS)
+            .map(versionMeta);
+    } catch (err) {
+        return [];
+    }
+}
+
+/** 取一条完整快照（含 project）；不存在 / id 为空返回 null。 */
+export async function getVersion(vid) {
+    const id = String(vid == null ? '' : vid);
+    if (!id) return null;
+    const db = await openDb();
+    if (db) {
+        try {
+            const row = await ask(db.transaction(VERSIONS_STORE, 'readonly').objectStore(VERSIONS_STORE).get(id));
+            if (row) return row;
+        } catch (err) {
+            /* 落回内存 */
+        }
+    }
+    return versionMemory.get(id) || null;
+}
+
+/**
+ * 删除一条快照。
+ *
+ * 先读后删（两个事务）：只有「删掉了一条真的存在的快照」才返回 true ——
+ * prune 与测试都靠这个布尔分辨「删掉了」和「本来就没有」，不能一律回 true。
+ * @returns {Promise<boolean>}
+ */
+export async function deleteVersion(vid) {
+    const id = String(vid == null ? '' : vid);
+    if (!id) return false;
+    let existed = versionMemory.delete(id);
+    const db = await openDb();
+    if (db) {
+        try {
+            const found = await ask(db.transaction(VERSIONS_STORE, 'readonly').objectStore(VERSIONS_STORE).get(id));
+            if (found) existed = true;
+            const tx = db.transaction(VERSIONS_STORE, 'readwrite');
+            tx.objectStore(VERSIONS_STORE).delete(id);
+            await transactionDone(tx);
+        } catch (err) {
+            /* 删不掉也不影响读：内存那份已经清了 */
+        }
+    }
+    return existed;
+}
+
+/** 本模块仅供测试重置版本历史的内存兜底（IndexedDB 环境不归它管）。 */
+export function __resetVersions() {
+    versionMemory.clear();
+    versionSeq = 0;
 }
 
 /* ─────────────────────────── 当前项目 ─────────────────────────── */

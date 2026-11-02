@@ -343,6 +343,21 @@ export default {
         'shell.bindConflict.moved': 'Wrote {file}; the file binding is now on this project (was: {name})',
         'shell.bind.takenOnLoad': 'Loaded {name} · took over the file binding for {file} from {other}',
         'shell.bind.takenOnImport': 'Imported {name} · took over the file binding for {file} from {other}',
+
+        // ── project-io.mjs：P2 收尾 · 版本历史（快照 10 条 + 恢复可逆） ────────
+        'shell.history.title': 'Version history',
+        'shell.history.detail': 'Pick a version to restore. The current state is saved as a new version first, so restoring can be undone.',
+        'shell.history.item': '{time} · {size}',
+        'shell.history.empty': 'No version history yet — every save keeps a snapshot.',
+        'shell.history.confirmTitle': 'Restore this version?',
+        'shell.history.confirmDetail': 'The current state will be saved as a version first, so this can be undone. ({time})',
+        'shell.history.confirm': 'Restore',
+        'shell.history.projectMissing': 'The project no longer exists, so nothing can be restored (it may have been deleted)',
+        'shell.history.versionMissing': 'That version no longer exists, so nothing was restored (it may have been cleaned up)',
+        'shell.history.corrupt': 'That version is damaged, so nothing was restored (the current document is untouched)',
+        'shell.history.failed': 'Restore failed: {msg}; the current document was not modified',
+        'shell.history.restoredCurrent': 'Restored {name} to the version from {time} (the previous state was saved to history)',
+        'shell.history.restoredOther': 'Restored {name} to the version from {time} (open it to see the content; the current document is untouched)',
     },
     'zh-Hans': {
         'shell.ipc.save.noBridge': '这个环境没有保存通道（浏览器里没有桌面壳），文件没存下来',
@@ -664,5 +679,20 @@ export default {
         'shell.bindConflict.moved': '已写出 {file}；文件绑定已转到当前项目（原绑定：「{name}」）',
         'shell.bind.takenOnLoad': '已载入 {name} · 文件绑定 {file} 已从「{other}」转过来',
         'shell.bind.takenOnImport': '已导入 {name} · 文件绑定 {file} 已从「{other}」转过来',
+
+        // 版本历史（与 en 同键同序）
+        'shell.history.title': '版本历史',
+        'shell.history.detail': '选一个版本恢复：恢复前会先把当前状态存成一条历史，所以恢复本身可以撤回。',
+        'shell.history.item': '保存于 {time} · {size}',
+        'shell.history.empty': '还没有历史版本 —— 每次保存都会自动留一条快照。',
+        'shell.history.confirmTitle': '恢复到这个版本？',
+        'shell.history.confirmDetail': '当前状态会先存为一条历史，所以这次恢复可以撤回。（{time}）',
+        'shell.history.confirm': '恢复',
+        'shell.history.projectMissing': '项目不存在，无法恢复（可能已被删除）',
+        'shell.history.versionMissing': '这个历史版本不存在（可能已被清理）',
+        'shell.history.corrupt': '这个历史版本内容损坏，没有恢复（当前文档未改动）',
+        'shell.history.failed': '恢复失败：{msg}；当前文档没有被改动',
+        'shell.history.restoredCurrent': '已把「{name}」恢复到 {time} 的版本（恢复前的状态也已存为历史）',
+        'shell.history.restoredOther': '已恢复「{name}」到 {time} 的版本（打开该项目即可看到内容；当前文档未改动）',
     },
 };

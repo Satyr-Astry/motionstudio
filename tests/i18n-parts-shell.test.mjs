@@ -187,6 +187,47 @@ test('未命名项目 / 自动保存这类落盘文案只换取值来源，键�
     assert.doesNotMatch(src, /t\('__draft/, '草稿标记被弄进词典了');
 });
 
+test('P2 收尾：版本历史词条两表都在，且「可撤回」这层意思不许丢', () => {
+    const keys = [
+        'shell.history.title',
+        'shell.history.detail',
+        'shell.history.item',
+        'shell.history.empty',
+        'shell.history.confirmTitle',
+        'shell.history.confirmDetail',
+        'shell.history.confirm',
+        'shell.history.projectMissing',
+        'shell.history.versionMissing',
+        'shell.history.corrupt',
+        'shell.history.failed',
+        'shell.history.restoredCurrent',
+        'shell.history.restoredOther',
+    ];
+    for (const key of keys) {
+        assert.ok(Object.hasOwn(enTable, key), key + ' 缺 en 词条');
+        assert.ok(Object.hasOwn(zhTable, key), key + ' 缺 zh 词条');
+    }
+
+    // 列表项要同时给「时间」与「体积」：只给时间看不出恢复的是哪一版
+    assert.match(t('shell.history.item', { time: '10:00', size: '2 KB' }), /10:00/);
+    assert.match(t('shell.history.item', { time: '10:00', size: '2 KB' }), /2 KB/);
+    // 恢复可逆这件事必须写在用户点的两次确认里（不是藏在文档里）
+    assert.match(t('shell.history.confirmDetail', { time: '10:00' }), /undone|saved as a version/i);
+    setLocale('zh-Hans');
+    try {
+        assert.match(t('shell.history.confirmDetail', { time: '10:00' }), /撤回/);
+        assert.match(t('shell.history.confirmDetail', { time: '10:00' }), /历史/);
+        assert.match(t('shell.history.empty'), /历史/);
+        // 恢复成功要说明「恢复前那一版也存了」，否则用户不敢点
+        assert.match(t('shell.history.restoredCurrent', { name: '甲', time: '10:00' }), /历史/);
+        assert.match(t('shell.history.restoredCurrent', { name: '甲', time: '10:00' }), /甲/);
+        // 恢复「不是当前打开的项目」时不能让人以为眼前这份文档被换了
+        assert.match(t('shell.history.restoredOther', { name: '甲', time: '10:00' }), /当前文档未改动/);
+    } finally {
+        setLocale(DEFAULT_LOCALE);
+    }
+});
+
 test('t() 现取：切语言后外壳文案跟着换，切回英文也回得去', () => {
     setLocale('zh-Hans');
     try {

@@ -3,7 +3,9 @@
  *
  * 本地项目库的 UI，纯 DOM，不嵌 iframe：左侧列表以卡片形式展示已保存的项目
  * （缩略图、名称、纹理数×尺寸、体积、最近打开、绑定文件），**点卡片任意处即载入**，
- * 卡片上只留次级动作 `重命名 / 复制 / 另存为 / 删除`（删除走危险色）。
+ * 卡片上只留次级动作 `重命名 / 复制 / 历史 / 另存为 / 删除`（删除走危险色）。
+ * 五条动作在 258px 卡片里放不下带文字的按钮，所以卡片动作一律图标化（见 styles/projects.css
+ * §4）：`title` 与 `aria-label` 保留完整动作名，悬停与读屏都能读出来。
  *
  * 顶部（`.prj-top`）只有一个主行动「新建项目」+ 搜索框 + 排序下拉 + 标签筛选
  * （有标签时才出现）+ `…` 菜单：
@@ -75,6 +77,18 @@ export const CARD_ACTIONS = [
         },
         get title() {
             return t('projects.card.duplicate.hint');
+        },
+    },
+    {
+        // 版本历史（alpha.47）：列出最近 10 条保存快照，可恢复到任意一版；恢复前先把
+        // 当前状态存成一条历史，所以恢复本身可撤回。定时器图标表示「时间点」。
+        act: 'history',
+        icon: 'timer',
+        get label() {
+            return t('projects.card.history');
+        },
+        get title() {
+            return t('projects.card.history.hint');
         },
     },
     {
@@ -1283,6 +1297,16 @@ export function mount(host, ctx) {
             // （用户输入过原名 + 序号之类），所以 okText 走返回值分支，不在 run() 里写死
             const v = await run(() => api.duplicate(row.id));
             if (v.ok) say(t('projects.duplicate.done', { name: (v.out && v.out.name) || row.name }));
+            return;
+        }
+        if (act === 'history') {
+            // 版本历史：外壳负责列快照 → 二次确认 → 恢复（恢复前先把当前状态存成历史）。
+            // 取消是正常结局（run() 只说一句「已取消」），不报错；成功提示由外壳 flash。
+            if (typeof api.history !== 'function') {
+                say(t('projects.history.notWired'), 'error');
+                return;
+            }
+            await run(() => api.history(row.id));
             return;
         }
         if (act === 'export') {

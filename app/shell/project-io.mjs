@@ -941,6 +941,24 @@ async function writeBackProjectFile(label, file) {
 }
 
 /**
+ * 保存成功之后留一条版本快照（alpha.47）。
+ *
+ * 为什么单独包一层：历史是**附属**功能 —— 库已经写成功了，历史没写上只是少了
+ * 「回到上一版」的能力，不能因此把保存结果改判成失败（用户会重按 Ctrl+S，
+ * 而内容其实已经在库里）。所以这里只 console.error，不 flash、不抛。
+ *
+ * @param {{id:string,name?:string,savedAt?:number,project:object}} rec 完整库记录
+ */
+async function pushVersionQuietly(rec) {
+    try {
+        await store.pushVersion(rec);
+    } catch (err) {
+        // 日志留英文，不新增待迁文案
+        console.error('[shell] failed to record a project version:', err);
+    }
+}
+
+/**
  * 保存到项目库（无对话框，立即生效）。
  * 命名规则：显式 name > 当前项目名 > 弹一次内联输入框（问一次，取消就放弃）。
  * 两者并存：项目库 = 草稿箱，`.msp` 文件 = 正式交付 —— 所以入库成功后，**若已绑定文件
@@ -975,6 +993,9 @@ async function saveProject(name) {
         project.name = label;
         project.dirty = false;
         store.setCurrentProjectId(project.id);
+        // 版本历史（alpha.47）：库里写成功之后留一条快照。失败只记日志 ——
+        // 「历史没存上」是附属功能坏了，不能把一次真的保存判成失败。
+        await pushVersionQuietly({ id: project.id, name: label, savedAt: savedAtMs, project: rec.project });
         // 两者并存：库是草稿箱、.msp 是交付物。绑定过文件就必须同时回写，
         // 否则「已保存」只对了一半，磁盘上那份还是旧内容（交接文档 §3.3 bug 2）。
         const file = String(project.file || '');
@@ -1842,6 +1863,197 @@ async function editTags(id) {
     return okResult({ tags: saved.tags });
 }
 
+/* ────────── 项目库 P2 收尾：版本历史（alpha.47） ────────── */
+
+/**
+ * 快照时刻 → 列表里的一小段文字。
+ *
+ * 不走 i18n 的 fmtTime：外壳这一层没有面板的 `projects.time.today` 这类词条，
+ * 而「今天 HH:MM / MM-DD HH:MM」全是数字与固定分隔，跨语言不需要翻译。
+ * 时间格式故意用本地时区的月-日而不是 ISO 的 UTC：用户看的是自己钟表上的时间。
+ */
+function historyWhen(ts) {
+    const ms = Number(ts);
+    if (!Number.isFinite(ms) || ms <= 0) return '—';
+    const d = new Date(ms);
+    if (!Number.isFinite(d.getTime())) return '—';
+    const p2 = (n) => (n < 10 ? '0' + n : String(n));
+    const hm = p2(d.getHours()) + ':' + p2(d.getMinutes());
+    const now = new Date();
+    const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    return sameDay ? hm : p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + ' ' + hm;
+}
+
+/** 快照体积 → 人话（与面板的 fmtBytes 同口径，B / KB / MB）。 */
+function historySize(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n <= 0) return '—';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+/**
+ * 「历史…」动作：列出最近 MAX_VERSIONS 条快照，选中并确认后恢复。
+ *
+ * 两级 askChoice（选哪一条 → 确认恢复）而不是一路点下去：恢复会整份换掉当前文档，
+ * 必须给一次「我选的是这一条」的复核机会。取消是正常结局（`canceled:true`），
+ * 面板侧 `run()` 只会说一句「已取消」，不报错。
+ *
+ * @param {string} projectId 库记录 id
+ * @returns {Promise<{ok:true,count?:number,restored?:boolean,current?:boolean}
+ *   | {ok:false,canceled?:true,error?:string}>}
+ */
+export async function openHistory(projectId) {
+    const id = String(projectId == null ? '' : projectId);
+    if (!id) return fail(t('shell.history.projectMissing'));
+    let rows = [];
+    try {
+        rows = await store.listVersions(id);
+    } catch (err) {
+        rows = [];
+    }
+    if (!rows.length) {
+        flash(t('shell.history.empty'));
+        return okResult({ count: 0, restored: false });
+    }
+    const shown = rows.slice(0, store.MAX_VERSIONS);
+    const options = shown.map((row) => ({
+        label: t('shell.history.item', { time: historyWhen(row.at), size: historySize(row.bytes) }),
+        value: String(row.id),
+    }));
+    options.push({ label: t('shell.ask.cancel'), value: 'cancel' });
+    const picked = await askChoice(t('shell.history.title'), options, t('shell.history.detail'));
+    if (!picked || picked === 'cancel') return { ok: false, canceled: true };
+    const target = shown.find((row) => String(row.id) === String(picked));
+    if (!target) return { ok: false, canceled: true };
+    const confirmed = await askChoice(
+        t('shell.history.confirmTitle'),
+        [
+            { label: t('shell.history.confirm'), value: 'restore' },
+            { label: t('shell.ask.cancel'), value: 'cancel' },
+        ],
+        t('shell.history.confirmDetail', { time: historyWhen(target.at) })
+    );
+    if (confirmed !== 'restore') return { ok: false, canceled: true };
+    return restoreVersion(id, picked);
+}
+
+/**
+ * 恢复到指定快照（恢复本身可逆）。
+ *
+ * 顺序是刻意的：
+ * 1. **先 push 当前状态** —— 当前项目取内存里的最新文档（可能还有未保存改动），
+ *    别的项目取库里那条记录。恢复后用户还能从历史里选回「恢复前」那一版；
+ * 2. 再把快照反序列化、换文档（只有恢复的是当前打开的项目才换，别的项目不动当前文档）；
+ * 3. 最后把库里那条记录的内容也换成快照 —— 否则下次打开看到的还是恢复前的旧内容。
+ *
+ * 历史是附属功能：第 1 步失败只记日志，不挡住恢复本身（恢复仍然可用，只是少一层撤回）。
+ *
+ * @param {string} projectId
+ * @param {string} vid 快照 id
+ * @returns {Promise<{ok:true,restored:true,current:boolean,id:string}
+ *   | {ok:false,canceled?:true,error:string}>}
+ */
+export async function restoreVersion(projectId, vid) {
+    const id = String(projectId == null ? '' : projectId);
+    const versionId = String(vid == null ? '' : vid);
+    if (!id) return fail(t('shell.history.projectMissing'));
+    if (!versionId) return fail(t('shell.history.versionMissing'));
+    let version = null;
+    try {
+        version = await store.getVersion(versionId);
+    } catch (err) {
+        version = null;
+    }
+    if (!version || !version.project) return fail(t('shell.history.versionMissing'));
+    let rec = null;
+    try {
+        rec = await store.getProject(id);
+    } catch (err) {
+        rec = null;
+    }
+    if (!rec) return fail(t('shell.history.projectMissing'));
+
+    const isCurrent = String(project.id || '') === id;
+    if (isCurrent) {
+        // 当前项目：内存里的文档才是最真的一份（可能有还没入库的改动），先把它存成历史
+        try {
+            const current = store.makeRecord({
+                id: id,
+                name: project.name || version.name || '',
+                doc: state.doc,
+                file: project.file || '',
+                openedAt: openedAtMs > 0 ? openedAtMs : undefined,
+            });
+            await pushVersionQuietly({ id: id, name: current.name, savedAt: current.savedAt, project: current.project });
+        } catch (err) {
+            console.error('[shell] failed to snapshot the current state before restoring:', err);
+        }
+    } else if (rec.project) {
+        // 别的项目：恢复前那份内容同样要留一条，否则「恢复一下」就把库里的旧内容抹掉了
+        await pushVersionQuietly({ id: id, name: rec.name, savedAt: rec.savedAt, project: rec.project });
+    }
+
+    const payload = version.project && version.project.doc ? version.project.doc : version.project;
+    let doc = null;
+    try {
+        doc = await store.jsonToDoc(payload);
+    } catch (err) {
+        doc = null;
+    }
+    if (!doc) return fail(t('shell.history.corrupt'));
+
+    if (isCurrent) {
+        // 当前项目：整份换文档（撤销栈清空、脏位归零由 applyDoc 负责）
+        if (!applyDoc(doc, { id: id, name: project.name, file: project.file })) {
+            return fail(t('shell.history.corrupt'));
+        }
+        // 顶栏「上次保存」跟着快照走：恢复后的内容确实是那一版保存时的内容
+        savedAtMs = Number(version.savedAt) || savedAtMs;
+    }
+
+    rec.project = version.project;
+    rec.savedAt = Number(version.savedAt) || rec.savedAt;
+    // 记录里的派生展示字段（尺寸 / 对象数 / 纹理时间点数 / 体积）跟着快照重算：
+    // 它们是卡片 meta 的来源，不重算就会出现「恢复成 40×30，卡片还写着 64×64」。
+    const restoredDoc = version.project && version.project.doc;
+    if (restoredDoc && typeof restoredDoc === 'object') {
+        const w = Number(restoredDoc.width);
+        const h = Number(restoredDoc.height);
+        if (Number.isFinite(w) && w > 0) rec.width = w;
+        if (Number.isFinite(h) && h > 0) rec.height = h;
+        const elements = Array.isArray(restoredDoc.elements) ? restoredDoc.elements : [];
+        rec.layers = elements.length;
+        const times = new Set();
+        for (const el of elements) {
+            const cels = el && Array.isArray(el.cels) ? el.cels : [];
+            for (const cel of cels) {
+                const at = Number(cel && cel.at);
+                if (Number.isFinite(at)) times.add(at);
+            }
+        }
+        rec.frames = times.size;
+    }
+    try {
+        rec.bytes = JSON.stringify(version.project).length;
+    } catch (err) {
+        // 体积只是展示值：算不出来就沿用旧值，别让恢复因为一次统计失败而失败
+    }
+    const saved = await store.putProject(rec);
+    if (!saved) return fail(t('shell.history.failed', { msg: t('shell.history.projectMissing') }));
+
+    updateChrome();
+    notifyProjects();
+    const displayName = rec.name || t('shell.project.untitled');
+    flash(
+        isCurrent
+            ? t('shell.history.restoredCurrent', { name: displayName, time: historyWhen(version.at) })
+            : t('shell.history.restoredOther', { name: displayName, time: historyWhen(version.at) })
+    );
+    return okResult({ restored: true, current: isCurrent, id: rec.id });
+}
+
 /* ─────────────────── 未命名草稿 & 关窗口保护 ─────────────────── */
 
 let safetyInstalled = false;
@@ -2509,6 +2721,8 @@ const projectApi = {
     // P2：收藏置顶 / 标签 / 排序 / 库统计（面板同步调 sortRows / totals，不 await）
     setPinned: (id, pinned) => setPinned(id, pinned),
     editTags: (id) => editTags(id),
+    // P2 收尾：版本历史（列出最近 10 条快照，选中并确认后恢复；恢复前先存当前）
+    history: (id) => openHistory(id),
     sortRows: (rows, mode) => store.sortProjects(rows, mode),
     totals: (rows) => store.libraryTotals(rows),
     // 项目文件（.msp/.json）→ 项目库。projectApi.importFile 保持这个语义：
@@ -2629,6 +2843,9 @@ export async function autoSaveProject() {
         savedAtMs = (saved && saved.savedAt) || Date.now();
         project.dirty = false;
         store.setCurrentProjectId(project.id);
+        // 自动保存也要留历史：否则用户只按自动保存时，「回到上一版」永远是空的。
+        // 内容没变时 pushVersion 内部按指纹去重，不会每拍刷一条。
+        await pushVersionQuietly({ id: project.id, name, savedAt: savedAtMs, project: rec.project });
         // 自动保存也是一次「保存」：绑定了文件就一起回写，否则库里有底、磁盘上是旧的，
         // 用户关掉窗口后打开 .msp 会少掉最后一次自动保存的内容（与 §3.3 bug 2 同一种骗法）。
         // 成功时沿用「已自动保存」那句（每 N 秒刷一条长句太吵），失败必须用错误档说出来。

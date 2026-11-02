@@ -365,15 +365,36 @@
     font-size: 12px;
 }
 
-/* ─────────────────── §4 卡片动作：重命名 / 复制 / 另存为 / 删除 ─────────────────── */
+/* ─────────────────── §4 卡片动作：重命名 / 复制 / 历史 / 另存为 / 删除 ─────────────────── */
 
-/* 卡片整块可点（载入），所以动作区只留次级动作；删除走危险色，与其余三条明确分档。 */
+/* 卡片整块可点（载入），所以动作区只留次级动作；删除走危险色，与其余四条明确分档。 */
 .ms-modal .prj-actions .prj-btn {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     min-height: 20px;
 }
+
+/* alpha.47：动作从 4 条变 5 条（多了「历史…」）。258px 卡片里动作列只有约 128px，
+   五条带文字的按钮放不下会把卡片撑成三四行、按钮还会被挤到缩略图下方外面。
+   所以非重命名态的动作区改成固定 5 等分、只留图标（每个约 23px，一行放下）：
+   `button()` 已把完整动作名写进 `title` 与 `aria-label`，悬停 / 读屏仍可读出全名。
+   重命名进行中只有「确定 / 取消」两条，继续保持原来的 flex 布局。 */
+.ms-modal .prj-card:not(.is-renaming) .prj-actions {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 3px;
+}
+
+.ms-modal .prj-card:not(.is-renaming) .prj-actions .prj-btn {
+    min-width: 0;
+    padding: 2px 0;
+    justify-content: center;
+    gap: 0;
+}
+
+/* 窄卡里文字节点只藏视觉：`prj-t` 不进无障碍树（按钮的可访问名走 aria-label）。 */
+.ms-modal .prj-card:not(.is-renaming) .prj-actions .prj-t { display: none; }
 
 .ms-modal .prj-del {
     color: var(--danger);

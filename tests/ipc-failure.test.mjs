@@ -911,3 +911,194 @@ test('源码守卫：load / import 打开已被别的记录绑定的文件时静
     assert.match(take, /fileOwners\(file, id\)/);
     assert.match(take, /clearFileBinding\(row\.id\)/);
 });
+
+/* ─────── ⑨ P2 收尾：版本历史（保存留快照 + 恢复可逆） ─────── */
+
+/**
+ * 版本恢复会走 `applyDoc` → `engine.scheduleRender()`，它要 `requestAnimationFrame`。
+ * Node 里没有：补一个**永不同步回调**的替身（返回 0，调度不到帧）。
+ * 这样 scheduleRender 的 60ms 定时器兜底到点后 `raf` 是 0，不会再碰 `cancelAnimationFrame`，
+ * 不会在用例结束之后抛出异步异常；render() 因为没有 view 会直接返回。
+ */
+async function withAnimFrame(fn) {
+    const hadRaf = Object.prototype.hasOwnProperty.call(globalThis, 'requestAnimationFrame');
+    const hadCancel = Object.prototype.hasOwnProperty.call(globalThis, 'cancelAnimationFrame');
+    const prevRaf = globalThis.requestAnimationFrame;
+    const prevCancel = globalThis.cancelAnimationFrame;
+    if (typeof prevRaf !== 'function') globalThis.requestAnimationFrame = () => 0;
+    if (typeof prevCancel !== 'function') globalThis.cancelAnimationFrame = () => {};
+    try {
+        return await fn();
+    } finally {
+        if (hadRaf) globalThis.requestAnimationFrame = prevRaf;
+        else delete globalThis.requestAnimationFrame;
+        if (hadCancel) globalThis.cancelAnimationFrame = prevCancel;
+        else delete globalThis.cancelAnimationFrame;
+    }
+}
+
+test('restoreVersion：恢复前先给当前状态留快照（可逆），当前项目整份换文档', async () => {
+    const { io, ds, cel, store } = await loadProjectIo();
+    store.__resetMemory();
+    store.__resetVersions();
+    // 库里存着「旧版本」44×33；内存里当前文档已经改到 20×10（还没保存）
+    const oldDoc = cel.createDocument({ width: 44, height: 33, fps: 8, layerName: 'L' });
+    await store.putProject(store.makeRecord({ id: 'hist-1', name: 'H', doc: oldDoc }));
+    const snap = await store.pushVersion(store.makeRecord({ id: 'hist-1', name: 'H', doc: oldDoc }), { at: 1000 });
+    assert.ok(snap);
+
+    freshDoc(cel, ds);
+    ds.project.id = 'hist-1';
+    ds.project.name = 'H';
+    const beforeDoc = ds.state.doc;
+    assert.equal(beforeDoc.width, 20);
+
+    const out = await withAnimFrame(() => io.restoreVersion('hist-1', snap.id));
+    assert.equal(out.ok, true);
+    assert.equal(out.current, true);
+    assert.equal(out.restored, true);
+
+    // 当前文档换成快照那一份
+    assert.notEqual(ds.state.doc, beforeDoc, '恢复当前项目必须真的换文档（不是只改库记录）');
+    assert.equal(ds.state.doc.width, 44);
+    assert.equal(ds.state.doc.height, 33);
+    assert.equal(ds.project.dirty, false, '恢复后的文档不该还挂着「未保存」');
+
+    // 恢复前那份（20×10，含未保存改动）进了历史 ⇒ 用户能再选回来
+    const list = await store.listVersions('hist-1');
+    assert.equal(list.length, 2);
+    const restoredBack = await store.getVersion(list[0].id);
+    assert.equal(restoredBack.project.doc.width, 20, '「恢复前」的快照取的是内存里最新那份，不是库里旧内容');
+
+    // 库里那条记录也换成快照内容：下次打开看到的是恢复后的
+    const full = await store.getProject('hist-1');
+    assert.equal(full.project.doc.width, 44);
+    assert.equal(full.savedAt, snap.savedAt);
+});
+
+test('restoreVersion：不是当前打开的项目时只改库记录，不换当前文档（真行为）', async () => {
+    const { io, ds, cel, store } = await loadProjectIo();
+    store.__resetMemory();
+    store.__resetVersions();
+    const oldDoc = cel.createDocument({ width: 44, height: 33, fps: 8, layerName: 'L' });
+    // 库记录当前内容是 60 宽（后来改过），快照是 44 宽
+    await store.putProject(store.makeRecord({ id: 'hist-2', name: 'Other', doc: Object.assign({}, oldDoc, { width: 60 }) }));
+    const snap = await store.pushVersion(store.makeRecord({ id: 'hist-2', name: 'Other', doc: oldDoc }), { at: 1000 });
+    assert.ok(snap);
+
+    freshDoc(cel, ds); // 当前文档是另一个未命名项目
+    const beforeDoc = ds.state.doc;
+    const out = await io.restoreVersion('hist-2', snap.id);
+    assert.equal(out.ok, true);
+    assert.equal(out.current, false);
+    assert.equal(ds.state.doc, beforeDoc, '恢复别的项目不许换当前文档');
+
+    const full = await store.getProject('hist-2');
+    assert.equal(full.project.doc.width, 44, '库记录换成快照内容');
+    // 恢复前那份内容也留了一条历史（恢复可逆，不需要先打开那个项目）
+    const list = await store.listVersions('hist-2');
+    assert.equal(list.length, 2);
+    assert.equal((await store.getVersion(list[0].id)).project.doc.width, 60);
+});
+
+test('restoreVersion / openHistory：坏 id / 坏快照 / 空历史都有可读结局（真行为）', async () => {
+    const { io, ds, cel, store } = await loadProjectIo();
+    store.__resetMemory();
+    store.__resetVersions();
+    const doc = cel.createDocument({ width: 20, height: 10, fps: 10, layerName: 'L' });
+    await store.putProject(store.makeRecord({ id: 'hist-3', name: '甲', doc }));
+    freshDoc(cel, ds);
+    ds.project.id = 'hist-3';
+    ds.project.name = '甲';
+
+    const missing = await io.restoreVersion('hist-3', 'ver-nope');
+    assert.equal(missing.ok, false);
+    assert.equal(missing.canceled, undefined, '快照不存在不是「用户取消」');
+    assert.ok(String(missing.error).length > 0);
+
+    assert.equal((await io.restoreVersion('nope', 'ver-nope')).ok, false, '项目不存在');
+    assert.equal((await io.restoreVersion('', 'ver-nope')).ok, false, '空项目 id');
+    assert.equal((await io.restoreVersion('hist-3', '')).ok, false, '空快照 id');
+
+    // 内容损坏的快照：恢复失败，当前文档原样保留
+    const bad = await store.pushVersion({ id: 'hist-3', name: '甲', project: { format: store.FORMAT, version: 4, doc: {} } }, { at: 10 });
+    assert.ok(bad);
+    const beforeDoc = ds.state.doc;
+    const corrupt = await io.restoreVersion('hist-3', bad.id);
+    assert.equal(corrupt.ok, false);
+    assert.equal(ds.state.doc, beforeDoc, '坏快照不许把当前文档换掉');
+
+    // 空历史：flash 一句 + 返回 ok（不是「外壳没回应」，面板不该报错）
+    store.__resetVersions();
+    const empty = await io.projectApi.history('hist-3');
+    assert.equal(empty.ok, true);
+    assert.equal(empty.count, 0);
+    assert.equal(empty.restored, false);
+});
+
+test('openHistory：列出快照 → 二次确认 → 恢复（真实点按钮）', async () => {
+    const { io, ds, cel, store } = await loadProjectIo();
+    store.__resetMemory();
+    store.__resetVersions();
+    const oldDoc = cel.createDocument({ width: 44, height: 33, fps: 8, layerName: 'L' });
+    await store.putProject(store.makeRecord({ id: 'hist-4', name: 'H', doc: oldDoc }));
+    const snap = await store.pushVersion(store.makeRecord({ id: 'hist-4', name: 'H', doc: oldDoc }), { at: 1000 });
+    freshDoc(cel, ds);
+    ds.project.id = 'hist-4';
+    ds.project.name = 'H';
+
+    await withAnimFrame(() => withAskDom({}, async (body) => {
+        const pending = io.projectApi.history('hist-4');
+        await new Promise((r) => setTimeout(r, 20));
+        // 第一层：选哪一条快照（按钮 value 就是快照 id）
+        clickAsk(body, snap.id);
+        await new Promise((r) => setTimeout(r, 20));
+        // 第二层：确认恢复
+        clickAsk(body, 'restore');
+        const out = await pending;
+        assert.equal(out.ok, true);
+        assert.equal(out.restored, true);
+        assert.equal(ds.state.doc.width, 44, '确认后真的恢复了');
+    }));
+});
+
+test('源码守卫：saveProject / autoSaveProject 保存成功后留快照，历史失败不拖垮保存', () => {
+    const io = read('../app/shell/project-io.mjs');
+    const save = io.slice(io.indexOf('async function saveProject('), io.indexOf('async function writeProjectFile'));
+    assert.ok(save.indexOf('store.putProject(rec)') < save.indexOf('pushVersionQuietly('), '快照必须在库写成功之后');
+    assert.match(save, /pushVersionQuietly\(\{ id: project\.id, name: label, savedAt: savedAtMs, project: rec\.project \}\)/);
+
+    const auto = io.slice(io.indexOf('export async function autoSaveProject'));
+    assert.match(auto, /pushVersionQuietly\(\{ id: project\.id, name, savedAt: savedAtMs, project: rec\.project \}\)/);
+    // 未命名草稿分支没有项目 id：不许为它造一条「历史」
+    const draft = auto.slice(auto.indexOf('if (!name)'), auto.indexOf('const rec = store.makeRecord'));
+    assert.doesNotMatch(draft, /pushVersionQuietly/);
+
+    // 历史是附属功能：失败只 console.error，不 flash、不改保存结果
+    const helper = io.slice(io.indexOf('async function pushVersionQuietly'), io.indexOf('async function saveProject('));
+    assert.match(helper, /console\.error/);
+    assert.doesNotMatch(helper, /flash\(/, '历史没存上不该弹给用户，更不该盖掉保存提示');
+    assert.doesNotMatch(helper, /return false/, '历史没存上不许把一次真的保存判成失败');
+});
+
+test('源码守卫：openHistory 两级确认，restoreVersion 先存当前再换文档，projectApi 挂了 history', () => {
+    const io = read('../app/shell/project-io.mjs');
+    const open = io.slice(io.indexOf('export async function openHistory'), io.indexOf('export async function restoreVersion'));
+    assert.match(open, /store\.listVersions\(id\)/);
+    assert.match(open, /t\('shell\.history\.empty'\)/, '空历史要说话');
+    assert.equal((open.match(/askChoice\(/g) || []).length, 2, '选版本 + 确认恢复两级');
+    assert.match(open, /return restoreVersion\(id, picked\)/);
+    assert.match(open, /canceled: true/, '取消是正常结局（面板只说「已取消」）');
+
+    const restore = io.slice(io.indexOf('export async function restoreVersion'));
+    const pushAt = restore.indexOf('pushVersionQuietly');
+    const applyAt = restore.indexOf('applyDoc(');
+    assert.ok(pushAt > 0 && applyAt > 0, '两个关键动作都要在');
+    assert.ok(pushAt < applyAt, '必须先 push 当前状态再换文档（恢复可逆）');
+    assert.match(restore, /if \(isCurrent\) \{[\s\S]{0,700}applyDoc\(doc, \{ id: id, name: project\.name, file: project\.file \}\)/, '非当前项目不许走 applyDoc');
+    assert.match(restore, /rec\.project = version\.project/);
+    assert.match(restore, /rec\.savedAt = Number\(version\.savedAt\) \|\| rec\.savedAt/);
+    assert.match(restore, /updateChrome\(\)/);
+    assert.match(restore, /notifyProjects\(\)/);
+    assert.match(io, /history: \(id\) => openHistory\(id\)/, 'projectApi 必须挂 history（面板照名字调）');
+});

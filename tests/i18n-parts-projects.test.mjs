@@ -211,6 +211,8 @@ test('zh-Hans 表：文案与词条化之前的原文逐字一致', () => {
         'projects.card.duplicate.hint': '在项目库里复制一份（副本会拿到自己的名字与 id）',
         'projects.card.export': '另存为…',
         'projects.card.export.hint': '把这份项目另存为 .msp 文件，并把项目绑定到新文件（旧版 .json 也行）',
+        'projects.card.history': '历史…',
+        'projects.card.history.hint': '列出最近 10 个保存过的版本，可恢复到其中任意一版（恢复可撤回）',
         'projects.card.rename': '重命名',
         'projects.card.rename.hint': '修改项目名称（双击卡片也可以）',
         'projects.card.time': '保存于 {when}',
@@ -228,6 +230,7 @@ test('zh-Hans 表：文案与词条化之前的原文逐字一致', () => {
         'projects.exportLibrary.done': '已导出 {n} 个项目 → {file}',
         'projects.exportLibrary.noPath': '导出接口说成功了，但没给文件路径 —— 备份可能没落地，请重试',
         'projects.head.aria': '项目库操作',
+        'projects.history.notWired': '这个版本还没有接版本历史',
         'projects.import.done': '已导入 {ok} 张图片',
         'projects.import.doneSome': '已导入 {ok} 张图片，{fail} 张失败',
         'projects.import.failed': '导入图片失败：{msg}',
@@ -338,22 +341,22 @@ test('落盘值不许改：导出选项的默认值与格式 id 没被词条化�
 });
 
 test('落盘值不许改：卡片动作与菜单项的 act id 不随语言变', () => {
-    assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'duplicate', 'export', 'delete']);
+    assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'duplicate', 'history', 'export', 'delete']);
     assert.deepEqual(MENU_ITEMS.map((a) => a.act), ['import', 'saveAs', 'exportLibrary', 'sheet', 'refresh', 'image']);
     withLocale('zh-Hans', () => {
-        assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'duplicate', 'export', 'delete']);
+        assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'duplicate', 'history', 'export', 'delete']);
         assert.equal(MENU_ITEMS.filter((a) => a.act === 'image')[0].sepBefore, true);
     });
 });
 
 test('面板文案是现取的：切语言后 label / 提示跟着变', () => {
     withLocale('zh-Hans', () => {
-        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['重命名', '复制', '另存为…', '删除']);
+        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['重命名', '复制', '历史…', '另存为…', '删除']);
         assert.equal(noResultText(), '没有匹配的项目');
         assert.equal(countLabel(4, 1, 'x'), '匹配 1 / 4');
     });
     withLocale('en', () => {
-        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['Rename', 'Duplicate', 'Save as…', 'Delete']);
+        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['Rename', 'Duplicate', 'Version history…', 'Save as…', 'Delete']);
         assert.equal(noResultText(), 'No matching projects');
         assert.equal(countLabel(4, 1, 'x'), 'Matched 1 / 4');
         assert.ok(!HAN.test(countLabel(4, 1, 'x')), '英文计数里还有中文');

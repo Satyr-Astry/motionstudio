@@ -165,6 +165,9 @@ export default {
         'projects.card.duplicate.hint': 'Copy this project inside the library (the copy gets its own name and id)',
         'projects.card.export': 'Save as…',
         'projects.card.export.hint': 'Save this project as a .msp file and bind it to the new file (legacy .json also works)',
+        // 版本历史（alpha.47）：卡片动作「历史…」；title 说明「可恢复、且恢复可撤回」
+        'projects.card.history': 'Version history…',
+        'projects.card.history.hint': 'List the last 10 saved versions and restore any of them (restoring is reversible)',
         'projects.card.rename': 'Rename',
         'projects.card.rename.hint': 'Change the project name (double-clicking the card also works)',
         'projects.card.time': 'Saved {when}',
@@ -183,6 +186,8 @@ export default {
         'projects.exportLibrary.done': 'Exported {n} projects → {file}',
         'projects.exportLibrary.noPath': 'The export interface reported success but returned no file path — the backup may not have landed, please retry',
         'projects.head.aria': 'Project library actions',
+        // 外壳没接版本历史接口时的明确提示（半接线状态不许静默失败）
+        'projects.history.notWired': 'This build has no version history yet',
         'projects.import.done': 'Imported {ok} images',
         'projects.import.doneSome': 'Imported {ok} images, {fail} failed',
         'projects.import.failed': 'Image import failed: {msg}',
@@ -414,6 +419,9 @@ export default {
         'projects.card.duplicate.hint': '在项目库里复制一份（副本会拿到自己的名字与 id）',
         'projects.card.export': '另存为…',
         'projects.card.export.hint': '把这份项目另存为 .msp 文件，并把项目绑定到新文件（旧版 .json 也行）',
+        // 版本历史（alpha.47）：卡片动作「历史…」
+        'projects.card.history': '历史…',
+        'projects.card.history.hint': '列出最近 10 个保存过的版本，可恢复到其中任意一版（恢复可撤回）',
         'projects.card.rename': '重命名',
         'projects.card.rename.hint': '修改项目名称（双击卡片也可以）',
         'projects.card.time': '保存于 {when}',
@@ -432,6 +440,8 @@ export default {
         'projects.exportLibrary.done': '已导出 {n} 个项目 → {file}',
         'projects.exportLibrary.noPath': '导出接口说成功了，但没给文件路径 —— 备份可能没落地，请重试',
         'projects.head.aria': '项目库操作',
+        // 外壳没接版本历史接口时的明确提示（半接线状态不许静默失败）
+        'projects.history.notWired': '这个版本还没有接版本历史',
         'projects.import.done': '已导入 {ok} 张图片',
         'projects.import.doneSome': '已导入 {ok} 张图片，{fail} 张失败',
         'projects.import.failed': '导入图片失败：{msg}',

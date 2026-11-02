@@ -215,17 +215,18 @@ test('countLabel：空库不出文案，有库给总数，有查询给「匹配 
     });
 });
 
-test('CARD_ACTIONS：重命名 / 复制 / 另存为 / 删除，顺序钉死，删除是危险档', () => {
-    assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'duplicate', 'export', 'delete']);
+test('CARD_ACTIONS：重命名 / 复制 / 历史 / 另存为 / 删除，顺序钉死，删除是危险档', () => {
+    assert.deepEqual(CARD_ACTIONS.map((a) => a.act), ['rename', 'duplicate', 'history', 'export', 'delete']);
     withLocale('zh-Hans', () => {
-        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['重命名', '复制', '另存为…', '删除']);
+        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['重命名', '复制', '历史…', '另存为…', '删除']);
     });
     // label/title 是访问器而非普通属性：否则 setLocale() 之后卡片还挂着旧语言
     withLocale('en', () => {
-        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['Rename', 'Duplicate', 'Save as…', 'Delete']);
+        assert.deepEqual(CARD_ACTIONS.map((a) => a.label), ['Rename', 'Duplicate', 'Version history…', 'Save as…', 'Delete']);
         assert.deepEqual(CARD_ACTIONS.map((a) => a.title), [
             'Change the project name (double-clicking the card also works)',
             'Copy this project inside the library (the copy gets its own name and id)',
+            'List the last 10 saved versions and restore any of them (restoring is reversible)',
             'Save this project as a .msp file and bind it to the new file (legacy .json also works)',
             'Remove from the library (undo is available for 8 seconds)',
         ]);
@@ -239,6 +240,13 @@ test('CARD_ACTIONS：重命名 / 复制 / 另存为 / 删除，顺序钉死，�
     // 复制是库内动作，语义不是「写文件」：别和另存为共用标题文案
     const dup = CARD_ACTIONS.find((a) => a.act === 'duplicate');
     assert.equal(dup.icon, 'copy');
+    // 历史用 timer 图标（时间点语义），且 title 必须说清「可恢复、恢复可撤回」
+    const history = CARD_ACTIONS.find((a) => a.act === 'history');
+    assert.ok(history, '卡片必须有「历史…」动作');
+    assert.equal(history.icon, 'timer');
+    withLocale('zh-Hans', () => {
+        assert.match(history.title, /恢复/);
+    });
     const del = CARD_ACTIONS.find((a) => a.act === 'delete');
     assert.equal(del.danger, true);
     assert.equal(CARD_ACTIONS.filter((a) => a.danger).length, 1);
@@ -338,6 +346,25 @@ test('分发接线（源码守卫）：复制 / 整库备份 / 解绑都真的�
     // 菜单不是 mount 时建一次：reload() 缓存 api.current().file，变了就用 menuItemsFor 重建
     assert.match(PANEL_SRC, /menuItemsFor\(currentFile\)/);
     assert.match(PANEL_SRC, /cur\.file/, 'reload() 要从 api.current() 读 file');
+});
+
+test('版本历史接线（源码守卫）：卡片「历史…」分发 api.history，五条动作在 258px 卡片里图标化', () => {
+    // 面板只负责「把动作交给外壳」：列快照 / 二次确认 / 恢复可逆都在 project-io 里
+    assert.match(PANEL_SRC, /api\.history\(\s*row\.id\s*\)/, '卡片「历史…」必须分发 api.history(row.id)');
+    assert.match(PANEL_SRC, /t\('projects\.card\.history'/, '动作文案走词条（en / zh 镜面）');
+    assert.match(PANEL_SRC, /t\('projects\.history\.notWired'/, '外壳没接历史接口时要明说，不许静默');
+    // 取消不报错：历史动作走 run()，取消由 run() 统一说一句「已取消」
+    const hist = PANEL_SRC.slice(PANEL_SRC.indexOf("if (act === 'history')"), PANEL_SRC.indexOf("if (act === 'export')"));
+    assert.match(hist, /await run\(\(\) => api\.history\(row\.id\)\)/);
+    assert.doesNotMatch(hist, /'error'\)\);\s*return;/, '历史动作的成功路径不该多说话（外壳已经 flash）');
+    // 样式：动作区五等分 + 文字节点隐藏（完整动作名留在 button 的 title / aria-label 上）
+    assert.match(
+        PANEL_CSS,
+        /\.prj-card:not\(\.is-renaming\) \.prj-actions\s*\{[^}]*grid-template-columns:\s*repeat\(5,\s*minmax\(0,\s*1fr\)\)/,
+        '五条卡片动作必须五等分，否则 258px 卡片里会换行撑高'
+    );
+    assert.match(PANEL_CSS, /\.prj-actions \.prj-t\s*\{\s*display:\s*none/, '窄卡里文字节点必须隐藏');
+    assert.match(PANEL_SRC, /setAttribute\('aria-label', text \|\| title \|\| act\)/, '按钮可访问名兜底');
 });
 
 test('可见性 / 无障碍收口（源码守卫）：提示走 aria-live，删除后焦点不掉回 body，不重写撤销条', () => {
