@@ -63,6 +63,7 @@ const ID_CONTRACT = [
     'edit.paste-keys',
     'edit.redo',
     'edit.undo',
+    'file.export-bones',
     'file.export-clip',
     'file.export-current',
     'file.export-frames',

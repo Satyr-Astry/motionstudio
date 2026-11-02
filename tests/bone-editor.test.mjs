@@ -202,3 +202,22 @@ test('骨骼行视觉：层级面板与时间轴都按 data-kind / is-bone / --b
     assert.match(css, /\.lyr-row\.is-bone/, '缺骨骼层级行样式');
     assert.match(css, /inset 2px 0 0 var\(--bone, #7d8fa8\)/, '骨骼行左侧色条必须用骨骼自身颜色');
 });
+
+/* ─────── P4：骨骼动画导出（命令 + 落盘路径） ─────── */
+
+test('命令：file.export-bones 已注册，导出走 evaluator 矩阵 + saveBinaryChecked', () => {
+    const app = readFileSync(new URL('../app/shell/app.mjs', import.meta.url), 'utf8');
+    const io = readFileSync(new URL('../app/shell/project-io.mjs', import.meta.url), 'utf8');
+    const build = app.slice(app.indexOf('function buildCommands()'), app.indexOf('function onKeyDown'));
+    assert.match(build, /id: 'file\.export-bones'/, '命令面板缺「导出骨骼动画 JSON」');
+    assert.match(build, /run: \(\) => exportBonesJson\(\)/);
+    assert.match(app, /import \{[^}]*exportBonesJson/s, 'app.mjs 没从 project-io 引入导出函数');
+
+    const fn = io.slice(io.indexOf('async function exportBonesJson'), io.indexOf('/* ────────── 项目库 P2 动作'));
+    assert.match(fn, /buildBonesBundle\(doc, opts,/, '必须用 core 的纯函数组装（可测）');
+    assert.match(fn, /evaluatorFor\(doc\)/, '矩阵必须来自求值器（含父链时间与 IK），不能只读关键帧');
+    assert.match(fn, /ev\.matrix\(el, when\)/, '每骨每帧取世界矩阵');
+    assert.match(fn, /ipc\.saveBinaryChecked\(/, '落盘走既有可分辨通道');
+    assert.match(fn, /'json',/, '扩展名是 json');
+    assert.match(fn, /shell\.bones\.done/, '成功要报数量与路径');
+});

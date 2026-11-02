@@ -106,6 +106,7 @@ import {
     projectsModal,
     openProjectsPanel,
     onFileAct,
+    exportBonesJson,
     projectApi,
     restoreLastProject,
     restoreDraft,
@@ -1470,6 +1471,13 @@ function buildCommands() {
             id: 'file.export-video', keys: '', run: () => projectApi.exportVideo(),
             get title() { return t('cmd.file.exportVideo'); },
             get hint() { return t('cmd.file.exportVideo.hint'); },
+            get group() { return t('cmd.group.file'); },
+        },
+        {
+            // P4：骨骼动画 → 每骨每帧矩阵 JSON（引擎可直接消费；不改 .msp 格式）
+            id: 'file.export-bones', keys: '', run: () => exportBonesJson(),
+            get title() { return t('cmd.file.exportBones'); },
+            get hint() { return t('cmd.file.exportBones.hint'); },
             get group() { return t('cmd.group.file'); },
         },
         // 编辑

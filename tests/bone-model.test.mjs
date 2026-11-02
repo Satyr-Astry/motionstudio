@@ -310,3 +310,66 @@ test('boneFromObjectSpec：没有对象 / 没尺寸时返回 null（命令层负
 function docModel() {
     return { boneFromObjectSpec, createDoc, makeObject, BONE_DEFAULTS, BONE_ANCHOR };
 }
+
+/* ─────── P4：骨骼动画导出包（buildBonesBundle，纯函数） ─────── */
+
+function twoBoneDoc() {
+    const root = makeObject({ id: 'b1', name: 'Root', kind: 'bone', bone: { len: 100, width: 12, color: '#7d8fa8' } });
+    const child = makeObject({ id: 'b2', name: 'Tip', kind: 'bone', parentId: 'b1', bone: { len: 60, width: 8, color: '#7d8fa8' } });
+    return createDoc({ width: 320, height: 200, fps: 12, duration: 1, objects: [root, child] });
+}
+
+test('buildBonesBundle：每根骨每帧一个世界矩阵六元组，父级 id/名字都带上', async () => {
+    const { buildBonesBundle, boneObjectsOf, BONES_FORMAT, BONES_VERSION } = await import('../app/core/skin.mjs');
+    const doc = twoBoneDoc();
+    const bones = boneObjectsOf(doc);
+    assert.deepEqual(bones.map((b) => b.id), ['b1', 'b2']);
+    assert.equal(bones[1].parentId, 'b1');
+    assert.equal(bones[1].parentName, 'Root', '引擎侧不用二次查表');
+
+    const bundle = buildBonesBundle(doc, { fps: 12 }, (el, t) => [1, 0, 0, 1, el.id === 'b1' ? 10 : 20, t]);
+    assert.equal(bundle.format, BONES_FORMAT);
+    assert.equal(bundle.version, BONES_VERSION);
+    assert.equal(bundle.app, 'motionstudio');
+    assert.equal(bundle.fps, 12);
+    assert.equal(bundle.from, 0);
+    assert.equal(bundle.to, 1);
+    assert.equal(bundle.frames, 12, '1 秒 @12fps = 12 帧');
+    assert.equal(bundle.bones.length, 2);
+    const root = bundle.bones[0];
+    assert.equal(root.frames.length, 12);
+    assert.equal(root.frames[0].t, 0);
+    assert.equal(root.frames[11].t, 11 / 12 > 0.9 ? Math.round((11 / 12) * 1e6) / 1e6 : 11 / 12);
+    assert.deepEqual(root.frames[0].m, [1, 0, 0, 1, 10, 0]);
+    assert.equal(bundle.bones[1].frames[5].m[4], 20, '子骨拿到自己的矩阵');
+    assert.equal(bundle.bones[1].len, 60);
+    assert.equal(bundle.bones[1].width, 8);
+});
+
+test('buildBonesBundle：矩阵提供者可以直接给 {a..f} 对象；坏矩阵存 null 而不是编单位矩阵', async () => {
+    const { buildBonesBundle } = await import('../app/core/skin.mjs');
+    const doc = twoBoneDoc();
+    const objectStyle = buildBonesBundle(doc, { fps: 12, to: 0.25 }, (el) => ({ a: 1, b: 0, c: 0, d: 1, e: 5, f: 6 }));
+    assert.deepEqual(objectStyle.bones[0].frames[0].m, [1, 0, 0, 1, 5, 6]);
+    const broken = buildBonesBundle(doc, { fps: 12, to: 0.25 }, () => [NaN, 0, 0, 1, 0, 0]);
+    assert.equal(broken.bones[0].frames[0].m, null, '坏矩阵不能替用户编一个单位矩阵');
+    assert.equal(broken.bones[0].frames[1].m, null);
+});
+
+test('buildBonesBundle：默认 fps 取文档、时间范围兜底、无骨返回 null', async () => {
+    const { buildBonesBundle } = await import('../app/core/skin.mjs');
+    const doc = twoBoneDoc();
+    const dflt = buildBonesBundle(doc, null, () => [1, 0, 0, 1, 0, 0]);
+    assert.equal(dflt.fps, 12, '没给 fps 用文档 fps');
+    assert.equal(dflt.frames, 12, '没给 to 用文档时长');
+    const clamped = buildBonesBundle(doc, { fps: 999, from: 5, to: 1 }, () => [1, 0, 0, 1, 0, 0]);
+    assert.equal(clamped.fps, 60, 'fps 夹到 60');
+    assert.equal(clamped.from, 5);
+    assert.ok(clamped.to > clamped.from, 'to 非法时给一个合法区间（至少一帧）');
+    assert.ok(clamped.frames >= 1);
+
+    assert.equal(buildBonesBundle(null, null, () => [1, 0, 0, 1, 0, 0]), null);
+    assert.equal(buildBonesBundle(doc, null, null), null, '没有矩阵提供者就没有导出');
+    const noBones = createDoc({ width: 10, height: 10, fps: 12, objects: [makeObject({ id: 'p', cels: [] })] });
+    assert.equal(buildBonesBundle(noBones, null, () => [1, 0, 0, 1, 0, 0]), null);
+});

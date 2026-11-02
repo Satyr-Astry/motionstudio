@@ -17,6 +17,7 @@ import {
     totalSeconds,
 } from '../core/cel.mjs';
 import { DEFAULT_OBJECT_NAME } from '../core/doc-model.mjs';
+import { buildBonesBundle } from '../core/skin.mjs';
 import { sampleTimes } from '../core/timebase.mjs';
 import { compositeFrame } from '../paint/composite.mjs';
 import { editorDef } from './registry.mjs';
@@ -1760,6 +1761,55 @@ async function exportLibrary() {
     return okResult({ file: saved.file, count: records.length });
 }
 
+/**
+ * 导出骨骼动画 JSON（P4 引擎互操作）。
+ *
+ * 输出 `{format:'motionstudio-bones', version:1, fps, from, to, frames, bones:[{id,name,
+ * parentId,parentName,len,width, frames:[{t,m:[a,b,c,d,e,f]}]}]}` —— 每根骨每帧一个
+ * 世界矩阵六元组，引擎侧可直接 `setTransform(...m)`。
+ *
+ * 矩阵来自求值器（`evaluatorFor(doc).matrix`），所以**与画布逐帧一致**：父链时间通道、
+ * IK 解算结果都算进去了，而不是只读关键帧。这是**附加交付物**：`.msp` 仍是 v4，
+ * 不需要升版；动画本体仍全部存在关键帧里。
+ *
+ * @returns {Promise<{ok:true,file:string,bones:number,frames:number}|{ok:false,canceled?:true,error?:string}>}
+ */
+async function exportBonesJson(opts) {
+    const doc = CTX && typeof CTX.doc === 'function' ? CTX.doc() : null;
+    if (!doc) return fail(t('shell.bones.noDoc'));
+    const ev = CTX && typeof CTX.evaluatorFor === 'function' ? CTX.evaluatorFor(doc) : null;
+    if (!ev || typeof ev.matrix !== 'function') return fail(t('shell.bones.noEvaluator'));
+    let bundle = null;
+    try {
+        bundle = buildBonesBundle(doc, opts, (el, when) => ev.matrix(el, when));
+    } catch (err) {
+        console.error('[shell] bone export failed:', err);
+        return fail(t('shell.bones.failed', { msg: (err && err.message) || err }));
+    }
+    if (!bundle) return fail(t('shell.bones.empty'));
+    let json = '';
+    try {
+        json = JSON.stringify(bundle);
+    } catch (err) {
+        return fail(t('shell.bones.serializeFailed'));
+    }
+    const saved = await ipc.saveBinaryChecked(
+        projectLabel() + '-bones',
+        new TextEncoder().encode(json),
+        'json',
+        t('shell.bones.dialogLabel')
+    );
+    if (!saved.ok) {
+        if (saved.canceled) {
+            flash(t('shell.bones.canceled'));
+            return canceledResult(t('shell.bones.canceledShort'));
+        }
+        return fail(t('shell.bones.failed', { msg: saved.error }));
+    }
+    flash(t('shell.bones.done', { n: bundle.bones.length, frames: bundle.frames, path: saved.file }));
+    return okResult({ file: saved.file, bones: bundle.bones.length, frames: bundle.frames });
+}
+
 /* ────────── 项目库 P2 动作：置顶 / 标签 / 同文件绑定冲突（alpha.46） ────────── */
 
 /**
@@ -2869,6 +2919,7 @@ export {
     duplicateProject,
     unbindFile,
     exportLibrary,
+    exportBonesJson,
     projectsModal,
     openProjectsPanel,
     onFileAct,

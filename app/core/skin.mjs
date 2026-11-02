@@ -516,3 +516,116 @@ export function bindSkin(doc, layer, boneIds, opts) {
     const pts = bones.length ? autoWeights(doc, layer, grid, bones.map((b) => b.id), time) : [];
     return normalizeSkin({ grid, bones, pts });
 }
+
+/* ───────────────────── 骨骼动画导出（P4 引擎互操作） ─────────────────────
+ *
+ * 目标：把「每根骨、每一帧的世界矩阵」导成一份引擎能直接吃的 JSON。
+ * 这里只做**纯数据组装**（取哪些骨、按什么频率采样、矩阵怎么摊平），
+ * 真正的世界矩阵由调用方注入的 `matrixOf(bone, t)` 提供 —— 外壳传 evaluator 的
+ * `worldMatrix`（含父链时间通道与 IK 覆盖），所以导出与画布逐帧一致。
+ *
+ * 为什么导出不改 `.msp`：这是**附加交付物**，不是存档结构变化。动画仍全部存在
+ * 关键帧里，导出只是把求值结果按帧采样出来；`.msp` 仍是 v4。
+ */
+
+export const BONES_FORMAT = 'motionstudio-bones';
+export const BONES_VERSION = 1;
+
+/** 六元组归一：数组或 `{a..f}` 都收，坏值返回 null（不猜）。 */
+function tupleOfMatrix(m) {
+    if (Array.isArray(m) && m.length >= 6) {
+        const out = m.slice(0, 6).map((v) => Number(v));
+        return out.every((v) => Number.isFinite(v)) ? out : null;
+    }
+    if (m && typeof m === 'object') {
+        const out = ['a', 'b', 'c', 'd', 'e', 'f'].map((k) => Number(m[k]));
+        return out.every((v) => Number.isFinite(v)) ? out : null;
+    }
+    return null;
+}
+
+/**
+ * 文档里的骨骼清单（按对象顺序；父级同时给出 id 与名字，引擎侧不用二次查表）。
+ * @param {object|null} doc
+ * @returns {{id:string,name:string,parentId:string,parentName:string,len:number,width:number}[]}
+ */
+export function boneObjectsOf(doc) {
+    if (!doc || typeof doc !== 'object') return [];
+    // 不 import doc-model 的 objectsOf：那是读取层工具，skin 只认文档的 canonical objects 数组
+    const all = Array.isArray(doc.objects) ? doc.objects : [];
+    const byId = new Map(all.map((o) => [o && o.id, o]));
+    const out = [];
+    for (const el of all) {
+        if (!el || el.kind !== 'bone') continue;
+        const parent = el.parentId ? byId.get(el.parentId) : null;
+        const bone = el.bone || {};
+        out.push({
+            id: String(el.id),
+            name: String(el.name == null ? '' : el.name),
+            parentId: el.parentId == null ? '' : String(el.parentId),
+            parentName: parent ? String(parent.name == null ? '' : parent.name) : '',
+            len: Number(bone.len) || BONE_DEFAULTS.len,
+            width: Number(bone.width) || BONE_DEFAULTS.width,
+        });
+    }
+    return out;
+}
+
+/**
+ * 组装骨骼动画导出包（纯函数，Node 可测）。
+ *
+ * 帧率默认取文档 fps，夹在 1..60；时间范围默认整段时长。每根骨每帧存一个六元组
+ * `[a,b,c,d,e,f]`（同 Canvas 2D 的 `setTransform` 顺序，引擎侧直接可用）。
+ * 某一帧拿不到矩阵时该帧 `m` 为 `null`（不编造单位矩阵 —— 那会让引擎静默画出错误姿态）。
+ *
+ * @param {object|null} doc
+ * @param {{fps?:number, from?:number, to?:number}} [opts]
+ * @param {(bone:object, t:number) => (number[]|object)} matrixOf 世界矩阵提供者
+ * @returns {object|null} 导出包；doc 为空 / matrixOf 不是函数时 null
+ */
+export function buildBonesBundle(doc, opts, matrixOf) {
+    if (!doc || typeof doc !== 'object' || typeof matrixOf !== 'function') return null;
+    const bones = boneObjectsOf(doc);
+    if (!bones.length) return null;
+    const o = opts && typeof opts === 'object' ? opts : {};
+    const docFps = Number(doc.fps);
+    const fpsRaw = Number(o.fps);
+    const fps = Math.max(1, Math.min(60, Math.round(Number.isFinite(fpsRaw) && fpsRaw > 0 ? fpsRaw : (Number.isFinite(docFps) && docFps > 0 ? docFps : 12))));
+    const fromRaw = Number(o.from);
+    const from = Number.isFinite(fromRaw) && fromRaw >= 0 ? fromRaw : 0;
+    const total = docDuration(doc);
+    const toRaw = Number(o.to);
+    const to = Number.isFinite(toRaw) && toRaw > from ? toRaw : (total > from ? total : from + 1 / fps);
+    const frames = Math.max(1, Math.round((to - from) * fps));
+    const byId = new Map((Array.isArray(doc.objects) ? doc.objects : []).map((el) => [el && el.id, el]));
+    const tracks = bones.map((info) => {
+        const el = byId.get(info.id);
+        const list = [];
+        for (let i = 0; i < frames; i += 1) {
+            const t = from + i / fps;
+            const m = el ? tupleOfMatrix(matrixOf(el, t)) : null;
+            list.push({ t: Math.round(t * 1e6) / 1e6, m: m });
+        }
+        return {
+            id: info.id,
+            name: info.name,
+            parentId: info.parentId,
+            parentName: info.parentName,
+            len: info.len,
+            width: info.width,
+            frames: list,
+        };
+    });
+    return {
+        format: BONES_FORMAT,
+        version: BONES_VERSION,
+        app: 'motionstudio',
+        width: Math.max(1, Math.round(Number(doc.width) || 1)),
+        height: Math.max(1, Math.round(Number(doc.height) || 1)),
+        fps: fps,
+        from: from,
+        to: to,
+        frames: frames,
+        bones: tracks,
+    };
+}

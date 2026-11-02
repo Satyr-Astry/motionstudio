@@ -27,6 +27,8 @@ export default {
         'cmd.file.exportClip': 'Copy current frame to clipboard',
         'cmd.file.exportSheet': 'Export sprite sheet…',
         'cmd.file.exportVideo': 'Export WebM video',
+        'cmd.file.exportBones': 'Export bone animation JSON',
+        'cmd.file.exportBones.hint': 'Every bone, every frame: world matrices (incl. parent-chain time and IK) as one JSON an engine can play; does not change the .msp format',
 
         'cmd.edit.undo': 'Undo',
         'cmd.edit.redo': 'Redo',
@@ -135,6 +137,8 @@ export default {
         'cmd.file.exportClip': '复制当前帧到剪贴板',
         'cmd.file.exportSheet': '导出精灵图…',
         'cmd.file.exportVideo': '导出 WebM 视频',
+        'cmd.file.exportBones': '导出骨骼动画 JSON',
+        'cmd.file.exportBones.hint': '每根骨每帧的世界矩阵（含父链时间与 IK 解算）打包成一个引擎能播的 JSON；不改 .msp 格式',
 
         'cmd.edit.undo': '撤销',
         'cmd.edit.redo': '重做',

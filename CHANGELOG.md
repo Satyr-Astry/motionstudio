@@ -1,4 +1,41 @@
-## v0.9.0 — 2026-11-03 · 骨骼更好找：一键建骨 + 骨骼行一眼可辨
+## v0.10.0 — 2026-11-03 · 骨骼动画导出给引擎：每骨每帧矩阵 JSON（P4）
+
+「骨骼三块」的最后一块。前两块（一键建骨 / 骨骼行视觉）随 `0.9.0` 发出；这一版把骨骼动画**变成引擎能直接播的数据**。
+
+### 导出什么
+
+命令面板新增 **「导出骨骼动画 JSON」**（`file.export-bones`），输出：
+
+```json
+{ "format": "motionstudio-bones", "version": 1, "app": "motionstudio",
+  "width": 900, "height": 640, "fps": 12, "from": 0, "to": 3, "frames": 36,
+  "bones": [
+    { "id": "obj-3", "name": "Root", "parentId": "", "parentName": "",
+      "len": 120, "width": 14,
+      "frames": [ { "t": 0, "m": [a,b,c,d,e,f] }, … ] } ] }
+```
+
+- `m` 是 **Canvas 2D `setTransform` 顺序**的六元组世界矩阵（`a,b,c,d,e,f`），引擎侧可直接用；
+- 矩阵来自求值器 `evaluatorFor(doc).matrix(el, t)`：**父链时间通道、绑定后的父子关系、IK 解算结果**都算进去了，与画布逐帧一致 —— 不是只读关键帧；
+- 每根骨附带 `len` / `width` / `parentId` / `parentName`，引擎侧不用二次查表；
+- 某一帧拿不到矩阵时该帧 `m = null`（不编单位矩阵 —— 那会让引擎静默画出错误姿态）。
+
+### 怎么实现（可测的部分在 core）
+
+- `core/skin.mjs` 新增纯函数 `boneObjectsOf(doc)` / `buildBonesBundle(doc, opts, matrixOf)` 与常量 `BONES_FORMAT` / `BONES_VERSION`：只做「取哪些骨、按什么频率采样、矩阵怎么摊平」，世界矩阵由调用方注入（外壳传 evaluator）—— 因此可以直接在 Node 里用假矩阵把帧数、采样点、父级映射、坏矩阵 `null` 全钉住。
+- `project-io.mjs` 新增 `exportBonesJson(opts)`：落盘走既有 `ipc.saveBinaryChecked`（浏览器里自动变下载），空文档 / 无骨 / 无求值器 / 取消 / 失败各有可分辨提示。
+- **不改 `.msp`**：这是附加交付物，动画本体仍全部存在关键帧里，存档仍是 v4（不需要升版，也没有兼容风险）。
+
+### 验证
+
+`npm test` **1724 / 1717 pass / 7 skipped / 0 fail**（120 个测试文件；+4 条新断言）；`npm run check` 五道门全绿（静态 105 模块 0/0/0 · 语法 109/109 · 分层 0 违规 · 文档基线一致 · 本地化 129 条待迁未增加、词典 1486/1486 镜面）；`npm run smoke` 15/15 编辑器、`PROBLEMS []`。
+
+### 需要知道的
+
+- 采样是**固定 fps 等距**（默认文档帧率，1–60 可传 `opts.fps`）；动画若用了分段帧率（VFR），导出统一按导出 fps 重采样 —— 与「导出视频/精灵图」同一口径。
+- 不导出蒙皮权重、也不导出骨骼颜色/外观：引擎侧的蒙皮通常自己绑；这份 JSON 只回答「每根骨在每一帧的世界变换」。
+- 不做 Spine / DragonBones 导入导出（方案 §7 明确不做）；引擎互操作只做到「矩阵 JSON 交付」这一层。
+
 
 用户把「骨骼动画提上日程」的范围点成三块（P4 互操作 / 入口引导 / 骨骼专用轨），这一版先做**入口引导 + 骨骼专用视觉**；P4 引擎互操作留到下一版。
 
