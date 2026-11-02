@@ -47,6 +47,14 @@ export const CONCEPT_ITEMS = [
                 get name() { return t('help.concept.timeChannel.name'); },
                 get desc() { return t('help.concept.timeChannel.desc'); },
             },
+            {
+                get name() { return t('help.concept.bone.name'); },
+                get desc() { return t('help.concept.bone.desc'); },
+            },
+            {
+                get name() { return t('help.concept.ik.name'); },
+                get desc() { return t('help.concept.ik.desc'); },
+            },
         ],
     },
 ];

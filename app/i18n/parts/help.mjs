@@ -17,6 +17,10 @@ export default {
         'help.concept.keyframe.desc': 'Position, scale, rotation, opacity and mesh warp. Interpolated continuously in time, so there is a transition in between. Dragging a handle or typing a value sets a key automatically.',
         'help.concept.timeChannel.name': 'Time channel',
         'help.concept.timeChannel.desc': 'The clock of the object itself. Offset, scale and loop it to play the same animation at a different rhythm; applied to a parent it is inherited by the whole subtree.',
+        'help.concept.bone.name': 'Bone',
+        'help.concept.bone.desc': 'A bone is an ordinary object with no texture. Chain them through parent links and rotating a parent swings the whole chain — that is skeletal animation. Add one from the command palette.',
+        'help.concept.ik.name': 'IK (inverse kinematics)',
+        'help.concept.ik.desc': 'Give the last bone of a chain a target object and the chain bends to reach it. The solve only feeds the render matrices and never writes back to keyframes, so the properties panel shows the keyed value while the canvas shows the solved pose.',
 
         'help.shortcut.file.title': 'File',
         'help.shortcut.file.saveToLibrary.name': 'Save to project library',
@@ -128,6 +132,10 @@ export default {
         'help.concept.keyframe.desc': '位置、缩放、旋转、不透明度、网格变形。时间上连续插值，中间有过渡。拖手柄或改数值就会自动打帧。',
         'help.concept.timeChannel.name': '时间通道',
         'help.concept.timeChannel.desc': '对象自己的时间。可偏移、缩放、循环，让同一个动画用不同节奏播；套到父对象上会传给整棵子树。',
+        'help.concept.bone.name': '骨骼',
+        'help.concept.bone.desc': '骨头是没有纹理的普通对象。用父子关系连成链，旋转父骨就甩动整条链 —— 这就是骨架动画。命令面板里可以新建骨骼。',
+        'help.concept.ik.name': 'IK（反向动力学）',
+        'help.concept.ik.desc': '给链尾那根骨指定一个目标对象，链就会弯过去够它。解算只进渲染矩阵、不回写关键帧，所以属性面板显示关键帧值、画布显示解算后的姿态。',
 
         'help.shortcut.file.title': '文件',
         'help.shortcut.file.saveToLibrary.name': '保存到项目库',

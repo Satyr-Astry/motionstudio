@@ -209,7 +209,7 @@ test('数据源形状：概念段与曲线提示是 { name, desc }，mount 才�
 
 test('域计数守卫：帮助面板的四段都还在（被人删空要在这里响）', () => {
     const count = (prefix) => partKeys.filter((k) => k.startsWith(prefix)).length;
-    assert.equal(count('help.concept.'), 7, '概念段：1 个标题 + 3 行 × (名 + 说明)');
+    assert.equal(count('help.concept.'), 11, '概念段：1 个标题 + 5 行 × (名 + 说明)（纹理 / 关键帧 / 时间通道 / 骨骼 / IK）');
     assert.equal(count('help.curve.'), 11, '曲线提示：1 个标题 + 5 条 × (名 + 说明)');
     assert.equal(count('help.legend.'), 4, '图例：2 条 × (名 + 说明)');
     assert.ok(count('help.shortcut.') >= 70, '键位表是主体，不该少于 70 条：' + count('help.shortcut.'));
