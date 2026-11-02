@@ -29,6 +29,18 @@ import { createContextMenu, createKeys, snapOnNow } from './timeline-keys.mjs';
 // 纯函数与常量的对外引用面保持不变（测试与旧调用方仍从 timeline.mjs 取）。
 export * from './timeline-geo.mjs';
 
+/**
+ * 横向滚动的下一位置（纯函数，好测）。
+ *
+ * 夹在 0 以上：scrollLeft 本身也会夹，但先夹一次能让调用方拿到确定值，
+ * 也方便在 node 里单测（不依赖 DOM）。
+ */
+export function nextScrollLeft(current, delta) {
+    const cur = Number.isFinite(Number(current)) ? Number(current) : 0;
+    const d = Number.isFinite(Number(delta)) ? Number(delta) : 0;
+    return Math.max(0, cur + d);
+}
+
 /* ─────────────────────────── 面板 ─────────────────────────── */
 
 export function mount(el, ctx) {
@@ -430,7 +442,26 @@ export function mount(el, ctx) {
     }
 
     /** Ctrl+滚轮：以指针所在的时刻为锚点缩放（缩放前后那一刻停在原地）。 */
+    /**
+     * 滚轮：
+     *   · `Shift + 滚轮` → 横向滚动（片子长于视口时，缩放解决不了「往后翻」）
+     *   · `Ctrl / Cmd + 滚轮` → 以指针那一刻为锚缩放（见下）
+     *   · 其它 → 不管，留给外层（页面滚动 / 区域滚动）
+     *
+     * 组合键判定要**互斥**：Shift 优先，否则按住 Shift 再滚会被当成缩放。
+     */
     function onWheelZoom(e) {
+        if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
+            const box = view.rows;
+            if (!box) return;
+            // 竖滚轮在 Shift 下也当横向用（鼠标用户只有 deltaY）；触控板可能直接给 deltaX
+            const delta = Number(e.deltaX) !== 0 ? Number(e.deltaX) : Number(e.deltaY);
+            if (!delta) return;
+            if (typeof e.preventDefault === 'function') e.preventDefault();
+            box.scrollLeft = nextScrollLeft(box.scrollLeft, delta);
+            syncRulerScroll(view);
+            return;
+        }
         if (!(e.ctrlKey || e.metaKey)) return;
         const doc = docNow();
         if (!doc) return;

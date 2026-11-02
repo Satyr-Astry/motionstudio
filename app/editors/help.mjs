@@ -117,6 +117,11 @@ export const SHORTCUT_GROUPS = [
                 get keys() { return t('help.shortcut.time.zoomTimeline.keys'); },
                 get name() { return t('help.shortcut.time.zoomTimeline.name'); },
             },
+            {
+                icon: 'grid',
+                get keys() { return t('help.shortcut.time.scrollTimeline.keys'); },
+                get name() { return t('help.shortcut.time.scrollTimeline.name'); },
+            },
         ],
     },
     {

@@ -1698,6 +1698,11 @@ function importSummary(report) {
         }
         if (r.hidden) msg += t('shell.importResult.hidden', { n: r.hidden });
     }
+    // 位图：超大图会跳过自动裁边（IMAGE_TRIM_MAX_PIXELS）。这件事以前完全静默，
+    // 用户只会看到「导入后四周空白特别多」，不知道为什么。
+    if (r.kind === 'image' && r.trimSkipped === 'big') {
+        msg += t('shell.importResult.trimBig', { w: r.width, h: r.height });
+    }
     return msg;
 }
 

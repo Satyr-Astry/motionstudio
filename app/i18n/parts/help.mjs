@@ -45,6 +45,8 @@ export default {
         'help.shortcut.time.nudgeFrame.name': 'Nudge one frame (1/fps)',
         'help.shortcut.time.zoomTimeline.name': 'Timeline zoom (anchored at the pointer)',
         'help.shortcut.time.zoomTimeline.keys': 'Ctrl+wheel',
+        'help.shortcut.time.scrollTimeline.name': 'Timeline horizontal scroll',
+        'help.shortcut.time.scrollTimeline.keys': 'Shift+wheel',
 
         'help.shortcut.keyframe.title': 'Keyframes',
         'help.shortcut.keyframe.prevKey.name': 'Previous keyframe',
@@ -160,6 +162,8 @@ export default {
         'help.shortcut.time.nudgeFrame.name': '逐帧微调（1/fps）',
         'help.shortcut.time.zoomTimeline.name': '时间轴缩放（以指针为锚）',
         'help.shortcut.time.zoomTimeline.keys': 'Ctrl+滚轮',
+        'help.shortcut.time.scrollTimeline.name': '时间轴横向滚动',
+        'help.shortcut.time.scrollTimeline.keys': 'Shift+滚轮',
 
         'help.shortcut.keyframe.title': '关键帧',
         'help.shortcut.keyframe.prevKey.name': '上一个关键帧',
