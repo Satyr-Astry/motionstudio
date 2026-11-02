@@ -29,7 +29,7 @@ import {
     clamp, fmt2, fmtVal, totalSeconds, computeRange, xToT, yToV,
     hitTest as geoHitTest, pickInRect, dragKeyTo, dragHandleTo, selectionIndexes,
     channelKeysOf, writeModeOf, occupiedAt, isChannelField, dragChannelKeyTo, dragChannelHandleTo, autoTangentsChannel,
-    effectChannelId, isEffectChannelId, channelMetaOf, sampleChannel,
+    effectChannelId, effectChannelEntries, isEffectChannelId, channelMetaOf, sampleChannel,
 } from './curve-geo.mjs';
 import { resizeCanvas, beginFrame, paintCanvas } from './curve-draw.mjs';
 // 本模块里 `t` 到处是「时刻」的局部变量（`const t = xToT(geo, x)`），所以翻译函数改名 tr。
@@ -117,8 +117,8 @@ export function toggleFold(folded) {
 
 /* ─────────────────── 效果参数 → 曲线通道（适配器） ─────────────────── */
 
-/** 效果参数通道的配色：与曲线/时间轴的通道色同一套视觉语言（互相不撞色）。 */
-export const EFFECT_CURVE_COLORS = Object.freeze(['#e0556b', '#59a86a', '#4a7dff', '#8a6ce0', '#d08a3a', '#3aa8a0', '#a0559a', '#9aa1ac']);
+// 配色与「摊平/取时刻」的纯函数都在 curve-geo（时间轴也要用同一套顺序与颜色）
+export { EFFECT_CURVE_COLORS } from './curve-geo.mjs';
 
 /**
  * 把对象的效果参数轨道摊平成曲线编辑器认的「通道视图」（纯函数，Node 可测）。
@@ -127,7 +127,7 @@ export const EFFECT_CURVE_COLORS = Object.freeze(['#e0556b', '#59a86a', '#4a7dff
  *   - 只有**已经打过帧**的参数才出现（`fx.tracks[param].keys` 非空）——没帧的参数没有曲线可画，
  *     用户先在属性面板按 ◆ 建第一帧；
  *   - 通道 id = `fx.<效果id>.<参数名>`（同类效果可以挂多条，必须带实例 id 而不是类型）；
- *   - 颜色按「出现顺序」从 `EFFECT_CURVE_COLORS` 轮转，同一对象内不重复；
+ *   - 颜色/顺序来自 `effectChannelEntries`（与时间轴通道键同源，两边同色）；
  *   - 标签 = `效果名 · 参数名`，量程取效果定义里的 `min/max`（曲线纵轴用）。
  *
  * @param {object|null} layer 文档对象
@@ -141,45 +141,32 @@ export function buildCurveModel(layer, defs, tr) {
         : { keys: [] };
     const effects = Array.isArray(layer && layer.effects) ? layer.effects : [];
     if (!effects.length) return base;
-    const list = Array.isArray(defs) ? defs : [];
     const say = typeof tr === 'function' ? tr : (key) => String(key);
+    const entries = effectChannelEntries(effects, defs);
+    if (!entries.length) return base;
     const channels = Object.assign({}, base.channels || {});
     const channelMeta = {};
     const effectGroups = [];
-    let colorIdx = 0;
-    for (const fx of effects) {
-        if (!fx || !fx.id) continue;
-        const def = list.find((d) => d.id === fx.type);
-        if (!def) continue;
-        const rows = [];
-        for (const p of def.params) {
-            if (p.color) continue;   // 颜色参数不是标量，画不成曲线
-            const trk = fx.tracks && fx.tracks[p.key];
-            const keys = trk && Array.isArray(trk.keys) ? trk.keys : [];
-            if (!keys.length) continue;   // 没打过帧的参数不出现（先在属性面板建第一帧）
-            const id = effectChannelId(fx.id, p.key);
-            channels[id] = {
-                // 形状与通道轨道一致：值摊平成 value（写回时再包回 state.x）
-                keys: keys.map((k) => ({
-                    t: k.t, ease: k.ease, h1: k.h1, h2: k.h2,
-                    value: Number(k && k.state ? k.state.x : 0) || 0,
-                })),
-            };
-            const color = EFFECT_CURVE_COLORS[colorIdx++ % EFFECT_CURVE_COLORS.length];
-            channelMeta[id] = {
-                fxId: fx.id,
-                key: p.key,
-                label: say(def.nameKey) + ' · ' + say(p.labelKey),
-                short: say(p.labelKey),
-                color: color,
-                min: Number(p.min),
-                max: Number(p.max),
-            };
-            rows.push({ id: id, label: channelMeta[id].label, short: channelMeta[id].short, color: color });
+    const groupIndex = new Map();   // fxId → effectGroups 下标（同一效果一条分组）
+    for (const entry of entries) {
+        channels[entry.id] = { keys: entry.keys };
+        const label = say(entry.def.nameKey) + ' · ' + say(entry.param.labelKey);
+        channelMeta[entry.id] = {
+            fxId: entry.fxId,
+            key: entry.key,
+            label: label,
+            short: say(entry.param.labelKey),
+            color: entry.color,
+            min: Number(entry.param.min),
+            max: Number(entry.param.max),
+        };
+        let g = groupIndex.get(entry.fxId);
+        if (g == null) {
+            g = effectGroups.length;
+            groupIndex.set(entry.fxId, g);
+            effectGroups.push({ title: say('curve.group.effect', { name: say(entry.def.nameKey) }), list: [] });
         }
-        if (rows.length) {
-            effectGroups.push({ title: say('curve.group.effect', { name: say(def.nameKey) }), list: rows });
-        }
+        effectGroups[g].list.push({ id: entry.id, label: label, short: channelMeta[entry.id].short, color: entry.color });
     }
     return Object.assign({}, base, { channels: channels, channelMeta: channelMeta, effectGroups: effectGroups });
 }

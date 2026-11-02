@@ -22,7 +22,9 @@ import { formatSpeed, modeInfo } from '../core/playback.mjs';
 // 图例的唯一数据源在 help.mjs：设置里的「图例」分组与这个浮层读同一份，不再各写一套
 import { LEGEND_ITEMS } from './help.mjs';
 // B1：独立通道键的配色与曲线区共用同一张色表（channelColorOf）
-import { channelColorOf } from './curve-geo.mjs';
+import { channelColorOf, effectChannelEntries, effectKeyTimes } from './curve-geo.mjs';
+// 效果参数通道的关键帧也要画进时间轴（与曲线 0.7.0 的通道同源）
+import { EFFECT_DEFS } from '../paint/effects.mjs';
 import { celTimes, docDuration, objectById, objectsOf } from '../core/doc-model.mjs';
 import {
     CUR_EPS_PX,
@@ -801,7 +803,15 @@ export function paintTracks(view, frame) {
         // 通道独立轨道的键：曲线区给某通道单独打点时，这里也要看得见，
         // 否则那些点只活在曲线面板里、时间轴一片空白。
         // 与共用键重合的时刻不再画（会和蓝菱形叠在一起），只在「独立出来的时刻」出现。
-        const chPoints = channelKeyTimes(trackOf(obj), keys);
+        // 效果参数通道（`0.7.0` 起进曲线）的关键帧也按同样方式出现在这里 ——
+        // 否则效果动画只在曲线里可见，时间轴看起来像「什么都没发生」。
+        const fxEntries = effectChannelEntries(obj.effects, EFFECT_DEFS);
+        const fxColor = new Map(fxEntries.map((e) => [e.id, e.color]));
+        const fxLabel = new Map(fxEntries.map((e) => [e.id, t(e.def.nameKey) + ' ' + t(e.param.labelKey)]));
+        const chPoints = mergeChannelPoints(
+            channelKeyTimes(trackOf(obj), keys),
+            effectKeyTimes(obj.effects, EFFECT_DEFS)
+        );
         while (ref.chKfs.length < chPoints.length) {
             const node = makeKfNode(ref.id);
             node.classList.add('is-ch');
@@ -825,17 +835,46 @@ export function paintTracks(view, frame) {
             // B1：**按通道上色**。时间轴上「只在某通道单独打的键」与共用关键帧都是菱形，
             // 以前两者都是同一个空心 accent 色，看不出这颗属于哪个通道；现在与曲线同色，
             // 多通道合并的那颗用第一个通道的颜色（title 里列全部字段）。
-            const chColor = channelColorOf(p.fields[0]);
+            const chColor = fxColor.get(p.fields[0]) || channelColorOf(p.fields[0]);
             if (node.style && typeof node.style.setProperty === 'function') {
                 node.style.setProperty('--ch', chColor);
             }
             node.classList.toggle('is-sel',
                 !!selKey && selKey.layerId === ref.id && Math.abs(selKey.t - p.t) <= T_EPS);
             node.classList.toggle('is-sel2', false); // 通道键不参与多选集合，别残留上一帧的类
-            const tip2 = t('timeline.tip.channelKey', { t: p.t.toFixed(3), fields: p.fields.join(' / ') });
+            const labels = p.fields.map((id) => fxLabel.get(id) || id).join(' / ');
+            const tip2 = t('timeline.tip.channelKey', { t: p.t.toFixed(3), fields: labels });
             if (node.title !== tip2) node.title = tip2;
         });
     }
+}
+
+/**
+ * 合并两组通道键时刻（变换通道 + 效果参数通道）：同一时刻合并成一条（字段去重），
+ * 按时间升序。两条来源各自已经升序，这里只做「按 1e-6 对齐的并集」。
+ *
+ * @param {{t:number, fields:string[]}[]} a
+ * @param {{t:number, fields:string[]}[]} b
+ * @returns {{t:number, fields:string[]}[]}
+ */
+export function mergeChannelPoints(a, b) {
+    const byT = new Map();
+    const push = (list) => {
+        for (const p of Array.isArray(list) ? list : []) {
+            const t = Number(p && p.t);
+            if (!Number.isFinite(t)) continue;
+            const sig = Math.round(t * 1e6);
+            const hit = byT.get(sig);
+            if (!hit) {
+                byT.set(sig, { t: t, fields: Array.from(new Set(p.fields || [])) });
+                continue;
+            }
+            for (const f of p.fields || []) if (!hit.fields.includes(f)) hit.fields.push(f);
+        }
+    };
+    push(a);
+    push(b);
+    return Array.from(byT.values()).sort((x, y) => x.t - y.t);
 }
 
 /**

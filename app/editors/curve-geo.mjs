@@ -213,6 +213,84 @@ export function isEffectChannelId(id) {
 }
 
 /**
+ * 效果参数通道的配色：曲线通道面板、时间轴的通道键图例共用同一套（互相不撞色）。
+ * 定义放在这里而不是 curve.mjs，是因为时间轴也要按同一顺序取色 —— 颜色一旦分两处维护，
+ * 同一个参数在曲线里和硬件轴里的颜色迟早不一样。
+ */
+export const EFFECT_CURVE_COLORS = Object.freeze(['#e0556b', '#59a86a', '#4a7dff', '#8a6ce0', '#d08a3a', '#3aa8a0', '#a0559a', '#9aa1ac']);
+
+/**
+ * 把对象的效果参数轨道摊平成有序的通道条目（纯函数，曲线与时间轴共用）。
+ *
+ * 只收**已经打过帧**的参数：没帧的参数没有曲线可画，用户先在属性面板按 ◆ 建第一帧。
+ * 顺序即颜色分配顺序（`EFFECT_CURVE_COLORS` 轮转），所以曲线通道面板与时间轴通道键
+ * 天然同色同序 —— 两边都从这里取，不各算一遍。
+ *
+ * @param {object[]|null} effects `layer.effects`
+ * @param {ReadonlyArray<object>} defs `EFFECT_DEFS`
+ * @returns {{id:string, fxId:string, key:string, color:string, def:object, param:object,
+ *            keys:{t:number,ease:string,h1:number[],h2:number[],value:number}[]}[]}
+ */
+export function effectChannelEntries(effects, defs) {
+    const list = Array.isArray(effects) ? effects : [];
+    const pool = Array.isArray(defs) ? defs : [];
+    const out = [];
+    let colorIdx = 0;
+    for (const fx of list) {
+        if (!fx || !fx.id) continue;
+        const def = pool.find((d) => d.id === fx.type);
+        if (!def) continue;
+        for (const p of def.params) {
+            if (p.color) continue;   // 颜色参数不是标量，画不成曲线 / 通道键
+            const trk = fx.tracks && fx.tracks[p.key];
+            const keys = trk && Array.isArray(trk.keys) ? trk.keys : [];
+            if (!keys.length) continue;
+            out.push({
+                id: effectChannelId(fx.id, p.key),
+                fxId: fx.id,
+                key: p.key,
+                color: EFFECT_CURVE_COLORS[colorIdx++ % EFFECT_CURVE_COLORS.length],
+                def: def,
+                param: p,
+                keys: keys.map((k) => ({
+                    t: k.t,
+                    ease: k.ease,
+                    h1: k.h1,
+                    h2: k.h2,
+                    value: Number(k && k.state ? k.state.x : 0) || 0,
+                })),
+            });
+        }
+    }
+    return out;
+}
+
+/**
+ * 效果参数的关键帧时刻（时间轴的通道键）：同一时刻的多个参数合并成一条，
+ * 返回 `[{ t, fields: [channelId...] }]` 按时间升序 —— 与 `channelKeyTimes` 同一形状，
+ * 时间轴把两者合并渲染即可。
+ *
+ * @param {object[]|null} effects `layer.effects`
+ * @param {ReadonlyArray<object>} defs `EFFECT_DEFS`
+ * @returns {{t:number, fields:string[]}[]}
+ */
+export function effectKeyTimes(effects, defs) {
+    const entries = effectChannelEntries(effects, defs);
+    const byT = new Map();
+    for (const entry of entries) {
+        for (const k of entry.keys) {
+            const t = Number(k && k.t);
+            if (!Number.isFinite(t)) continue;
+            const sig = Math.round(t * 1e6);
+            const hit = byT.get(sig);
+            if (hit) hit.fields.push(entry.id);
+            else byT.set(sig, { t: t, fields: [entry.id] });
+        }
+    }
+    return Array.from(byT.values()).sort((a, b) => a.t - b.t);
+}
+
+/**
  * warp 顶点通道没有独立轨道：TRACK_FIELDS 里没有它们，core 的 setChannelKey 会直接抛 TypeError。
  * 写盘前必须先分流，否则拖一个网格顶点就把编辑器打崩。
  * 效果参数通道（`fx.*`）也在这里放行：它们在适配器的 `track.channels` 里有条目，

@@ -174,8 +174,8 @@ test('channelColorOf：8 条标量通道各有稳定颜色，未知通道退回�
 test('时间轴独立通道键按通道上色 + 图例解释空心菱形（接线守卫）', async () => {
     const { LEGEND_ITEMS } = await import('../app/editors/help.mjs');
     const paint = read('../app/editors/timeline-paint.mjs');
-    // 色来自同一张表，不许在时间轴里另写一份色值
-    assert.match(paint, /import \{ channelColorOf \} from '\.\/curve-geo\.mjs'/);
+    // 色来自同一张表，不许在时间轴里另写一份色值（0.8.0 起同时取效果通道条目与时刻）
+    assert.match(paint, /import \{ channelColorOf, effectChannelEntries, effectKeyTimes \} from '\.\/curve-geo\.mjs'/);
     assert.match(paint, /node\.style\.setProperty\('--ch', chColor\)/, '通道键必须把 --ch 设成通道色');
     assert.match(paint, /channelColorOf\(p\.fields\[0\]\)/, '多通道合并的键按第一个通道上色');
     // 图例里有一条「通道键」，否则用户不知道空心菱形是什么
@@ -278,4 +278,69 @@ test('curve.mjs 接线：效果通道走适配器（读在 buildCurveModel、写
     assert.match(src, /function effectSigOf\(layer\)/);
     // 效果参数没有「回到共用」：菜单项对效果通道隐藏
     assert.match(src, /if \(solo && !isEffectChannelId\(focus\)\) m\.appendChild\(soloItem/);
+});
+
+/* ─────────── 时间轴效果键：与曲线同源（entries / keyTimes / merge） ─────────── */
+
+test('effectChannelEntries：顺序与颜色和 buildCurveModel 完全一致（两边同色同序）', async () => {
+    const { effectChannelEntries } = await import('../app/editors/curve-geo.mjs');
+    const layer = fxLayer();
+    // 再加一条有轨道的参数，验证「顺序即颜色」
+    layer.effects[0].tracks.brightness = undefined;
+    layer.effects.push({
+        id: 'fx-3',
+        type: 'adjust',
+        tracks: {
+            brightness: { keys: [{ t: 0.25, ease: 'linear', h1: [0.3, 0], h2: [0.7, 1], state: { x: 1.2 } }] },
+            hue: { keys: [{ t: 0.75, ease: 'linear', h1: [0.3, 0], h2: [0.7, 1], state: { x: 45 } }] },
+        },
+    });
+    const entries = effectChannelEntries(layer.effects, EFFECT_DEFS);
+    const model = buildCurveModel(layer, EFFECT_DEFS, FX_TR);
+    assert.deepEqual(entries.map((e) => e.id), ['fx.fx-1.amount', 'fx.fx-3.brightness', 'fx.fx-3.hue']);
+    for (const e of entries) {
+        assert.equal(model.channelMeta[e.id].color, e.color, e.id + ' 曲线与时间轴必须同色');
+        assert.deepEqual(model.channels[e.id].keys.map((k) => k.value), e.keys.map((k) => k.value), '值同源');
+    }
+    // 同一效果的两个参数共享一个分组
+    assert.equal(model.effectGroups.length, 2);
+    assert.deepEqual(model.effectGroups[1].list.map((c) => c.id), ['fx.fx-3.brightness', 'fx.fx-3.hue']);
+});
+
+test('effectKeyTimes：同刻多参数合并成一条，按时间升序；没轨道的参数不出现', async () => {
+    const { effectKeyTimes } = await import('../app/editors/curve-geo.mjs');
+    const layer = fxLayer();
+    layer.effects[0].tracks.amount.keys.push({ t: 0.5, ease: 'linear', h1: [0.3, 0], h2: [0.7, 1], state: { x: 5 } });
+    layer.effects[0].tracks.dx = { keys: [{ t: 0.5, ease: 'linear', h1: [0.3, 0], h2: [0.7, 1], state: { x: 3 } }] };
+    // blur 没有 dx 参数：上面那条是脏数据，应被无视（只认 def.params）
+    layer.effects.push({ id: 'fx-4', type: 'glow', tracks: { amount: { keys: [{ t: 2, ease: 'linear', h1: [0.3, 0], h2: [0.7, 1], state: { x: 1 } }] } } });
+    const points = effectKeyTimes(layer.effects, EFFECT_DEFS);
+    assert.deepEqual(points.map((p) => p.t), [0, 0.5, 1, 2], '按时间升序、同刻一条');
+    const at05 = points.find((p) => p.t === 0.5);
+    assert.deepEqual(at05.fields, ['fx.fx-1.amount'], '脏字段被忽略，只剩真正参数');
+    assert.deepEqual(effectKeyTimes([], EFFECT_DEFS), []);
+    assert.deepEqual(effectKeyTimes(null, EFFECT_DEFS), []);
+});
+
+test('mergeChannelPoints：两组时刻按 1e-6 对齐合并、字段去重、升序', async () => {
+    const { mergeChannelPoints } = await import('../app/editors/timeline-paint.mjs');
+    const a = [{ t: 0, fields: ['rotate'] }, { t: 1, fields: ['x'] }];
+    const b = [{ t: 0.0000001, fields: ['fx.fx-1.amount'] }, { t: 2, fields: ['fx.fx-2.amount'] }];
+    const out = mergeChannelPoints(a, b);
+    assert.deepEqual(out.map((p) => p.t), [0, 1, 2]);
+    assert.deepEqual(out[0].fields, ['rotate', 'fx.fx-1.amount'], '同刻合并（按 1e-6 对齐）');
+    // 重复字段不重复出现
+    const dup = mergeChannelPoints([{ t: 0, fields: ['x'] }], [{ t: 0, fields: ['x', 'y'] }]);
+    assert.deepEqual(dup[0].fields, ['x', 'y']);
+    assert.deepEqual(mergeChannelPoints([], []), []);
+    assert.deepEqual(mergeChannelPoints(null, undefined), []);
+});
+
+test('时间轴接线：效果键来自 curve-geo（同源）并合并进通道键渲染', () => {
+    const src = read('../app/editors/timeline-paint.mjs');
+    assert.match(src, /effectChannelEntries\(obj\.effects, EFFECT_DEFS\)/);
+    assert.match(src, /effectKeyTimes\(obj\.effects, EFFECT_DEFS\)/);
+    assert.match(src, /mergeChannelPoints\(\s*channelKeyTimes\(trackOf\(obj\), keys\)/, '变换通道键与效果键必须合并渲染');
+    assert.match(src, /fxColor\.get\(p\.fields\[0\]\) \|\| channelColorOf\(p\.fields\[0\]\)/, '效果键按同源色表上色');
+    assert.match(src, /fxLabel\.get\(id\) \|\| id/, 'tooltip 用可读名而不是 fx.* id');
 });
