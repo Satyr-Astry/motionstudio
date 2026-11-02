@@ -17,17 +17,19 @@
 
 import {
     stateAt, addKey, removeKey, setKeyEase, autoTangents as applyAutoTangents,
-    channelOf, clearChannel, setChannelKey, removeChannelKey, setChannelKeyEase,
+    channelOf, clearChannel, setChannelKey, removeChannelKey, setChannelKeyEase, TRACK_FIELDS,
 } from '../core/transform.mjs';
+import { EFFECT_DEFS } from '../paint/effects.mjs';
 import { icon } from '../core/icons.mjs';
 import { clickIntent } from '../core/selection.mjs';
 import { normalizeLattice, latticeIsZero } from '../core/lattice.mjs';
 import { patchLayer, layerById, celTimes, objectsOf } from '../core/cel.mjs';
 import {
-    PAD_L, PAD_R, PAD_T, PAD_B, EASE_LABEL, SCALAR_CHANNELS, ensureWarpChannels, warpChannels, chById, chValue,
+    PAD_L, PAD_R, PAD_T, PAD_B, EASE_LABEL, SCALAR_CHANNELS, ensureWarpChannels, warpChannels, chById,
     clamp, fmt2, fmtVal, totalSeconds, computeRange, xToT, yToV,
     hitTest as geoHitTest, pickInRect, dragKeyTo, dragHandleTo, selectionIndexes,
     channelKeysOf, writeModeOf, occupiedAt, isChannelField, dragChannelKeyTo, dragChannelHandleTo, autoTangentsChannel,
+    effectChannelId, isEffectChannelId, channelMetaOf, sampleChannel,
 } from './curve-geo.mjs';
 import { resizeCanvas, beginFrame, paintCanvas } from './curve-draw.mjs';
 // 本模块里 `t` 到处是「时刻」的局部变量（`const t = xToT(geo, x)`），所以翻译函数改名 tr。
@@ -53,7 +55,8 @@ import { hideTip, showTip } from './drag-tip.mjs';
  * @returns {{ch: string, t: number}|null} 不认识的通道或非法时刻一律 null
  */
 export function focusChannelTarget(chId, t) {
-    if (!chById(chId)) return null;
+    // 效果参数通道在模块级没有模型可查，只做形状校验（`fx.<id>.<param>`）
+    if (!chById(chId) && !isEffectChannelId(chId)) return null;
     // `Number(null)` / `Number('')` 都是 0：不挡掉的话「没给时刻」会被静默当成 0 s，
     // 播放头莫名跳到开头，比什么都不做还难查。
     if (t === null || t === undefined || t === '') return null;
@@ -72,7 +75,7 @@ export function focusChannelTarget(chId, t) {
  *
  * @param {string|null} focusId 当前聚焦通道 id
  * @param {Iterable<string>|null} refs 参考线通道 id（Set 或数组）
- * @param {(id: string) => string} nameOf 通道 id → 显示名（DOM 侧传 `chById(id).label`）
+ * @param {(id: string) => string} nameOf 通道 id → 显示名（DOM 侧传 `metaOf(id).label`）
  * @returns {{count: number, focusName: string, refNames: string[], ids: string[], text: string}}
  *   `count` = focus + refs 的去重总数；`text` 是给 UI 直接用的那一行（`count<=1` 时就是 focusName）。
  *   `text` 会走一次词典（`curve.fold.selected`），其余字段与语言无关。
@@ -110,6 +113,136 @@ export function foldSummary(focusId, refs, nameOf) {
  */
 export function toggleFold(folded) {
     return !folded;
+}
+
+/* ─────────────────── 效果参数 → 曲线通道（适配器） ─────────────────── */
+
+/** 效果参数通道的配色：与曲线/时间轴的通道色同一套视觉语言（互相不撞色）。 */
+export const EFFECT_CURVE_COLORS = Object.freeze(['#e0556b', '#59a86a', '#4a7dff', '#8a6ce0', '#d08a3a', '#3aa8a0', '#a0559a', '#9aa1ac']);
+
+/**
+ * 把对象的效果参数轨道摊平成曲线编辑器认的「通道视图」（纯函数，Node 可测）。
+ *
+ * 规则：
+ *   - 只有**已经打过帧**的参数才出现（`fx.tracks[param].keys` 非空）——没帧的参数没有曲线可画，
+ *     用户先在属性面板按 ◆ 建第一帧；
+ *   - 通道 id = `fx.<效果id>.<参数名>`（同类效果可以挂多条，必须带实例 id 而不是类型）；
+ *   - 颜色按「出现顺序」从 `EFFECT_CURVE_COLORS` 轮转，同一对象内不重复；
+ *   - 标签 = `效果名 · 参数名`，量程取效果定义里的 `min/max`（曲线纵轴用）。
+ *
+ * @param {object|null} layer 文档对象
+ * @param {ReadonlyArray<object>} defs `EFFECT_DEFS`
+ * @param {(key: string, vars?: object) => string} tr 取词函数
+ * @returns {object} 曲线轨道视图（`keys/channels/channelMeta/effectGroups`，与 transform 形状兼容）
+ */
+export function buildCurveModel(layer, defs, tr) {
+    const base = layer && layer.transform && Array.isArray(layer.transform.keys)
+        ? layer.transform
+        : { keys: [] };
+    const effects = Array.isArray(layer && layer.effects) ? layer.effects : [];
+    if (!effects.length) return base;
+    const list = Array.isArray(defs) ? defs : [];
+    const say = typeof tr === 'function' ? tr : (key) => String(key);
+    const channels = Object.assign({}, base.channels || {});
+    const channelMeta = {};
+    const effectGroups = [];
+    let colorIdx = 0;
+    for (const fx of effects) {
+        if (!fx || !fx.id) continue;
+        const def = list.find((d) => d.id === fx.type);
+        if (!def) continue;
+        const rows = [];
+        for (const p of def.params) {
+            if (p.color) continue;   // 颜色参数不是标量，画不成曲线
+            const trk = fx.tracks && fx.tracks[p.key];
+            const keys = trk && Array.isArray(trk.keys) ? trk.keys : [];
+            if (!keys.length) continue;   // 没打过帧的参数不出现（先在属性面板建第一帧）
+            const id = effectChannelId(fx.id, p.key);
+            channels[id] = {
+                // 形状与通道轨道一致：值摊平成 value（写回时再包回 state.x）
+                keys: keys.map((k) => ({
+                    t: k.t, ease: k.ease, h1: k.h1, h2: k.h2,
+                    value: Number(k && k.state ? k.state.x : 0) || 0,
+                })),
+            };
+            const color = EFFECT_CURVE_COLORS[colorIdx++ % EFFECT_CURVE_COLORS.length];
+            channelMeta[id] = {
+                fxId: fx.id,
+                key: p.key,
+                label: say(def.nameKey) + ' · ' + say(p.labelKey),
+                short: say(p.labelKey),
+                color: color,
+                min: Number(p.min),
+                max: Number(p.max),
+            };
+            rows.push({ id: id, label: channelMeta[id].label, short: channelMeta[id].short, color: color });
+        }
+        if (rows.length) {
+            effectGroups.push({ title: say('curve.group.effect', { name: say(def.nameKey) }), list: rows });
+        }
+    }
+    return Object.assign({}, base, { channels: channels, channelMeta: channelMeta, effectGroups: effectGroups });
+}
+
+/**
+ * 曲线轨道视图 → 文档补丁（纯函数，Node 可测）：`transform` 只留 TRACK_FIELDS 的通道，
+ * 效果参数通道写回对应 `effect.tracks[param]`（值包回 `state:{x}`）。
+ *
+ * 为什么必须拆：曲线里的「轨道」是读视图（效果通道被摊平成 value），
+ * 直接把它当 `transform` 落盘会把效果轨道塞进变换轨道，刷新一次就全丢。
+ *
+ * 返回的补丁可能只含 transform（没有效果变化时），调用方据此决定 effects 是否要一起写。
+ * 没有变化的参数不重建效果对象 —— 少一次无谓的结构变更，也就少一次「看起来什么都没改」的撤销。
+ *
+ * @param {object|null} layer 当前文档对象
+ * @param {object} model `buildCurveModel` 的产物（会被 mut 改过的新对象）
+ * @param {ReadonlyArray<object>} defs `EFFECT_DEFS`
+ * @returns {{transform:object, effects?:object[]}}
+ */
+export function splitCurveModel(layer, model, defs) {
+    const base = layer && layer.transform && typeof layer.transform === 'object' ? layer.transform : {};
+    const transform = Object.assign({}, base, { keys: model.keys });
+    const kept = {};
+    for (const f of TRACK_FIELDS) if (model.channels && model.channels[f]) kept[f] = model.channels[f];
+    if (Object.keys(kept).length) transform.channels = kept;
+    else delete transform.channels;
+
+    const effects = Array.isArray(layer && layer.effects) ? layer.effects : [];
+    const list = Array.isArray(defs) ? defs : [];
+    let effectsChanged = false;
+    const nextEffects = effects.map((fx) => {
+        if (!fx || !fx.id) return fx;
+        const def = list.find((d) => d.id === fx.type);
+        if (!def) return fx;
+        let nextFx = fx;
+        for (const p of def.params) {
+            if (p.color) continue;
+            const id = effectChannelId(fx.id, p.key);
+            const ch = model.channels ? model.channels[id] : null;
+            const keys = ch && Array.isArray(ch.keys) ? ch.keys : [];
+            const tracks = Object.assign({}, nextFx.tracks || {});
+            if (keys.length) {
+                tracks[p.key] = {
+                    keys: keys.map((k) => ({
+                        t: k.t,
+                        ease: k.ease,
+                        h1: k.h1,
+                        h2: k.h2,
+                        state: { x: Number(k.value) || 0 },
+                    })),
+                };
+            } else if (tracks[p.key]) {
+                delete tracks[p.key];
+            } else {
+                continue;   // 没有变化：别为一条没动过的参数造新对象
+            }
+            nextFx = Object.assign({}, nextFx, { tracks: Object.keys(tracks).length ? tracks : undefined });
+            if (!nextFx.tracks) delete nextFx.tracks;
+            effectsChanged = true;
+        }
+        return nextFx;
+    });
+    return effectsChanged ? { transform: transform, effects: nextEffects } : { transform: transform };
 }
 
 export function mount(el, ctx) {
@@ -287,16 +420,16 @@ export function mount(el, ctx) {
     /** 要画的通道：聚焦通道排第一（computeRange 拿第一个当 Y 轴刻度）。 */
     function shownNow() {
         const s = new Set();
-        if (chById(focus)) s.add(focus);
-        for (const id of refs) if (id !== focus && chById(id)) s.add(id);
+        if (metaOf(focus)) s.add(focus);
+        for (const id of refs) if (id !== focus && metaOf(id)) s.add(id);
         return s;
     }
 
     /** 命中/框选只认聚焦通道：参考线是给人看的，不承载编辑。 */
-    const focusOnly = () => new Set(chById(focus) ? [focus] : []);
+    const focusOnly = () => new Set(metaOf(focus) ? [focus] : []);
 
     function setFocus(id) {
-        if (!chById(id) || id === focus) return;
+        if (!metaOf(id) || id === focus) return;
         focus = id;
         refs.delete(id);
         // 选择属于「某个通道上的某个点」，换通道就清空：否则切线柄会画在看不见的曲线上
@@ -334,7 +467,7 @@ export function mount(el, ctx) {
         // 否则隐藏面板会跟着把播放头抢过去。
         if (typeof wrap.clientWidth === 'number' && wrap.clientWidth <= 0) return;
         if (!focusChannel(d.layerId, d.ch, d.t)) return;
-        const ch = chById(d.ch);
+        const ch = metaOf(d.ch);
         const name = ch ? ch.short : tr('curve.channelFallback');
         let msg = tr('curve.notify.located', { name, t: fmt2(d.t) });
         if (Number(d.count) > 1) msg += tr('curve.notify.locatedMulti', { n: d.count, name });
@@ -342,7 +475,7 @@ export function mount(el, ctx) {
     }
 
     function toggleRef(id) {
-        if (!chById(id) || id === focus) return;
+        if (!metaOf(id) || id === focus) return;
         if (refs.has(id)) refs.delete(id);
         else refs.add(id);
         syncPopRows();
@@ -365,8 +498,11 @@ export function mount(el, ctx) {
         };
         group(tr('curve.group.transform'), SCALAR_CHANNELS);
         group(tr('curve.group.warp'), warpChannels());
+        // 效果参数通道：每个效果一组（只有已打过帧的参数才会出现在模型里）
+        const model = trackOf(activeLayer(docOf()));
+        for (const g of model.effectGroups || []) group(g.title, g.list);
         syncPopRows();
-        syncPopValues(trackOf(activeLayer(docOf())));
+        syncPopValues(model);
         syncFold();
     }
 
@@ -414,8 +550,7 @@ export function mount(el, ctx) {
 
     /** 面板里每行右侧的当前值：通道一多，光看名字对不上哪条线。 */
     function syncPopValues(track) {
-        const st = stateAt(track, nowTime());
-        for (const [id, node] of popVals) node.textContent = fmtVal(id, chValue(st, id));
+        for (const [id, node] of popVals) node.textContent = fmtVal(id, sampleChannel(track, nowTime(), id));
     }
 
     function openPop() {
@@ -476,10 +611,46 @@ export function mount(el, ctx) {
         return list.find((l) => l.id === wanted) || list[0];
     }
 
+    /**
+     * 曲线编辑用的「轨道视图」：变换轨道的 keys/channels + **效果参数通道**（适配器）。
+     *
+     * 效果参数轨道住在 `layer.effects[].tracks[param]`，与通道轨道同形状（值在 `state.x`）。
+     * 这里把它们摊平成曲线认的通道格式，并挂上 `channelMeta`（标签/颜色/量程）。
+     * 只有**已有轨道**的参数才出现在曲线上 —— 没打过帧的参数没有曲线可画，
+     * 用户先在属性面板按 ◆ 建第一帧，通道随后出现在这里。
+     *
+     * 写回由 `writeTrack` 拆回 `transform` + `effects`（一次 setDoc = 一步撤销）。
+     */
+    let lastModel = { keys: [] };
+    /** 上次见到的效果轨道签名（见 `effectSigOf`）：变了就重算通道面板与焦点。 */
+    let lastFxSig = '';
+
     function trackOf(layer) {
-        if (!layer) return { keys: [] };
-        const trk = layer.transform;
-        return trk && Array.isArray(trk.keys) ? trk : { keys: [] };
+        const model = buildCurveModel(layer, EFFECT_DEFS, tr);
+        lastModel = model;
+        return model;
+    }
+
+    /** 效果轨道签名：效果增删 / 某参数建或删轨道时，通道面板与焦点要跟着重算。 */
+    function effectSigOf(layer) {
+        const effects = Array.isArray(layer && layer.effects) ? layer.effects : [];
+        return effects
+            .map((fx) => {
+                if (!fx || !fx.id) return '';
+                const t = fx.tracks || {};
+                return fx.id + ':' + Object.keys(t).map((k) => k + '#' + ((t[k] && t[k].keys) || []).length).join('+');
+            })
+            .join('|');
+    }
+
+    /** 通道元信息（变换/网格查固定表，效果参数查当前模型的 channelMeta）。 */
+    function metaOf(id) {
+        return channelMetaOf(lastModel, id);
+    }
+
+    /** 当前活动对象的曲线轨道视图（供各处读 meta/写回）。 */
+    function modelNow() {
+        return trackOf(activeLayer(docOf()));
     }
 
     /** 该通道是否已有独立轨道（= 不再跟随共用关键帧）。 */
@@ -500,13 +671,23 @@ export function mount(el, ctx) {
         const layer = activeLayer(doc);
         const track = trackOf(layer);
 
+        // 效果轨道变了（增/删效果、首次给参数打帧、清掉最后一条帧）→ 通道列表要重算；
+        // 焦点/参考线若指向已经不存在的效果通道，必须摘掉（否则画的是幽灵、写入会落空）。
+        const fxSig = effectSigOf(layer);
+        if (fxSig !== lastFxSig) {
+            lastFxSig = fxSig;
+            for (const id of [...refs]) if (!metaOf(id)) refs.delete(id);
+            if (!metaOf(focus)) focus = 'x';
+            if (!pop.hidden) buildPop();
+        }
+
         // 网格维度跟着当前对象走：2×2 就有 9 个顶点通道，通道面板也要重建
         const curLat = normalizeLattice(stateAt(track, nowTime()).warp);
         const dimsChanged = ensureWarpChannels(curLat ? curLat.cols : 1, curLat ? curLat.rows : 1);
         if (dimsChanged) {
             // 网格缩回去后旧顶点通道不存在了：焦点与参考线都得摘掉，否则画的是幽灵
-            for (const id of [...refs]) if (!chById(id)) refs.delete(id);
-            if (!chById(focus)) focus = 'x';
+            for (const id of [...refs]) if (!metaOf(id)) refs.delete(id);
+            if (!metaOf(focus)) focus = 'x';
             if (!pop.hidden) buildPop();
         }
 
@@ -548,7 +729,7 @@ export function mount(el, ctx) {
 
     /** 工具条只放最短信息，完整说明进 title。 */
     function syncBar(track, layer) {
-        const ch = chById(focus);
+        const ch = metaOf(focus);
         const keys = channelKeysOf(track, focus);
         const solo = isSolo(track, focus);
         chLabel.textContent = ch ? ch.short : '—';
@@ -600,9 +781,9 @@ export function mount(el, ctx) {
             foldRow.hidden = !folded;
         }
         if (!folded) return;
-        const ch = chById(focus);
+        const ch = metaOf(focus);
         const sum = foldSummary(focus, refs, (id) => {
-            const c = chById(id);
+            const c = metaOf(id);
             return c ? c.label : tr('curve.channelFallback');
         });
         foldRow.style.setProperty('--ch', ch ? ch.color : 'var(--accent)');
@@ -679,7 +860,8 @@ export function mount(el, ctx) {
         let done = 0;
         for (const i of idxs) {
             const cur = layerById(docOf(), layer.id);
-            const trk = (cur && cur.transform) || { keys: [] };
+            // 必须用**适配器**轨道：效果参数通道只存在于适配器里（原始 transform 上没有）
+            const trk = trackOf(cur);
             if (writeModeOf(trk, chId) === 'channel') {
                 // 已是独立轨道：切线只按这条通道自己的键算
                 const tg = autoTangentsChannel(trk, chId, i);
@@ -695,6 +877,11 @@ export function mount(el, ctx) {
         hint.textContent = tr('curve.hint.autoApplied', { n: done });
     }
 
+    /** 拆适配器 → 文档补丁（纯函数在模块级 `splitCurveModel`，这里只接 EFFECT_DEFS）。 */
+    function splitModel(layer, model) {
+        return splitCurveModel(layer, model, EFFECT_DEFS);
+    }
+
     function writeTrack(layerId, mut) {
         const doc = docOf();
         if (!doc) return;
@@ -703,7 +890,8 @@ export function mount(el, ctx) {
         const trk = trackOf(layer);
         const next = mut(trk, layer);
         if (!next || next === trk) return;
-        const patched = patchLayer(doc, layerId, { transform: next });
+        const patch = splitModel(layer, next);
+        const patched = patchLayer(doc, layerId, patch);
         if (patched === doc) return;
         if (typeof ctx.setDoc === 'function') ctx.setDoc(patched);
         if (typeof ctx.requestRender === 'function') ctx.requestRender();
@@ -925,15 +1113,17 @@ export function mount(el, ctx) {
         const t = snapTime(xToT(geo, x), ev);
         // 没独立就用共用关键帧加点（＝时间轴双击泳道做的同一件事）；已独立才写通道轨
         if (writeModeOf(track, focus) === 'channel') {
-            // 省略 value = 取该时刻当前求值，所以加点不会让曲线跳一下
-            writeTrack(layer.id, (old) => setChannelKey(old, focus, t, undefined, 'bezier'));
+            // 取该时刻的**当前求值**显式传入：效果参数通道的 stateAt 不含它的值，
+            // 省略 value 会被 core 当成 0，加点就让曲线跳一下。
+            const v = sampleChannel(track, t, focus);
+            writeTrack(layer.id, (old) => setChannelKey(old, focus, t, v, 'bezier'));
         } else {
             writeTrack(layer.id, (old) => addKey(old, t, stateAt(track, t), 'bezier'));
         }
         if (typeof ctx.setTime === 'function') ctx.setTime(t);
         const after = layerById(docOf(), layer.id);
         const solo = isSolo(trackOf(after), focus);
-        const chFocused = chById(focus);
+        const chFocused = metaOf(focus);
         let msg = tr('curve.notify.keyAdded', { t: fmt2(t) });
         if (solo && chFocused) msg += tr('curve.notify.keyAddedSolo', { name: chFocused.short });
         notify(msg);
@@ -990,7 +1180,8 @@ export function mount(el, ctx) {
             });
             m.appendChild(del);
         }
-        if (solo) m.appendChild(soloItem(layer.id, focus));
+        // 效果参数通道本来就是「独立轨道」，没有「回到共用」这回事（清轨＝删掉该参数的全部帧）
+        if (solo && !isEffectChannelId(focus)) m.appendChild(soloItem(layer.id, focus));
         m.style.left = Math.round(x) + 'px';
         m.style.top = Math.round(y) + 'px';
         wrap.appendChild(m);
@@ -1031,7 +1222,7 @@ export function mount(el, ctx) {
         writeTrack(layerId, (trk) => clearChannel(trk, chId));
         // 选择集里的索引属于刚被删掉的通道轨道，必须一起作废
         setSel(null);
-        const ch = chById(chId);
+        const ch = metaOf(chId);
         notify(tr('curve.notify.backToShared', { name: ch ? ch.label : chId }));
         paint();
     }
@@ -1093,7 +1284,7 @@ export function mount(el, ctx) {
             const { layer, keys } = keysNow();
             if (!layer || !keys.length) return;
             ev.preventDefault();
-            const ch = chById(focus);
+            const ch = metaOf(focus);
             if (!ch) return;
             selKeys = [];
             for (let i = 0; i < keys.length; i += 1) selKeys.push({ layerId: layer.id, chId: ch.id, index: i, part: 'key' });
@@ -1124,7 +1315,7 @@ export function mount(el, ctx) {
         // Ctrl+I：反选 —— 聚焦通道上「还没被选中」的关键帧全部选上
         if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'i' || ev.key === 'I')) {
             const { layer, keys } = keysNow();
-            const ch = chById(focus);
+            const ch = metaOf(focus);
             if (!layer || !ch || !keys.length) return;
             ev.preventDefault();
             const next = [];

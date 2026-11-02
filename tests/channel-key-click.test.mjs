@@ -67,3 +67,14 @@ test('curve.mount 是函数且 focusChannel 通过返回对象暴露（不依赖
     // 挂载需要真实 DOM：这里只钉住「导出的是函数」，防止有人顺手把它删掉
     assert.equal(typeof focusChannelTarget, 'function');
 });
+
+test('focusChannelTarget：效果参数通道（fx.<id>.<param>）按形状放行，坏形状仍 null', () => {
+    assert.deepEqual(focusChannelTarget('fx.fx-1.amount', 0.5), { ch: 'fx.fx-1.amount', t: 0.5 });
+    assert.deepEqual(focusChannelTarget('fx.fx-2.brightness', '1.25'), { ch: 'fx.fx-2.brightness', t: 1.25 });
+    for (const bad of ['fx', 'fx.', 'fx..x', 'fx.a.', 'fx.a', ' FX.a.b', 'warp.99.x']) {
+        assert.equal(focusChannelTarget(bad, 0.5), null, '坏形状：' + bad);
+    }
+    // 时刻校验对效果通道同样生效
+    assert.equal(focusChannelTarget('fx.fx-1.amount', null), null);
+    assert.equal(focusChannelTarget('fx.fx-1.amount', NaN), null);
+});

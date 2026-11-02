@@ -15,6 +15,7 @@ import { t } from '../i18n/index.mjs';
 import {
     moveKey, setKeyState, setKeyEase, autoTangents as coreAutoTangents,
     TRACK_FIELDS, channelOf, promoteChannel, setChannelKey, setChannelKeyEase, moveChannelKey,
+    stateAt, channelValueAt,
 } from '../core/transform.mjs';
 
 export const PAD_L = 46;
@@ -170,14 +171,84 @@ export function statePatch(chId, v, prev) {
     return { warp: { cols: lat.cols, rows: lat.rows, pts } };
 }
 
-/* ── 通道关键帧视图（通道优先，统一形状） ── */
+/* ── 效果参数通道（把 effect 的轨道接进曲线编辑器） ──
+ *
+ * 效果的参数轨道住在 `layer.effects[i].tracks[参数名]`，形状与变换的通道轨道完全一样
+ * （`keys: [{t,ease,h1,h2,state:{x}}]`），只是**值在 `state.x` 里**、且每个参数天然就是
+ * 一条独立轨道。曲线编辑器把它们当成「虚拟通道」接进来：
+ *   - 通道 id = `fx.<效果id>.<参数名>`（例如 `fx.fx-2.amount`）—— 带效果 id 而不是
+ *     效果类型，因为同类效果可以同时挂两条，用类型会撞车；
+ *   - 曲线里的 track 是 `curveTrackOf(layer)` 造的**适配器**：`keys` 仍是变换的共用键，
+ *     `channels` 里额外挂着这些效果通道（值已摊平成 `value`），`channelMeta` 放标签/颜色；
+ *   - 写回时由 curve.mjs 把适配器拆回 `transform` + `effects`（一次 setDoc = 一步撤销）。
+ */
+
+/** 效果通道 id 前缀：`fx.<effectId>.<param>`。 */
+export const EFFECT_CHANNEL_PREFIX = 'fx.';
+
+/** 拼一个效果通道 id（导出给 curve.mjs 与测试共用）。 */
+export function effectChannelId(fxId, key) {
+    const id = String(fxId == null ? '' : fxId);
+    const k = String(key == null ? '' : key);
+    if (!id || !k) return '';
+    return EFFECT_CHANNEL_PREFIX + id + '.' + k;
+}
+
+/**
+ * 解析效果通道 id；不是效果通道（或形状不完整）返回 null。
+ * 效果 id 与参数名里都不允许出现 `.`（前者是 `fx-1` 形态，后者是 `amount` 这类），
+ * 所以第一个点就是分隔符 —— 用 `indexOf` 而不是 split 全串。
+ */
+export function parseEffectChannelId(id) {
+    if (typeof id !== 'string' || !id.startsWith(EFFECT_CHANNEL_PREFIX)) return null;
+    const rest = id.slice(EFFECT_CHANNEL_PREFIX.length);
+    const dot = rest.indexOf('.');
+    if (dot <= 0 || dot === rest.length - 1) return null;
+    return { fxId: rest.slice(0, dot), key: rest.slice(dot + 1) };
+}
+
+/** 是不是效果参数通道。 */
+export function isEffectChannelId(id) {
+    return !!parseEffectChannelId(id);
+}
 
 /**
  * warp 顶点通道没有独立轨道：TRACK_FIELDS 里没有它们，core 的 setChannelKey 会直接抛 TypeError。
  * 写盘前必须先分流，否则拖一个网格顶点就把编辑器打崩。
+ * 效果参数通道（`fx.*`）也在这里放行：它们在适配器的 `track.channels` 里有条目，
+ * 走的是同一套通道轨道读写（core 的 setChannelKey 已放宽为「字段在 channels 里就认」）。
  */
 export function isChannelField(chId) {
-    return TRACK_FIELDS.includes(chId);
+    return TRACK_FIELDS.includes(chId) || isEffectChannelId(chId);
+}
+
+/** 通道元信息：先查变换/网格的固定表，再查适配器上的 `channelMeta`（效果参数）。 */
+export function channelMetaOf(track, chId) {
+    const fixed = chById(chId);
+    if (fixed) return { label: fixed.label, short: fixed.short, color: fixed.color, min: null, max: null };
+    const meta = track && track.channelMeta ? track.channelMeta[chId] : null;
+    if (meta) {
+        return {
+            label: meta.label,
+            short: meta.short || String(meta.key || chId),
+            color: meta.color || CHANNEL_COLOR_FALLBACK,
+            min: Number.isFinite(meta.min) ? meta.min : null,
+            max: Number.isFinite(meta.max) ? meta.max : null,
+        };
+    }
+    return { label: chId, short: String(chId), color: CHANNEL_COLOR_FALLBACK, min: null, max: null };
+}
+
+/**
+ * 某通道在时刻 t 的值（绘制曲线用）。
+ * 变换通道走 `stateAt`（与画布求值器一致）；效果通道读它自己的通道轨道（两端取端点、不外插）。
+ */
+export function sampleChannel(track, time, chId) {
+    if (isEffectChannelId(chId)) {
+        const ch = channelOf(track, chId);
+        return channelValueAt(ch, Number(time) || 0, 0);
+    }
+    return chValue(stateAt(track, time), chId);
 }
 
 /**
@@ -248,6 +319,12 @@ export function fmt2(n) {
  */
 export function fmtVal(chId, v) {
     const n = Number.isFinite(v) ? v : 0;
+    // 效果参数：量纲由效果定义决定（模糊半径是 px、亮度是倍率、hue 是度），
+    // 没有统一单位可加，只按量级收小数位（≥10 保留 1 位，否则 2 位，去掉尾零）。
+    if (isEffectChannelId(chId)) {
+        const r = Math.round(n * 100) / 100;
+        return String(Math.abs(r) >= 10 ? Math.round(r * 10) / 10 : r);
+    }
     if (chId === 'opacity' || chId === 'scaleX' || chId === 'scaleY') return n.toFixed(2);
     if (chId === 'rotate' || chId === 'skewX' || chId === 'skewY') {
         return (Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(1)) + '°';
@@ -317,6 +394,12 @@ export function channelRange(chId, opts) {
     if (id === 'scaleX' || id === 'scaleY') return { lo: 0, hi: 2 };
     if (id === 'x') return { lo: 0, hi: Math.max(1, Number(o.width) || 0) || null };
     if (id === 'y') return { lo: 0, hi: Math.max(1, Number(o.height) || 0) || null };
+    // 效果参数：用效果定义里的 min/max 当语义区间（模糊 0–40、亮度 0–2、hue ±180…），
+    // 否则「模糊从 2 调到 4」会被拉满整块画布，看起来像剧烈抖动。
+    const meta = o.channelMeta ? o.channelMeta[id] : null;
+    if (meta && Number.isFinite(meta.min) && Number.isFinite(meta.max) && meta.max > meta.min) {
+        return { lo: meta.min, hi: meta.max };
+    }
     return null;
 }
 
@@ -324,6 +407,9 @@ export function computeRange(track, shown, vView, frozen, opts) {
     if (frozen && frozen.ranges) return frozen;
     const ranges = new Map();
     let primary = null;
+    // 效果参数的语义区间在适配器的 channelMeta 里（不在全局固定表里），传下去给 channelRange
+    const o = Object.assign({}, opts || {});
+    if (!o.channelMeta && track && track.channelMeta) o.channelMeta = track.channelMeta;
     for (const id of shown) {
         let lo = Infinity;
         let hi = -Infinity;
@@ -347,7 +433,7 @@ export function computeRange(track, shown, vView, frozen, opts) {
         // 先并上通道语义区间（让旋转显示成 -180..180 而不是把 0..10 拉满屏）。
         // 数据完全落在预设区间里时**直接用预设、不再加 12% 余量** —— 旋转就该正好是 ±180，
         // 多出来的一圈空白会让刻度变成 202 这种怪数字。
-        const preset = channelRange(id, opts);
+        const preset = channelRange(id, o);
         const inside = !!preset && preset.lo != null && preset.hi != null && lo >= preset.lo && hi <= preset.hi;
         if (inside) {
             lo = preset.lo;

@@ -49,7 +49,7 @@ The payoff is direct: paint one drawing at 0.2s and the next at 3s without inser
 
 **Animation**
 - Keyframes: linear / bezier (draggable handles) / hold; `Shift`-drag = free drag that ignores the magnet
-- Curve editor: one channel per animated quantity — position, scale, rotate, skew, opacity, lattice vertices, effect parameters — with a per-channel vertical range; channels can be multi-selected as reference lines and folded into a compact "N selected" summary
+- Curve editor: one channel per animated quantity — position, scale, rotate, skew, opacity, lattice vertices, effect parameters — with a per-channel vertical range; channels can be multi-selected as reference lines and folded into a compact "N selected" summary. **Effect parameters with keyframes appear as editable channels too** (`fx.<effectId>.<param>`), sharing the same playhead/easing/undo as transform channels
 - Every object carries a **time channel** (offset / scale / hold), so the same keyframes can run at different rhythms
 - Onion skin (N before / after, stepping on *texture change points*, not on equal frame steps)
 - Segmented variable frame rate; the colored strip under the timeline is the fps segmentation
@@ -207,7 +207,7 @@ npm run smoke          # boots app/ in a shell-less window and mounts every edit
 
 `npm run smoke` serves `app/` from a throwaway HTTP server and loads it in an Electron window **with no preload and no nodeIntegration** — i.e. exactly what a browser gets. It then switches a panel through every editor in the registry and flips the language both ways, collecting any console error along the way. It is also the browser-mode acceptance test: `window.motionAPI` must be absent and the web bridge must be in place.
 
-Current baseline: **1702 tests / 1695 pass / 7 skipped / 0 fail** across 120 test files; static check scans 105 modules with 0 leftovers, 0 broken imports and 0 unused imports; syntax check 109/109 (105 app/ modules + 4 root tool scripts); layering check reports 0 cross-layer imports; i18n check reports 129 strings still outside the dictionary and 0 structural gaps; smoke mounts **15/15** editors with 0 console errors. Run `npm test`, `npm run check` and `npm run smoke` before handing work over.
+Current baseline: **1708 tests / 1701 pass / 7 skipped / 0 fail** across 120 test files; static check scans 105 modules with 0 leftovers, 0 broken imports and 0 unused imports; syntax check 109/109 (105 app/ modules + 4 root tool scripts); layering check reports 0 cross-layer imports; i18n check reports 129 strings still outside the dictionary and 0 structural gaps; smoke mounts **15/15** editors with 0 console errors. Run `npm test`, `npm run check` and `npm run smoke` before handing work over.
 
 ## Design principles
 

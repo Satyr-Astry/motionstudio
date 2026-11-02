@@ -84,6 +84,7 @@ export default {
         'curve.empty.noLayer': 'No object to edit',
         'curve.group.transform': 'Transform',
         'curve.group.warp': 'Mesh vertices',
+        'curve.group.effect': 'Effect · {name}',
 
         'curve.row.hint': 'Click: focus this curve · Shift+click: overlay it as a reference',
         'curve.row.focus': 'Currently edited curve',
@@ -228,6 +229,7 @@ export default {
         'curve.empty.noLayer': '没有可编辑的对象',
         'curve.group.transform': '变换',
         'curve.group.warp': '网格顶点',
+        'curve.group.effect': '效果 · {name}',
 
         'curve.row.hint': '点击：切到这条曲线 · Shift+点击：当作参考线叠加',
         'curve.row.focus': '当前编辑的曲线',

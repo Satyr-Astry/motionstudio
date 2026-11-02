@@ -47,8 +47,10 @@ test('曲线落点：吸附结果不含浮点毛刺（写回文档的 t 要能�
 // `snapForDrag(doc, t, e, snapOn)`（`app/editors/timeline-geo.mjs`），这三条接线断言随之改口径。
 test('curve.mjs 接线：双击加点也过 snapTime（与时间轴双击泳道同一套吸附）', () => {
     assert.match(src, /const t = snapTime\(xToT\(geo, x\), ev\);/, '双击落点必须过 snapTime');
-    // 写回用的是吸附后的 t，不是原始的 xToT 结果
-    assert.match(src, /setChannelKey\(old, focus, t, undefined, 'bezier'\)/);
+    // 写回用的是吸附后的 t，不是原始的 xToT 结果；值显式取该时刻的当前求值
+    // （效果参数通道的 stateAt 不含它，省略 value 会变成 0）
+    assert.match(src, /const v = sampleChannel\(track, t, focus\);/, '加点必须先取当前值');
+    assert.match(src, /setChannelKey\(old, focus, t, v, 'bezier'\)/, '补帧写入吸附后的 t 与当前值');
     assert.match(src, /addKey\(old, t, stateAt\(track, t\), 'bezier'\)/);
 });
 
@@ -181,4 +183,99 @@ test('时间轴独立通道键按通道上色 + 图例解释空心菱形（接�
     assert.ok(ch, '图例缺「通道键」条目');
     assert.equal(ch.mark, '◇');
     assert.match(ch.name, /channel/i);
+});
+
+/* ─────────── 效果参数通道：接入曲线（新问题：effect 变化进不了曲线） ─────────── */
+
+import { buildCurveModel, splitCurveModel } from '../app/editors/curve.mjs';
+import { EFFECT_DEFS } from '../app/paint/effects.mjs';
+
+const FX_TR = (key, vars) => (vars && vars.name ? key + ':' + vars.name : key);
+
+function fxLayer() {
+    return {
+        id: 'L1',
+        transform: {
+            keys: [{ t: 0, state: { x: 0 }, ease: 'linear', h1: [0.3, 0], h2: [0.7, 1] }],
+            channels: { rotate: { keys: [{ t: 0.5, value: 30, ease: 'linear', h1: [0.3, 0], h2: [0.7, 1] }] } },
+        },
+        effects: [
+            {
+                id: 'fx-1',
+                type: 'blur',
+                amount: 3,
+                tracks: {
+                    amount: {
+                        keys: [
+                            { t: 0, ease: 'linear', h1: [0.3, 0], h2: [0.7, 1], state: { x: 2 } },
+                            { t: 1, ease: 'bezier', h1: [0.1, 0.2], h2: [0.8, 0.9], state: { x: 8 } },
+                        ],
+                    },
+                },
+            },
+            // 第二条效果没有轨道：不该出现在曲线里
+            { id: 'fx-2', type: 'glow', amount: 4, color: '#ffffff' },
+        ],
+    };
+}
+
+test('buildCurveModel：只把「已打过帧」的效果参数接成通道，同类多实例不撞车', () => {
+    const layer = fxLayer();
+    const model = buildCurveModel(layer, EFFECT_DEFS, FX_TR);
+    assert.deepEqual(Object.keys(model.channels), ['rotate', 'fx.fx-1.amount'], '共用通道 + 唯一有轨道的效果参数');
+    assert.equal(model.channels['fx.fx-1.amount'].keys.length, 2);
+    assert.deepEqual(model.channels['fx.fx-1.amount'].keys.map((k) => k.value), [2, 8], '值从 state.x 摊平成 value');
+    assert.equal(model.effectGroups.length, 1);
+    assert.deepEqual(model.effectGroups[0].list.map((c) => c.id), ['fx.fx-1.amount']);
+    assert.match(model.effectGroups[0].title, /effect\.blur\.name/);
+    assert.match(model.channelMeta['fx.fx-1.amount'].label, /effect\.blur\.param\.amount/);
+    assert.equal(model.channelMeta['fx.fx-1.amount'].min, 0);
+    assert.equal(model.channelMeta['fx.fx-1.amount'].max, 40);
+});
+
+test('buildCurveModel：没有效果 / 空对象时原样返回 transform（不伪造通道）', () => {
+    const plain = { id: 'L2', transform: { keys: [{ t: 0, state: {} }] } };
+    assert.equal(buildCurveModel(plain, EFFECT_DEFS, FX_TR).channels, undefined, '没有效果就不加通道层');
+    const empty = buildCurveModel(null, EFFECT_DEFS, FX_TR);
+    assert.deepEqual(empty, { keys: [] });
+});
+
+test('splitCurveModel：效果通道写回 effect.tracks（state.x），别的效果对象不被重建', () => {
+    const layer = fxLayer();
+    const model = buildCurveModel(layer, EFFECT_DEFS, FX_TR);
+    const next = Object.assign({}, model, { channels: Object.assign({}, model.channels) });
+    next.channels['fx.fx-1.amount'] = {
+        keys: [
+            { t: 0, ease: 'linear', h1: [0.3, 0], h2: [0.7, 1], value: 2 },
+            { t: 1.5, ease: 'hold', h1: [0.3, 0], h2: [0.7, 1], value: 12 },
+        ],
+    };
+    const patch = splitCurveModel(layer, next, EFFECT_DEFS);
+    assert.ok(patch.effects, '效果轨道变了就必须带 effects 补丁');
+    assert.deepEqual(patch.effects[0].tracks.amount.keys.map((k) => [k.t, k.state.x]), [[0, 2], [1.5, 12]]);
+    assert.equal(patch.effects[0].tracks.amount.keys[1].ease, 'hold', '缓动跟着通道键走');
+    assert.equal(patch.effects[1], layer.effects[1], '没动过的效果不重建对象（少一次无谓撤销）');
+    // transform 侧只保留 TRACK_FIELDS 的通道：效果通道绝不能漏进 transform.channels
+    assert.deepEqual(Object.keys(patch.transform.channels), ['rotate']);
+    assert.equal(patch.transform.keys, next.keys);
+});
+
+test('splitCurveModel：清空某效果参数的通道 = 删掉它的轨道（与属性面板「清除关键帧」同义）', () => {
+    const layer = fxLayer();
+    const model = buildCurveModel(layer, EFFECT_DEFS, FX_TR);
+    const next = Object.assign({}, model, { channels: Object.assign({}, model.channels, { 'fx.fx-1.amount': { keys: [] } }) });
+    const patch = splitCurveModel(layer, next, EFFECT_DEFS);
+    assert.equal(patch.effects[0].tracks, undefined, '参数轨道应被删掉');
+    assert.equal(patch.effects[0].id, 'fx-1', '效果本身还在（只是回到静态参数）');
+});
+
+test('curve.mjs 接线：效果通道走适配器（读在 buildCurveModel、写在 splitCurveModel）', () => {
+    const src = read('../app/editors/curve.mjs');
+    assert.match(src, /function trackOf\(layer\) \{\s*const model = buildCurveModel\(layer, EFFECT_DEFS, tr\);/);
+    assert.match(src, /return splitCurveModel\(layer, model, EFFECT_DEFS\);/);
+    // 通道面板要按效果分组重建（效果轨道变化时）
+    assert.match(src, /for \(const g of model\.effectGroups \|\| \[\]\) group\(g\.title, g\.list\)/);
+    assert.match(src, /function effectSigOf\(layer\)/);
+    // 效果参数没有「回到共用」：菜单项对效果通道隐藏
+    assert.match(src, /if \(solo && !isEffectChannelId\(focus\)\) m\.appendChild\(soloItem/);
 });

@@ -11,9 +11,8 @@
 // 圆点与切线柄就来自它自己的键，跟别的曲线的关键帧时间无关。曲线本体仍走 stateAt，
 // 它内部已叠加通道覆盖 —— 点到线的对应关系不许在这里另算一遍。
 
-import { stateAt } from '../core/transform.mjs';
 import { celTimes } from '../core/cel.mjs';
-import { PAD_L, PAD_R, KEY_R, SAMPLES, chById, chValue, clamp, fmtVal, tToX, vToY } from './curve-geo.mjs';
+import { PAD_L, PAD_R, KEY_R, SAMPLES, channelMetaOf, sampleChannel, clamp, fmtVal, tToX, vToY } from './curve-geo.mjs';
 import { t } from '../i18n/index.mjs';
 
 /**
@@ -49,7 +48,8 @@ function tracePath(g, geo, track, id) {
     g.beginPath();
     for (let i = 0; i < n; i++) {
         const t = geo.t0 + ((geo.t1 - geo.t0) * i) / (n - 1);
-        const v = chValue(stateAt(track, t), id);
+        // 效果参数通道走它自己的轨道（sampleChannel），变换通道仍走 stateAt
+        const v = sampleChannel(track, t, id);
         const x = tToX(geo, t);
         const y = vToY(geo, v, id);
         if (i === 0) g.moveTo(x, y);
@@ -71,7 +71,7 @@ export function paintCanvas(rc) {
     // 参考线先画：细、半透明，只提供形状对照，不抢聚焦曲线的注意力
     for (const id of shown) {
         if (id === focus) continue;
-        const ch = chById(id);
+        const ch = channelMetaOf(track, id);
         if (!ch) continue;
         g.save();
         g.globalAlpha = 0.3;
@@ -83,7 +83,7 @@ export function paintCanvas(rc) {
     }
 
     // 聚焦曲线：与渲染、播放同一个求值器（stateAt），像素级对得上画布
-    const fch = focus ? chById(focus) : null;
+    const fch = focus ? channelMetaOf(track, focus) : null;
     if (fch && shown.has(focus)) {
         g.strokeStyle = fch.color;
         g.lineWidth = 1.9;
@@ -193,13 +193,11 @@ export function paintCanvas(rc) {
 /** 右边缘的「色 + 当前值」：now 时刻各显示通道的读数。 */
 function drawReadouts(g, rc) {
     const { geo, track, shown, focus, now } = rc;
-    const st = stateAt(track, now);
     const x = geo.x1 + PAD_R - 2;
     const rows = [];
     for (const id of shown) {
-        const ch = chById(id);
-        if (!ch) continue;
-        const v = chValue(st, id);
+        const ch = channelMetaOf(track, id);
+        const v = sampleChannel(track, now, id);
         rows.push({ ch, id, v, y: clamp(vToY(geo, v, id), geo.y0 + 5, geo.y1 - 3) });
     }
     // 两条曲线当前值都贴近底边时读数会叠成一团，按 y 排好后强行拉开一行
@@ -286,7 +284,7 @@ function drawGrid(g, rc) {
     // 只有聚焦通道一套真实数值：每条曲线各用自己的值域画（像素 / 角度 / 比例互不相干），
     // 所以刻度不再在「百分比」和「真实值」之间切换 —— 永远标聚焦通道的真值，
     // 其余曲线的数值由右边缘的同色读数负责。
-    const fch = rc.focus ? chById(rc.focus) : null;
+    const fch = rc.focus ? channelMetaOf(rc.track, rc.focus) : null;
     g.strokeStyle = 'rgba(255,255,255,.06)';
     for (let i = 0; i <= 4; i++) {
         const frac = i / 4;

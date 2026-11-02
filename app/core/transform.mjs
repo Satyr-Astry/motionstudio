@@ -456,7 +456,11 @@ function withChannel(track, field, chKeys) {
  * value 省略时取该时刻的当前求值（这样「只是把点拎起来」不会跳变）。
  */
 export function setChannelKey(track, field, t, value, ease = 'linear', h1, h2) {
-    if (!TRACK_FIELDS.includes(field)) throw new TypeError('setChannelKey: 未知通道 ' + field);
+    // 通道字段可以是「适配器通道」：曲线编辑器把效果参数接进来时，字段不在 TRACK_FIELDS
+    // 但已经在 track.channels 里（值语义与通道轨道相同）。只认这两类，别的一律拒绝。
+    if (!TRACK_FIELDS.includes(field) && !channelOf(track, field)) {
+        throw new TypeError('setChannelKey: 未知通道 ' + field);
+    }
     if (!isNum(t)) throw new TypeError('setChannelKey: t 必须是有限数字');
     const cur = channelOf(track, field);
     const v = isNum(value) ? value : channelValueAt(cur, t, num(stateAt(track, t)[field], 0));

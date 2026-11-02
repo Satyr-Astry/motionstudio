@@ -104,6 +104,7 @@ test('layers 分片：中文原文逐字未变（翻译时顺手改词就红）'
         'curve.ease.hold': '保持',
         'curve.group.transform': '变换',
         'curve.group.warp': '网格顶点',
+        'curve.group.effect': '效果 · {name}',
         'curve.canvas.solo': '独立',
         'curve.canvas.sameTime': '同刻',
         'curve.menu.deleteKey': '删除关键帧',
