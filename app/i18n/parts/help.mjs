@@ -113,6 +113,8 @@ export default {
         'help.legend.cel.text': 'From this moment on this drawing is shown, until the next texture; on the Timeline it is the diamond with a solid square inside, and nothing is interpolated around it.',
         'help.legend.kf.name': 'Keyframe',
         'help.legend.kf.text': 'Position / scale / rotation / opacity interpolate continuously through this point and ease smoothly into the neighbouring keyframes.',
+        'help.legend.ch.name': 'Channel key',
+        'help.legend.ch.text': 'Hollow diamond, coloured by channel: a key that exists on one channel only (it does not move the shared keyframe). Click it to focus that channel in the curve editor.',
 
         'help.curve.title': 'How to use the curve area',
         'help.curve.pickKey.name': 'Click a keyframe',
@@ -230,6 +232,8 @@ export default {
         'help.legend.cel.text': '从这一秒起换成这张图，直到下一个纹理；时间轴上它是菱形里带实心小方块的那一颗，前后不插值。',
         'help.legend.kf.name': '关键帧',
         'help.legend.kf.text': '位移 / 缩放 / 旋转 / 不透明度在这里连续插值，与相邻关键帧平滑过渡。',
+        'help.legend.ch.name': '通道键',
+        'help.legend.ch.text': '空心菱形、按通道上色：这一颗只存在于某个通道的独立轨道上（不会带动共用关键帧）。点它可把曲线焦点切到那个通道。',
 
         'help.curve.title': '曲线区怎么用',
         'help.curve.pickKey.name': '点关键帧',

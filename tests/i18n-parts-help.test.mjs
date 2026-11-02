@@ -211,7 +211,7 @@ test('域计数守卫：帮助面板的四段都还在（被人删空要在这�
     const count = (prefix) => partKeys.filter((k) => k.startsWith(prefix)).length;
     assert.equal(count('help.concept.'), 11, '概念段：1 个标题 + 5 行 × (名 + 说明)（纹理 / 关键帧 / 时间通道 / 骨骼 / IK）');
     assert.equal(count('help.curve.'), 11, '曲线提示：1 个标题 + 5 条 × (名 + 说明)');
-    assert.equal(count('help.legend.'), 4, '图例：2 条 × (名 + 说明)');
+    assert.equal(count('help.legend.'), 6, '图例：3 条 × (名 + 说明)（纹理 / 关键帧 / 通道键）');
     assert.ok(count('help.shortcut.') >= 70, '键位表是主体，不该少于 70 条：' + count('help.shortcut.'));
     // 7 个分组标题都在
     for (const id of ['file', 'time', 'keyframe', 'layer', 'canvas', 'board', 'view']) {

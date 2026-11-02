@@ -119,6 +119,25 @@ export function chById(id) {
     return null;
 }
 
+/** 通道未知时的中性色：时间轴上的独立通道键、图例都退回它，而不是透明/黑色。 */
+export const CHANNEL_COLOR_FALLBACK = '#9aa1ac';
+
+/**
+ * 通道颜色（B1）：曲线区、时间轴的**独立通道键**、图例共用同一张色表。
+ *
+ * 为什么要有这个函数：曲线面板里每条通道有固定颜色（`SCALAR_CHANNELS[].color`），
+ * 但时间轴上那些「只在某个通道上单独打的键」以前一律画成同一种空心菱形 ——
+ * 用户看不出这一颗是旋转还是不透明度，也看不出它与共用关键帧的区别。
+ * 时间轴与曲线用同一张色表之后，「同一通道在两边同色」才成立。
+ *
+ * @param {string} id 通道 id（`x` / `rotate` / `warp.3.x` …）
+ * @returns {string} CSS 颜色；未知通道退回中性色（不抛）
+ */
+export function channelColorOf(id) {
+    const ch = chById(id);
+    return ch && typeof ch.color === 'string' && ch.color ? ch.color : CHANNEL_COLOR_FALLBACK;
+}
+
 /**
  * 缓动显示名。与 `CORNER_LABEL`/`SCALAR_CHANNELS` 一样是访问器：读的时候才取词，
  * 切语言不用重建这张表。**左边三个键是落盘的缓动名，不许翻译**。

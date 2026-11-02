@@ -21,6 +21,8 @@ import { t } from '../i18n/index.mjs';
 import { formatSpeed, modeInfo } from '../core/playback.mjs';
 // 图例的唯一数据源在 help.mjs：设置里的「图例」分组与这个浮层读同一份，不再各写一套
 import { LEGEND_ITEMS } from './help.mjs';
+// B1：独立通道键的配色与曲线区共用同一张色表（channelColorOf）
+import { channelColorOf } from './curve-geo.mjs';
 import { celTimes, docDuration, objectById, objectsOf } from '../core/doc-model.mjs';
 import {
     CUR_EPS_PX,
@@ -820,6 +822,13 @@ export function paintTracks(view, frame) {
             // 通道标识（空格分隔的字段名，同刻多通道已合并成一条）。
             // 点这颗菱形要把曲线焦点切到对应通道，没有它就只能猜。
             node.dataset.ch = p.fields.join(' ');
+            // B1：**按通道上色**。时间轴上「只在某通道单独打的键」与共用关键帧都是菱形，
+            // 以前两者都是同一个空心 accent 色，看不出这颗属于哪个通道；现在与曲线同色，
+            // 多通道合并的那颗用第一个通道的颜色（title 里列全部字段）。
+            const chColor = channelColorOf(p.fields[0]);
+            if (node.style && typeof node.style.setProperty === 'function') {
+                node.style.setProperty('--ch', chColor);
+            }
             node.classList.toggle('is-sel',
                 !!selKey && selKey.layerId === ref.id && Math.abs(selKey.t - p.t) <= T_EPS);
             node.classList.toggle('is-sel2', false); // 通道键不参与多选集合，别残留上一帧的类

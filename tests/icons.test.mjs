@@ -347,7 +347,10 @@ test('帮助表：分组顺序固定，键位与图例的图标名都真实存�
     assert.ok(rows >= 28, '键位表太薄，只有 ' + rows + ' 行');
     for (const item of LEGEND_ITEMS) {
         assert.ok(hasIcon(item.icon), '图例用了不存在的图标：' + item.icon);
-        assert.ok(item.kind === 'cel' || item.kind === 'kf', '图例 kind 只能是 cel / kf，收到 ' + item.kind);
+        assert.ok(
+            item.kind === 'cel' || item.kind === 'kf' || item.kind === 'ch',
+            '图例 kind 只能是 cel / kf / ch，收到 ' + item.kind
+        );
         assert.ok(item.text.length > 8, '图例说明太短：' + item.name);
     }
 });

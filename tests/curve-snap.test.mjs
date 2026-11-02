@@ -149,3 +149,36 @@ test('curve.mjs 接线：折叠只切显示，不碰选择集 / refs / 绘制区
     assert.ok(!/folded\s*=/.test(refresh), 'refresh() 不许重置折叠态（跨 refresh 要保持）');
     assert.match(src, /let folded = false;/, '折叠态必须是 mount 闭包变量');
 });
+
+/* ─────────── B1：通道配色（时间轴独立通道键与曲线共用一张色表） ─────────── */
+
+test('channelColorOf：8 条标量通道各有稳定颜色，未知通道退回中性色', async () => {
+    const { channelColorOf, SCALAR_CHANNELS, CHANNEL_COLOR_FALLBACK } = await import('../app/editors/curve-geo.mjs');
+    const seen = new Set();
+    for (const ch of SCALAR_CHANNELS) {
+        const color = channelColorOf(ch.id);
+        assert.match(color, /^#[0-9a-f]{6}$/i, ch.id + ' 的颜色应是 6 位 hex');
+        assert.equal(color, ch.color, ch.id + ' 必须返回色表里的颜色（时间轴与曲线同色）');
+        assert.ok(!seen.has(color.toLowerCase()), '两条通道不许同色：' + ch.id);
+        seen.add(color.toLowerCase());
+    }
+    // 未知 / 脏输入不抛，退回中性色（时间轴遇到新通道也不会画出透明键）
+    assert.equal(channelColorOf('nope'), CHANNEL_COLOR_FALLBACK);
+    assert.equal(channelColorOf(''), CHANNEL_COLOR_FALLBACK);
+    assert.equal(channelColorOf(null), CHANNEL_COLOR_FALLBACK);
+    assert.equal(channelColorOf(42), CHANNEL_COLOR_FALLBACK);
+});
+
+test('时间轴独立通道键按通道上色 + 图例解释空心菱形（接线守卫）', async () => {
+    const { LEGEND_ITEMS } = await import('../app/editors/help.mjs');
+    const paint = read('../app/editors/timeline-paint.mjs');
+    // 色来自同一张表，不许在时间轴里另写一份色值
+    assert.match(paint, /import \{ channelColorOf \} from '\.\/curve-geo\.mjs'/);
+    assert.match(paint, /node\.style\.setProperty\('--ch', chColor\)/, '通道键必须把 --ch 设成通道色');
+    assert.match(paint, /channelColorOf\(p\.fields\[0\]\)/, '多通道合并的键按第一个通道上色');
+    // 图例里有一条「通道键」，否则用户不知道空心菱形是什么
+    const ch = LEGEND_ITEMS.find((it) => it.kind === 'ch');
+    assert.ok(ch, '图例缺「通道键」条目');
+    assert.equal(ch.mark, '◇');
+    assert.match(ch.name, /channel/i);
+});

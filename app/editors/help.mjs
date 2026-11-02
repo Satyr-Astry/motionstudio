@@ -313,6 +313,15 @@ export const LEGEND_ITEMS = [
         get name() { return t('help.legend.kf.name'); },
         get text() { return t('help.legend.kf.text'); },
     },
+    {
+        // B1：独立通道键（只在某个通道上单独打的键）在时间轴上是空心、按通道配色的菱形。
+        // 它和上面的实心关键帧同时可能出现，用户必须能一眼分开。
+        kind: 'ch',
+        mark: '◇',
+        icon: 'diamond',
+        get name() { return t('help.legend.ch.name'); },
+        get text() { return t('help.legend.ch.text'); },
+    },
 ];
 
 /** 曲线区怎么用（纯操作说明，不涉及键位） */
