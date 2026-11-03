@@ -28,7 +28,7 @@ import {
     objectsOf,
     stateOf,
 } from './doc-model.mjs';
-import { createLattice, latticeOffset, normalizeLattice } from './lattice.mjs';
+import { createLattice, latticeIsZero, latticeOffset, normalizeLattice } from './lattice.mjs';
 // 蒙皮求值：骨骼驱动的网格形变。skin.mjs 为了不反过来 import 本模块（会成环），
 // 自己沿 parentId 算骨骼世界矩阵（公式与本模块 matrixOfChain 相同，两边由
 // tests/skin.test.mjs 的对拍钉住）。这里只负责在 evalLayer 末尾调用它。
@@ -568,15 +568,39 @@ function drawOne(g, rec, t, o) {
 
     const warp = !o.ignoreTransform && rec.state && rec.state.warp ? rec.lattice : null;
     const fs = filterOf(o, layer, rec, t);
+    // 网格 warp 的每个子格都是一次 drawImage。如果同一层还开着 canvas filter
+    // （模糊/发光/描边/阴影），浏览器会对**每一次** drawImage 各跑一遍滤镜：
+    // 12×12 网格一帧上千次滤镜，编辑纹理/拖网格顶点时必然卡死（实测单层 977ms）。
+    // 有离屏可用时先把 warp 画进离屏，再整层一次滤镜合回主画布（实测 135ms）。
+    const off = warp && warp.lattice && fs != null && fs !== 'none'
+        && o.layerSurface && o.layerSurface.ctx && o.layerSurface.canvas ? o.layerSurface : null;
 
     g.save();
     try {
         g.globalAlpha = num(g.globalAlpha, 1) * alpha;
         if (layer.mixMode) g.globalCompositeOperation = layer.mixMode;
-        if (fs != null && 'filter' in g) g.filter = fs;
-        g.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
-        if (warp && warp.lattice) paintWarped(g, img, warp.lattice, warp.size, o.warpSeg);
-        else g.drawImage(img, 0, 0);
+        if (off) {
+            const lg = off.ctx;
+            const cw = off.canvas.width;
+            const ch = off.canvas.height;
+            lg.save();
+            lg.setTransform(1, 0, 0, 1, 0, 0);
+            lg.globalAlpha = 1;
+            lg.globalCompositeOperation = 'source-over';
+            if ('filter' in lg) lg.filter = 'none';
+            lg.clearRect(0, 0, cw, ch);
+            lg.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+            paintWarped(lg, img, warp.lattice, warp.size, o.warpSeg, o.draft);
+            lg.restore();
+            if ('filter' in g) g.filter = fs;
+            g.setTransform(1, 0, 0, 1, 0, 0);
+            g.drawImage(off.canvas, 0, 0);
+        } else {
+            if (fs != null && 'filter' in g) g.filter = fs;
+            g.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+            if (warp && warp.lattice) paintWarped(g, img, warp.lattice, warp.size, o.warpSeg, o.draft);
+            else g.drawImage(img, 0, 0);
+        }
     } finally {
         g.restore();
     }
@@ -597,7 +621,31 @@ function triAffineTuple(s0, s1, s2, d0, d1, d2) {
 }
 
 /** 六元组版三角形贴图（等价于 composite.drawTexCell，直接合成到当前 CTM）。 */
-function paintQuadCell(g, img, src, dst) {
+function paintQuadCell(g, img, src, dst, fast) {
+    // 快路径：四边形近似平行四边形时（twist ≤ 0.5px，或拖动草稿模式）用**一次**裁剪
+    // + 一次仿射 drawImage 画整格，而不是两片三角形各来一次 clip。
+    // 双线性 warp 的格子内部与平行四边形的差距就是 twist；0.5px 以内画不出差别，
+    // 而 clip 是这条管线里最贵的调用 —— 12×12 网格一帧 288 次 vs 576 次，直接减半。
+    if (fast) {
+        const fm = triAffineTuple(src[0], src[1], src[3], dst[0], dst[1], dst[3]);
+        if (fm) {
+            g.save();
+            try {
+                g.beginPath();
+                g.moveTo(dst[0][0], dst[0][1]);
+                g.lineTo(dst[1][0], dst[1][1]);
+                g.lineTo(dst[2][0], dst[2][1]);
+                g.lineTo(dst[3][0], dst[3][1]);
+                g.closePath();
+                g.clip();
+                g.transform(fm[0], fm[1], fm[2], fm[3], fm[4], fm[5]);
+                g.drawImage(img, 0, 0);
+            } finally {
+                g.restore();
+            }
+            return;
+        }
+    }
     // 与 composite.drawTexCell 相同的对角线切分（[0,1,3] + [1,2,3]），
     // 否则非平面四边形的填充会与旧路径差一条像素。
     const tris = [[0, 1, 3], [1, 2, 3]];
@@ -627,7 +675,7 @@ function paintQuadCell(g, img, src, dst) {
  * 在**局部矩形空间**里画（世界矩阵由调用方通过 CTM 叠加），细分方式与
  * composite.drawLatticeImage 一致：每个格 cell 再切 seg×seg 小片、两三角形。
  */
-export function paintWarped(g, img, lat, size, seg) {
+export function paintWarped(g, img, lat, size, seg, fast) {
     if (!g || !img) return;
     const L = normalizeLattice(lat) || createLattice(1, 1);
     const iw = num(img.width, 0);
@@ -637,27 +685,64 @@ export function paintWarped(g, img, lat, size, seg) {
     const h = num(size && size.h, ih);
     if (!(w > 0) || !(h > 0)) return;
 
-    const n = Math.max(1, Math.min(WARP_SEG_MAX, Math.trunc(num(seg, WARP_SEG)) || 1));
+    // 零偏移网格 = 没变形：直接一张 drawImage，别再切网格。
+    // 进入网格模式时初始就是零网格，这一条让「还没拖过顶点」的层几乎零成本，
+    // 拖动时也只重画真正变形的那些格子（其余格子走下面的平行四边形快路径）。
+    if (latticeIsZero(L)) {
+        g.drawImage(img, 0, 0, w, h);
+        return;
+    }
+
+    const maxN = Math.max(1, Math.min(WARP_SEG_MAX, Math.trunc(num(seg, WARP_SEG)) || 1));
+    // 细分数跟着格子实际大小走（与 composite.drawLatticeImage 同一条经验曲线）：
+    // 双线性变形在格子内部本来就是平滑的，2 段足够消掉折线感；400px 的格子切 6×6
+    // 只是给光栅器添堵 —— 6×4 网格原先一帧 864 次 clip+drawImage，拖网格时必卡。
+    const cellPx = Math.max(w / L.cols, h / L.rows);
+    const baseN = Math.max(1, Math.min(maxN, cellPx <= 64 ? 1 : cellPx <= 200 ? 2 : 3));
     const point = (u, v) => {
         const off = latticeOffset(L, u, v);
         return [u * w + off.x, v * h + off.y];
     };
+    const quadDst = (u0, v0, u1, v1) => [point(u0, v0), point(u1, v0), point(u1, v1), point(u0, v1)];
+    // 双线性项：dst0+dst2-dst1-dst3。0 = 平行四边形式精确仿射（一次裁剪即可），
+    // 越大说明格子内部弯得越厉害、越需要切分。网格模式里绝大多数格子是平的或
+    // 单纯平移/旋转，所以这个判定能把 clip 次数从「格数×n²」压回「格数」。
+    const twistOf = (dst) => Math.hypot(
+        dst[0][0] + dst[2][0] - dst[1][0] - dst[3][0],
+        dst[0][1] + dst[2][1] - dst[1][1] - dst[3][1],
+    );
+    // 一次画一个（子）格：fast=true 时用「一次裁剪 + 仿射」的平行四边形近似，
+    // 否则退回两片三角形（与双线性严格一致）。
+    const drawCell = (u0, v0, u1, v1, useFast) => {
+        const src = [
+            [u0 * iw, v0 * ih],
+            [u1 * iw, v0 * ih],
+            [u1 * iw, v1 * ih],
+            [u0 * iw, v1 * ih],
+        ];
+        paintQuadCell(g, img, src, quadDst(u0, v0, u1, v1), useFast);
+    };
     for (let r = 0; r < L.rows; r++) {
         for (let c = 0; c < L.cols; c++) {
+            const u0 = c / L.cols;
+            const u1 = (c + 1) / L.cols;
+            const v0 = r / L.rows;
+            const v1 = (r + 1) / L.rows;
+            const twist = twistOf(quadDst(u0, v0, u1, v1));
+            // twist ≤0.5px：平行四边形近似与双线性在屏幕上等价（亚像素），一次裁剪画完；
+            // 草稿模式（fast）则不管 twist 都走这条最便宜的路径。
+            if (fast || twist <= 0.5) {
+                drawCell(u0, v0, u1, v1, true);
+                continue;
+            }
+            const n = baseN;
             for (let j = 0; j < n; j++) {
                 for (let i = 0; i < n; i++) {
-                    const u0 = (c + i / n) / L.cols;
-                    const u1 = (c + (i + 1) / n) / L.cols;
-                    const v0 = (r + j / n) / L.rows;
-                    const v1 = (r + (j + 1) / n) / L.rows;
-                    const src = [
-                        [u0 * iw, v0 * ih],
-                        [u1 * iw, v0 * ih],
-                        [u1 * iw, v1 * ih],
-                        [u0 * iw, v1 * ih],
-                    ];
-                    const dst = [point(u0, v0), point(u1, v0), point(u1, v1), point(u0, v1)];
-                    paintQuadCell(g, img, src, dst);
+                    const su0 = (c + i / n) / L.cols;
+                    const su1 = (c + (i + 1) / n) / L.cols;
+                    const sv0 = (r + j / n) / L.rows;
+                    const sv1 = (r + (j + 1) / n) / L.rows;
+                    drawCell(su0, sv0, su1, sv1, twistOf(quadDst(su0, sv0, su1, sv1)) <= 0.5);
                 }
             }
         }

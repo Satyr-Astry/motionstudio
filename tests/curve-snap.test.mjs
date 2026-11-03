@@ -341,6 +341,7 @@ test('时间轴接线：效果键来自 curve-geo（同源）并合并进通道�
     assert.match(src, /effectChannelEntries\(obj\.effects, EFFECT_DEFS\)/);
     assert.match(src, /effectKeyTimes\(obj\.effects, EFFECT_DEFS\)/);
     assert.match(src, /mergeChannelPoints\(\s*channelKeyTimes\(trackOf\(obj\), keys\)/, '变换通道键与效果键必须合并渲染');
-    assert.match(src, /fxColor\.get\(p\.fields\[0\]\) \|\| channelColorOf\(p\.fields\[0\]\)/, '效果键按同源色表上色');
-    assert.match(src, /fxLabel\.get\(id\) \|\| id/, 'tooltip 用可读名而不是 fx.* id');
+    // 0.12.1 性能：按对象记忆通道/效果键的派生结果（chCache），色表与可读名都放进缓存
+    assert.match(src, /ch\.color\.get\(p\.fields\[0\]\) \|\| channelColorOf\(p\.fields\[0\]\)/, '效果键按同源色表上色');
+    assert.match(src, /p\.fields\.map\(\(id\) => ch\.label\.get\(id\) \|\| id\)/, 'tooltip 用可读名而不是 fx.* id');
 });

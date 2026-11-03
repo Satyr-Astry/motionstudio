@@ -18,15 +18,23 @@ import { t } from '../i18n/index.mjs';
 /**
  * 按容器尺寸 + devicePixelRatio 定画布像素尺寸。
  * 返回 CSS 尺寸与 dpr（geo 的 x1/y1 要按 CSS 像素算）。
+ *
+ * 只在尺寸真的变了时才写 `cv.width/height` 与 style：给 canvas 赋 width 会重新分配
+ * 后备位图（GPU 纹理也跟着重建）并清空画布。曲线面板每帧都调这里，无条件赋值等于
+ * 每帧重建一次纹理 —— 既是主线程的活，也是 GPU 显存/占用的来源。
  */
 export function resizeCanvas(cv, wrap) {
     const dpr = window.devicePixelRatio || 1;
     const w = Math.max(40, wrap.clientWidth);
     const h = Math.max(30, wrap.clientHeight);
-    cv.width = Math.round(w * dpr);
-    cv.height = Math.round(h * dpr);
-    cv.style.width = w + 'px';
-    cv.style.height = h + 'px';
+    const pw = Math.round(w * dpr);
+    const ph = Math.round(h * dpr);
+    if (cv.width !== pw) cv.width = pw;
+    if (cv.height !== ph) cv.height = ph;
+    const cssW = w + 'px';
+    const cssH = h + 'px';
+    if (cv.style.width !== cssW) cv.style.width = cssW;
+    if (cv.style.height !== cssH) cv.style.height = cssH;
     return { w, h, dpr };
 }
 

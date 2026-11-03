@@ -328,11 +328,35 @@ export function drawLayer(g, doc, layer, t, opts) {
     g.globalAlpha = g.globalAlpha * alpha;
     if (layer.mixMode) g.globalCompositeOperation = layer.mixMode;
     // 效果器：由外壳注入 filterFor(layer, time)，返回 canvas filter 字符串
-    if (typeof o.filterFor === 'function') {
-        const fs = o.filterFor(layer, time);
-        g.filter = fs || 'none';
-    }
-    if (st && st.warp) {
+    const fs = typeof o.filterFor === 'function' ? (o.filterFor(layer, time) || 'none') : null;
+    // 网格 warp 的每个子格都是一次 drawImage。整层还开着 canvas filter 时，浏览器会对
+    // 每一次 drawImage 各跑一遍滤镜（12×12 网格一帧上千次；逐片滤镜还会在格子交界
+    // 留下接缝）。有离屏缓冲时先画进离屏，再整层一次滤镜合回目标画布。
+    const off = st && st.warp && fs && fs !== 'none'
+        && o.layerSurface && o.layerSurface.ctx && o.layerSurface.canvas ? o.layerSurface : null;
+    if (off) {
+        const lg = off.ctx;
+        lg.save();
+        lg.setTransform(1, 0, 0, 1, 0, 0);
+        lg.globalAlpha = 1;
+        lg.globalCompositeOperation = 'source-over';
+        if ('filter' in lg) lg.filter = 'none';
+        lg.clearRect(0, 0, off.canvas.width, off.canvas.height);
+        if (ev) {
+            const info = ev.lattice(layer, time);
+            const m = transformOf(layer, time, ev, o);
+            lg.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+            drawLatticeImage(lg, img, info.lattice, info.size.w || img.width, info.size.h || img.height, o.warpSeg);
+        } else {
+            const size = contentSize(doc, img);
+            drawLatticeImage(lg, img, st.warp, size.w, size.h, o.warpSeg);
+        }
+        lg.restore();
+        if ('filter' in g) g.filter = fs;
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.drawImage(off.canvas, 0, 0);
+    } else if (st && st.warp) {
+        if (fs != null) g.filter = fs;
         // 网格 warp：每个顶点偏移叠加锚点矩阵后，按 cell 细分贴图
         if (ev) {
             // 求值路径：世界矩阵（含父链）必须先叠上去，网格才有正确的落点
@@ -346,10 +370,12 @@ export function drawLayer(g, doc, layer, t, opts) {
             drawLatticeImage(g, img, st.warp, size.w, size.h, o.warpSeg);
         }
     } else if (st) {
+        if (fs != null) g.filter = fs;
         const m = transformOf(layer, time, ev, o);
         g.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
         g.drawImage(img, 0, 0);
     } else {
+        if (fs != null) g.filter = fs;
         g.drawImage(img, 0, 0);
     }
     g.restore();

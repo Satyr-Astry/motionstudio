@@ -1,6 +1,7 @@
 // 时间轴的「画」：把 DOM 建出来、把最新状态写进 style。
 // 这里不碰文档、不绑业务事件（段帧率条的内联输入框例外：它只是编辑器 UI，
-// 真正写文档的 commit 由主文件注入）。
+// 真正写文档的 commit 由主文件注入；另有一个行区 scroll 监听，只更新滚动缓存，
+// 见文件底部 noteRowsScroll()）。
 //
 // 结构：
 //   .tline
@@ -16,7 +17,7 @@
 // 几何（left/top/width/height）一律内联写入，CSS 只负责颜色与手感。
 
 import { icon, escapeAttr } from '../core/icons.mjs';
-import { t } from '../i18n/index.mjs';
+import { getLocale, t } from '../i18n/index.mjs';
 // 播放速度的读数与播放方式的名/图标：与 core/playback.mjs 的判定表同源
 import { formatSpeed, modeInfo } from '../core/playback.mjs';
 // 图例的唯一数据源在 help.mjs：设置里的「图例」分组与这个浮层读同一份，不再各写一套
@@ -242,7 +243,7 @@ export function createView(el) {
     root.append(tools, ruler, rows);
     el.appendChild(root);
 
-    return {
+    const view = {
         root,
         tools,
         ruler,
@@ -273,7 +274,14 @@ export function createView(el) {
         },
         rowRefs: [],
         segRefs: [],
+        // 行区滚动位置缓存：重绘只读这两个字段，读 DOM 的地方只有 noteRowsScroll()
+        scrollL: 0,
+        scrollT: 0,
     };
+    // 行区滚动时刷新缓存（passive：不挡滚动）。重绘路径不再读 scrollLeft，
+    // 见 syncRulerScroll() 的注释。
+    if (typeof rows.addEventListener === 'function') rows.addEventListener('scroll', () => noteRowsScroll(view), { passive: true });
+    return view;
 }
 
 /** 文档为空：读数归零、整条工具条禁用（这时任何时间操作都没有意义）。 */
@@ -704,6 +712,21 @@ export function beginFpsEdit(node, deps) {
 
 /* ─────────────────────────── 行内容：纹理点 + 关键帧菱形 ─────────────────────────── */
 
+/**
+ * 每帧重绘的缓存。
+ *
+ * 文档是结构共享的不可变结构：没有编辑过的对象，`transform.keys` / `effects`
+ * 的引用逐帧不变。所以「按引用记忆派生结果」是安全的 —— 一旦用户改了这个对象，
+ * 新文档里就是一个新引用，缓存自然失效。
+ *
+ * 为什么值得做：一帧里 240 行 × 24 个键 = 5760 个菱形要过一遍，`keyGroups` 的
+ * 排序、`effectChannelEntries` 的展开、`keySummary` + `t()` 的标题拼装会重复做
+ * 同样的活；而写 DOM（style/dataset/title/classList）比算 DOM 贵得多，节点上
+ * 记一个「上次写进去的值」就能把绝大多数写操作省掉。
+ */
+const groupsCache = new WeakMap(); // keys 数组 → keyGroups()
+const chCache = new WeakMap(); // 对象 → { effects, points }（通道/效果独立的键）
+
 /** frame = { doc, now, totalPx, zoomX, active }；celDrag 来自主文件（拖动中的节点不被拉回）。 */
 export function paintRows(view, frame, celDrag) {
     const doc = frame.doc;
@@ -733,7 +756,14 @@ export function paintRows(view, frame, celDrag) {
     }
 
     // 活动对象的行高亮（用类名，不在 CSS 里写几何）
-    for (const ref of view.rowRefs) ref.row.classList.toggle('is-active', ref.id === frame.active);
+    const active = frame.active;
+    for (const ref of view.rowRefs) {
+        const on = ref.id === active;
+        if (ref.lastActive !== on) {
+            ref.lastActive = on;
+            ref.row.classList.toggle('is-active', on);
+        }
+    }
 }
 
 /** 选中集合里有没有这颗（同层同刻，容差与 keyGroups 一致）。 */
@@ -753,11 +783,17 @@ export function paintTracks(view, frame) {
     const curX = timeToX(doc, frame.now, zoomX);
     const byId = new Map(objectsOf(doc).map((o) => [o && o.id, o]));
 
+    const locale = getLocale();
     for (const ref of view.rowRefs) {
         const obj = byId.get(ref.id);
         if (!obj) continue;
-        const keys = trackOf(obj).keys;
-        const groups = keyGroups(keys);
+        const track = trackOf(obj);
+        const keys = track.keys;
+        let groups = groupsCache.get(keys);
+        if (!groups) {
+            groups = keyGroups(keys);
+            groupsCache.set(keys, groups);
+        }
 
         while (ref.kfs.length < groups.length) {
             const node = makeKfNode(ref.id);
@@ -769,56 +805,124 @@ export function paintTracks(view, frame) {
             if (dead && typeof dead.remove === 'function') dead.remove();
         }
 
-        groups.forEach((g, i) => {
+        for (let i = 0; i < groups.length; i++) {
+            const g = groups[i];
             const node = ref.kfs[i];
-            if (!node) return;
+            if (!node) continue;
             const x = timeToX(doc, g.t, zoomX);
             const left = Math.max(0, x - KF_SIZE / 2).toFixed(2) + 'px';
-            if (node.style.left !== left) node.style.left = left;
-            node.dataset.t = String(g.t);
-            node.dataset.layer = ref.id;
+            if (node._left !== left) {
+                node._left = left;
+                node.style.left = left;
+            }
+            const ts = String(g.t);
+            if (node._t !== ts) {
+                node._t = ts;
+                node.dataset.t = ts;
+            }
+            if (node._layer !== ref.id) {
+                node._layer = ref.id;
+                node.dataset.layer = ref.id;
+            }
             // v8：纹理挂在关键帧上 —— 带纹理的键要能一眼看出来（.has-drawing / .is-blank）
             const kfOwn = keys[g.idx[0]];
             const carries = !!kfOwn && Object.prototype.hasOwnProperty.call(kfOwn, 'drawing');
-            node.classList.toggle('has-drawing', carries && kfOwn.drawing != null);
-            node.classList.toggle('is-blank', carries && kfOwn.drawing == null);
-            if (carries) node.dataset.drawing = kfOwn.drawing == null ? '' : String(kfOwn.drawing);
-            else if (node.dataset && 'drawing' in node.dataset) delete node.dataset.drawing;
+            const hasDr = carries && kfOwn.drawing != null;
+            const blank = carries && kfOwn.drawing == null;
+            if (node._hasDr !== hasDr) {
+                node._hasDr = hasDr;
+                node.classList.toggle('has-drawing', hasDr);
+            }
+            if (node._blank !== blank) {
+                node._blank = blank;
+                node.classList.toggle('is-blank', blank);
+            }
+            const dr = carries ? (kfOwn.drawing == null ? '' : String(kfOwn.drawing)) : undefined;
+            if (node._dr !== dr) {
+                node._dr = dr;
+                if (dr === undefined) {
+                    if (node.dataset && 'drawing' in node.dataset) delete node.dataset.drawing;
+                } else {
+                    node.dataset.drawing = dr;
+                }
+            }
 
-            node.classList.toggle('is-cur', Math.abs(x - curX) <= CUR_EPS_PX);
+            const isCur = Math.abs(x - curX) <= CUR_EPS_PX;
+            if (node._cur !== isCur) {
+                node._cur = isCur;
+                node.classList.toggle('is-cur', isCur);
+            }
             // 主键沿用 is-sel（旧样式立刻有反馈），多选里的其余键再叠 is-sel2，
             // 这样「刚点的那颗」和「跟着走的那些」能分开上色（CSS 由主线补）
             const sel = isSelKey(selKeys, ref.id, g.t);
             const isMain = !!selKey && selKey.layerId === ref.id && Math.abs(selKey.t - g.t) <= T_EPS;
-            node.classList.toggle('is-sel', sel);
-            node.classList.toggle('is-sel2', sel && !isMain);
-            node.classList.toggle('is-hold', g.ease === 'hold');
-            node.classList.toggle('is-bezier', g.ease === 'bezier');
+            if (node._sel !== sel) {
+                node._sel = sel;
+                node.classList.toggle('is-sel', sel);
+            }
+            const sel2 = sel && !isMain;
+            if (node._sel2 !== sel2) {
+                node._sel2 = sel2;
+                node.classList.toggle('is-sel2', sel2);
+            }
+            const hold = g.ease === 'hold';
+            if (node._hold !== hold) {
+                node._hold = hold;
+                node.classList.toggle('is-hold', hold);
+            }
+            const bez = g.ease === 'bezier';
+            if (node._bez !== bez) {
+                node._bez = bez;
+                node.classList.toggle('is-bezier', bez);
+            }
 
-            // 菱形原本不带任何数值信息，用户看不出这个键到底改了什么；摘要补上这一点
-            const own = keys[g.idx[0]];
-            const tipArgs = {
-                t: g.t.toFixed(3),
-                ease: easeText(g.ease),
-                summary: keySummary(own && own.state),
-                n: g.idx.length,
-            };
-            const tip = t(g.idx.length > 1 ? 'timeline.tip.kf.multi' : 'timeline.tip.kf.single', tipArgs);
-            if (node.title !== tip) node.title = tip;
-        });
+            // 菱形原本不带任何数值信息，用户看不出这个键到底改了什么；摘要补上这一点。
+            // 标题（keySummary + 两次 t()）是这一帧最贵的一类活，所以按「键对象 + 组大小 +
+            // 缓动 + 语言」记忆：文档没编辑时这些全都不变，逐帧重算纯属浪费。
+            if (node._tipOwner !== kfOwn || node._tipN !== g.idx.length
+                || node._tipEase !== g.ease || node._tipLocale !== locale) {
+                const tipArgs = {
+                    t: g.t.toFixed(3),
+                    ease: easeText(g.ease),
+                    summary: keySummary(kfOwn && kfOwn.state),
+                    n: g.idx.length,
+                };
+                const tip = t(g.idx.length > 1 ? 'timeline.tip.kf.multi' : 'timeline.tip.kf.single', tipArgs);
+                node._tipOwner = kfOwn;
+                node._tipN = g.idx.length;
+                node._tipEase = g.ease;
+                node._tipLocale = locale;
+                if (node.title !== tip) node.title = tip;
+            }
+        }
 
         // 通道独立轨道的键：曲线区给某通道单独打点时，这里也要看得见，
         // 否则那些点只活在曲线面板里、时间轴一片空白。
         // 与共用键重合的时刻不再画（会和蓝菱形叠在一起），只在「独立出来的时刻」出现。
         // 效果参数通道（`0.7.0` 起进曲线）的关键帧也按同样方式出现在这里 ——
         // 否则效果动画只在曲线里可见，时间轴看起来像「什么都没发生」。
-        const fxEntries = effectChannelEntries(obj.effects, EFFECT_DEFS);
-        const fxColor = new Map(fxEntries.map((e) => [e.id, e.color]));
-        const fxLabel = new Map(fxEntries.map((e) => [e.id, t(e.def.nameKey) + ' ' + t(e.param.labelKey)]));
-        const chPoints = mergeChannelPoints(
-            channelKeyTimes(trackOf(obj), keys),
-            effectKeyTimes(obj.effects, EFFECT_DEFS)
-        );
+        // 派生结果按对象引用记忆：同一个对象（没被编辑）这些数组逐帧完全一样。
+        let ch = chCache.get(obj);
+        if (!ch) {
+            const entries = effectChannelEntries(obj.effects, EFFECT_DEFS);
+            ch = {
+                entries,
+                color: new Map(entries.map((e) => [e.id, e.color])),
+                label: new Map(entries.map((e) => [e.id, t(e.def.nameKey) + ' ' + t(e.param.labelKey)])),
+                locale,
+                points: mergeChannelPoints(
+                    channelKeyTimes(trackOf(obj), keys),
+                    effectKeyTimes(obj.effects, EFFECT_DEFS)
+                ),
+            };
+            chCache.set(obj, ch);
+        } else if (ch.locale !== locale) {
+            // 切语言：只有人看的标签要重取，配色与时刻不变
+            ch.locale = locale;
+            ch.color = new Map(ch.entries.map((e) => [e.id, e.color]));
+            ch.label = new Map(ch.entries.map((e) => [e.id, t(e.def.nameKey) + ' ' + t(e.param.labelKey)]));
+        }
+        const chPoints = ch.points;
         while (ref.chKfs.length < chPoints.length) {
             const node = makeKfNode(ref.id);
             node.classList.add('is-ch');
@@ -829,30 +933,59 @@ export function paintTracks(view, frame) {
             const dead = ref.chKfs.pop();
             if (dead && typeof dead.remove === 'function') dead.remove();
         }
-        chPoints.forEach((p, i) => {
+        for (let i = 0; i < chPoints.length; i++) {
+            const p = chPoints[i];
             const node = ref.chKfs[i];
-            if (!node) return;
+            if (!node) continue;
             const x = timeToX(doc, p.t, zoomX);
-            node.style.left = (x - KF_SIZE / 2).toFixed(2) + 'px';
-            node.dataset.t = String(p.t);
-            node.dataset.layer = ref.id;
+            const left = (x - KF_SIZE / 2).toFixed(2) + 'px';
+            if (node._left !== left) {
+                node._left = left;
+                node.style.left = left;
+            }
+            const ts = String(p.t);
+            if (node._t !== ts) {
+                node._t = ts;
+                node.dataset.t = ts;
+            }
+            if (node._layer !== ref.id) {
+                node._layer = ref.id;
+                node.dataset.layer = ref.id;
+            }
             // 通道标识（空格分隔的字段名，同刻多通道已合并成一条）。
             // 点这颗菱形要把曲线焦点切到对应通道，没有它就只能猜。
-            node.dataset.ch = p.fields.join(' ');
+            const chs = p.fields.join(' ');
+            if (node._chs !== chs) {
+                node._chs = chs;
+                node.dataset.ch = chs;
+            }
             // B1：**按通道上色**。时间轴上「只在某通道单独打的键」与共用关键帧都是菱形，
             // 以前两者都是同一个空心 accent 色，看不出这颗属于哪个通道；现在与曲线同色，
             // 多通道合并的那颗用第一个通道的颜色（title 里列全部字段）。
-            const chColor = fxColor.get(p.fields[0]) || channelColorOf(p.fields[0]);
-            if (node.style && typeof node.style.setProperty === 'function') {
-                node.style.setProperty('--ch', chColor);
+            const chColor = ch.color.get(p.fields[0]) || channelColorOf(p.fields[0]);
+            if (node._chColor !== chColor) {
+                node._chColor = chColor;
+                if (node.style && typeof node.style.setProperty === 'function') {
+                    node.style.setProperty('--ch', chColor);
+                }
             }
-            node.classList.toggle('is-sel',
-                !!selKey && selKey.layerId === ref.id && Math.abs(selKey.t - p.t) <= T_EPS);
-            node.classList.toggle('is-sel2', false); // 通道键不参与多选集合，别残留上一帧的类
-            const labels = p.fields.map((id) => fxLabel.get(id) || id).join(' / ');
-            const tip2 = t('timeline.tip.channelKey', { t: p.t.toFixed(3), fields: labels });
-            if (node.title !== tip2) node.title = tip2;
-        });
+            const selCh = !!selKey && selKey.layerId === ref.id && Math.abs(selKey.t - p.t) <= T_EPS;
+            if (node._sel !== selCh) {
+                node._sel = selCh;
+                node.classList.toggle('is-sel', selCh);
+            }
+            if (node._sel2) {
+                node._sel2 = false;
+                node.classList.toggle('is-sel2', false); // 通道键不参与多选集合，别残留上一帧的类
+            }
+            if (node._tipLocale !== locale || node._tipFields !== p.fields) {
+                const labels = p.fields.map((id) => ch.label.get(id) || id).join(' / ');
+                const tip2 = t('timeline.tip.channelKey', { t: p.t.toFixed(3), fields: labels });
+                node._tipLocale = locale;
+                node._tipFields = p.fields;
+                if (node.title !== tip2) node.title = tip2;
+            }
+        }
     }
 }
 
@@ -919,8 +1052,33 @@ export function paintPlayhead(view, frame) {
     if (view.rowsPlayhead.style.height !== hs) view.rowsPlayhead.style.height = hs;
 }
 
+/**
+ * 行区滚动的唯一读数点：把 scrollLeft/scrollTop 记进 view，再立刻贴刻度尺。
+ *
+ * 为什么不在重绘里读 `rows.scrollLeft`：那是一次强制布局读数。paint() 每帧都调
+ * syncRulerScroll()，而上一帧刚写完几十条 style，这时候读会把整条时间轴的布局
+ * 同步结算掉（240 行文档逐帧重绘实测占掉一大块）。scroll 事件最多每帧一次，
+ * 且事件里布局是干净的，读一次记下来即可。
+ *
+ * 这里同步调 syncRulerScroll 而不是等 rAF：滚动时标尺必须当帧跟随，延后一帧会
+ * 看见刻度尺「追不上」。写 transform 不触发布局，在 scroll 事件里是廉价操作。
+ */
+function noteRowsScroll(view) {
+    view.scrollL = Number(view.rows.scrollLeft) || 0;
+    view.scrollT = Number(view.rows.scrollTop) || 0;
+    syncRulerScroll(view);
+}
+
+/**
+ * 把刻度尺内容层平移到「行区已横向滚过的距离」。
+ *
+ * 只读 view.scrollL 缓存（由 noteRowsScroll 在 scroll 事件里刷新）：paint() 每帧
+ * 都会调到这里，绝不能读 DOM 布局属性。程序化设置 scrollLeft 之后（缩放 / 适应
+ * 窗口 / 拖播放头）缓存会短暂落后，浏览器随后派发的 scroll 事件会把它补齐，
+ * 下一帧重绘也就一致了。
+ */
 export function syncRulerScroll(view) {
-    const s = Number(view.rows.scrollLeft) || 0;
+    const s = Number(view.scrollL) || 0;
     const tx = 'translateX(' + (LABEL_W - s) + 'px)';
     if (view.rInner.style.transform !== tx) view.rInner.style.transform = tx;
 }

@@ -179,11 +179,18 @@ export function createEngine(opts) {
         hover: null,
         // 播放期一共跳过了多少次洋葱皮/滤镜（调试与回归用，无业务逻辑）
         playSkips: 0,
+        // 网格软拖的「草稿质量」：拖动中每个 pointermove 都要重画整帧，
+        // 12×12 网格上全质量细分是每层上千次 clip+drawImage，拖起来必卡。
+        // 打开后 evaluator 用最粗细分（n=1），松手再按全质量重画一帧。
+        warpDraft: false,
     };
 
     let host = null;
     let view = null;
     let compose = null;
+    // 离屏「整层」缓冲：只有「网格 warp + canvas filter」这一种组合会用到。
+    // 先把 warp 画进这里，再整层一次滤镜画回 compose（否则每个子格各跑一遍滤镜，见 evaluator.drawOne）。
+    let layerBuf = null;
     let scratch = { buf: createSurface(2, 2), ctx: null };
     let raf = 0;
     let timer = 0;
@@ -311,7 +318,24 @@ export function createEngine(opts) {
             // 播放时不给滤镜：canvas filter 逐层重算是播放掉帧的最大头
             const ff = playing ? null : filterFor;
             if (ev) {
-                drawEvaluated(cg, ev, t, { clear: false, filterFor: ff });
+                // 离屏整层缓冲只在「网格 warp + canvas filter」的层上才被 evaluator 用到；
+                // 这里先备好（一个 canvas，按文档尺寸复用），不再为了探测需不需要而多抽一次
+                // ev.sample —— 那会让整帧求值跑两遍，大文档白白多花 2~3ms/帧。
+                let layerSurface = null;
+                if (ff) {
+                    if (!layerBuf) layerBuf = createSurface(W, H);
+                    fitCanvas(layerBuf, W, H);
+                    layerSurface = { canvas: layerBuf, ctx: layerBuf.getContext('2d') };
+                }
+                drawEvaluated(cg, ev, t, {
+                    clear: false,
+                    filterFor: ff,
+                    layerSurface,
+                    // 拖动中降细分：evaluator 的 n 上限取 warpSeg，1 = 每个网格格子不再切分；
+                    // draft 再把格子画成「一次裁剪 + 仿射」的平行四边形近似。
+                    warpSeg: state.warpDraft ? 1 : undefined,
+                    draft: state.warpDraft,
+                });
             } else {
                 compositeFrame(cg, doc, t, { clear: false, time: t, filterFor: ff });
             }
@@ -887,6 +911,17 @@ export function createEngine(opts) {
             state.tool = id;
             scheduleRender();
             emit('tool');
+        },
+        /**
+         * 网格软拖的草稿质量开关：拖动中降细分、松手恢复。
+         * 拖动期间每个 pointermove 都会重画整帧，全质量细分（12×12 网格）是卡死的直接原因。
+         */
+        draft(on) {
+            const next = !!on;
+            if (state.warpDraft === next) return next;
+            state.warpDraft = next;
+            scheduleRender();
+            return next;
         },
         brush: () => ({ id: state.brushId, size: state.size, opacity: state.opacity, color: state.color }),
         setBrush(patch) {

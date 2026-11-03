@@ -301,6 +301,9 @@ export function createInput(deps) {
         ensureWarpBaseKey(el.id);
         startDrag(e, { kind: 'lattice-soft', name: 'lattice-soft' });
         if (!drag) return;
+        // 拖动中降细分：每个 pointermove 都重画整帧，12×12 网格全质量要上千次
+        // clip+drawImage，不降的话拖一下就卡死（松手在 onDragEnd 里恢复）。
+        if (ctx.engine && typeof ctx.engine.draft === 'function') ctx.engine.draft(true);
         drag.soft = {
             u, v,
             base: lat.lattice,
@@ -460,6 +463,10 @@ export function createInput(deps) {
         window.removeEventListener('pointerup', onDragEnd, true);
         window.removeEventListener('pointercancel', onDragEnd, true);
         window.removeEventListener('keydown', onDragKeyDown, true);
+        // 草稿质量只属于这一次拖动，任何收尾路径（松手 / Esc / pointercancel）都要关掉，
+        // 否则松手后整帧会一直停在粗细分上。
+        if (drag && drag.pick && drag.pick.kind === 'lattice-soft'
+            && ctx.engine && typeof ctx.engine.draft === 'function') ctx.engine.draft(false);
         if (dragRaf) {
             cancelAnimationFrame(dragRaf);
             dragRaf = 0;
@@ -864,6 +871,7 @@ export function createInput(deps) {
         window.removeEventListener('pointercancel', onDragEnd, true);
         window.removeEventListener('keydown', onDragKeyDown, true);
         detachBoneDrag();
+        if (ctx.engine && typeof ctx.engine.draft === 'function') ctx.engine.draft(false);
         if (dragRaf) cancelAnimationFrame(dragRaf);
         dragRaf = 0;
         pendingPointer = null;

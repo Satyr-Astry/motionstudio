@@ -20,6 +20,7 @@ import { DEFAULT_OBJECT_NAME } from '../core/doc-model.mjs';
 import { buildBonesBundle } from '../core/skin.mjs';
 import { sampleTimes } from '../core/timebase.mjs';
 import { compositeFrame } from '../paint/composite.mjs';
+import { filterStringAt } from '../paint/effects.mjs';
 import { editorDef } from './registry.mjs';
 import * as ipc from './ipc.mjs';
 import { importBuffer, pickAndImport } from './import-file.mjs';
@@ -72,6 +73,46 @@ let CTX = null;
 /** 由 app.mjs 在 boot() 里注入。 */
 export function setCtx(c) {
     CTX = c;
+}
+
+/* ─────────────────────── 导出合成：效果器与整层离屏 ─────────────────────── */
+
+/**
+ * 导出路径的效果器：与画布同源（filterStringAt 按时间求值）。
+ *
+ * 以前导出 / 缩略图 / 录制调 compositeFrame 都不传 filterFor，只有画布上的
+ * drawLayer 会设 canvas filter —— 于是 blur / glow / outline / shadow 只在
+ * 预览里看得见，导出的 PNG / GIF / APNG 全是「素」的。这里补上，保证所见即所得。
+ */
+const filterForExport = (layer, time) => filterStringAt(layer.effects, time);
+
+// warp + 效果需要一块「整层离屏」缓冲（见 composite.drawLayer）：先不带滤镜画进离屏，
+// 再整层一次滤镜合回。尺寸只跟着文档走，同一次导出里复用一块即可。
+let exportSurface = null;
+let exportSurfaceKey = '';
+function layerSurfaceFor(doc) {
+    if (typeof document === 'undefined' || !doc) return null;
+    const w = Math.max(1, doc.width | 0);
+    const h = Math.max(1, doc.height | 0);
+    const key = w + 'x' + h;
+    if (!exportSurface || exportSurfaceKey !== key) {
+        const cv = document.createElement('canvas');
+        cv.width = w;
+        cv.height = h;
+        const ctx = cv.getContext('2d');
+        if (!ctx) return null;
+        exportSurface = { canvas: cv, ctx };
+        exportSurfaceKey = key;
+    }
+    return exportSurface;
+}
+
+/** 导出合成参数：统一带上效果器与（需要时的）离屏缓冲。 */
+function composeOpts(doc, extra) {
+    const o = Object.assign({ filterFor: filterForExport }, extra || {});
+    const surface = layerSurfaceFor(doc);
+    if (surface) o.layerSurface = surface;
+    return o;
 }
 
 /**
@@ -274,7 +315,7 @@ function exportFramesLegacy(name) {
     const list = times.length ? times : [0];
     for (const s of list) {
         const t = typeof s === 'number' ? s : s && typeof s.t === 'number' ? s.t : 0;
-        compositeFrame(cv, doc, t, { clear: true });
+        compositeFrame(cv, doc, t, composeOpts(doc, { clear: true }));
         frames.push(cv.toDataURL('image/png'));
     }
     const label = String(name == null ? 'motionstudio' : name);
@@ -336,7 +377,7 @@ async function exportFramesChunked(raw) {
         const plan = plans[c];
         const frames = [];
         for (let i = 0; i < plan.count; i++) {
-            compositeFrame(cv, doc, times[plan.start + i], { clear: true });
+            compositeFrame(cv, doc, times[plan.start + i], composeOpts(doc, { clear: true }));
             if (solid) fillBehind(cv, opts.bgColor);
             frames.push(cv.toDataURL('image/png'));
         }
@@ -428,7 +469,7 @@ async function exportGif(raw) {
         if (typeof o.shouldCancel === 'function' && o.shouldCancel()) {
             return canceledResult(t('export.gif.canceled'));
         }
-        compositeFrame(cv, doc, times[i], { clear: true });
+        compositeFrame(cv, doc, times[i], composeOpts(doc, { clear: true }));
         if (solid) fillBehind(cv, opts.bgColor);
         frames.push(g.getImageData(0, 0, opts.width, opts.height));
     }
@@ -492,7 +533,7 @@ async function exportApng(raw) {
         if (typeof o.shouldCancel === 'function' && o.shouldCancel()) {
             return canceledResult(t('export.apng.canceled'));
         }
-        compositeFrame(cv, doc, times[i], { clear: true });
+        compositeFrame(cv, doc, times[i], composeOpts(doc, { clear: true }));
         if (solid) fillBehind(cv, opts.bgColor);
         const img = g.getImageData(0, 0, opts.width, opts.height);
         frames.push({ width: opts.width, height: opts.height, data: img.data });
@@ -628,7 +669,7 @@ async function exportCurrentFrame(opts) {
         g.fillStyle = format === 'jpeg' ? (n.bgColor || '#000000') : n.bgColor;
         g.fillRect(0, 0, cv.width, cv.height);
     }
-    compositeFrame(cv, state.doc, state.time, { clear: format !== 'jpeg' && n.background !== 'color' });
+    compositeFrame(cv, state.doc, state.time, composeOpts(state.doc, { clear: format !== 'jpeg' && n.background !== 'color' }));
     const dataUrl = format === 'jpeg' || format === 'webp'
         ? cv.toDataURL(mime, n.quality)
         : cv.toDataURL(mime);
@@ -673,7 +714,7 @@ async function currentFrameBlob() {
     cv.height = Math.max(1, Math.round(state.doc.height || 1));
     const g = cv.getContext('2d');
     if (!g) return null;
-    compositeFrame(cv, state.doc, state.time, { clear: true });
+    compositeFrame(cv, state.doc, state.time, composeOpts(state.doc, { clear: true }));
     if (typeof cv.toBlob === 'function') {
         return await new Promise((resolve) => {
             try {
@@ -780,7 +821,7 @@ function frameThumb(doc) {
         const full = document.createElement('canvas');
         full.width = Math.max(1, doc.width | 0);
         full.height = Math.max(1, doc.height | 0);
-        compositeFrame(full, doc, 0, { clear: true });
+        compositeFrame(full, doc, 0, composeOpts(doc, { clear: true }));
         const scale = Math.min(1, 128 / Math.max(1, full.width));
         const cv = document.createElement('canvas');
         cv.width = Math.max(1, Math.round(full.width * scale));
@@ -2744,7 +2785,7 @@ export async function recordVideo(opts) {
                 break;
             }
             const t = fromSec + i / fps;
-            compositeFrame(cv, doc, t, { clear: true, time: t });
+            compositeFrame(cv, doc, t, composeOpts(doc, { clear: true, time: t }));
             if (track && typeof track.requestFrame === 'function') track.requestFrame();
             if (typeof o.onProgress === 'function') o.onProgress(i + 1, frames);
             // eslint-disable-next-line no-await-in-loop
